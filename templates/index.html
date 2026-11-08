@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block content %}
+<p>
+  Logged in as <strong>{{ display_name }}</strong> ({{ handle }}).
+  <form method="post" action="/logout" style="display: inline;">
+    <button type="submit" class="secondary outline">Log out</button>
+  </form>
+</p>
+
+<div class="grid">
+  <article><strong>Committed (afloat)</strong><br />{{ committed_fmt }} aUEC</article>
+  <article><strong>Realised (sold)</strong><br />{{ realised_fmt }} aUEC</article>
+</div>
+
+{% if let Some(error) = form_error %}
+<p style="color: var(--pico-del-color);">{{ error }}</p>
+{% endif %}
+
+<section>
+  <h2>Open Cargo</h2>
+  <p>Everything bought but not yet sold -- nobody forgets a hold full of Laranite at Everus Harbor.</p>
+  <table>
+    <thead>
+      <tr>
+        <th>Commodity</th><th>SCU</th><th>Bought at</th><th>Date</th><th>Status</th>
+        <th>Destination</th><th>Where now</th><th>Cost</th><th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for run in open_runs %}
+      {% include "partials/open_cargo_row.html" %}
+      {% else %}
+      <tr><td colspan="9"><em>No open cargo. Fly safe.</em></td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section>
+  <h2>New Run</h2>
+  <form method="post" action="/runs">
+    <div class="grid">
+      <label>Bought at (date)
+        <input type="text" name="bought_at" placeholder="2954-01-15" required />
+      </label>
+      <label>Commodity
+        <input type="text" name="commodity" placeholder="Laranite" required />
+      </label>
+      <label>SCU
+        <input type="number" step="0.01" min="0.01" name="scu" required />
+      </label>
+      <label>Buy price / SCU
+        <input type="number" step="0.01" min="0" name="buy_price_scu" required />
+      </label>
+    </div>
+    <div class="grid">
+      <label>Buy terminal
+        <input type="text" name="buy_terminal" placeholder="ArcCorp Mining Area 141" required />
+      </label>
+      <label>Destination (optional)
+        <input type="text" name="destination" />
+      </label>
+      <label>Ship (optional)
+        <input type="text" name="ship" />
+      </label>
+    </div>
+    <button type="submit">Log run</button>
+  </form>
+</section>
+
+<section>
+  <h2>Ledger</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Commodity</th><th>SCU sold</th><th>Sell terminal</th><th>Sold at</th>
+        <th>Sell price / SCU</th><th>Cost</th><th>Profit</th><th>Margin</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for run in sold_runs %}
+      <tr>
+        <td {% if let Some(notes) = run.notes %}title="{{ notes }}"{% endif %}>{{ run.commodity }}</td>
+        <td>{% if let Some(scu_sold) = run.scu_sold %}{{ scu_sold }}{% endif %}</td>
+        <td>{% if let Some(sell_terminal) = run.sell_terminal %}{{ sell_terminal }}{% endif %}</td>
+        <td>{% if let Some(sold_at) = run.sold_at %}{{ sold_at }}{% endif %}</td>
+        <td>{% if let Some(sell_price_scu) = run.sell_price_scu %}{{ sell_price_scu }}{% endif %}</td>
+        <td>{{ run.cost_fmt }}</td>
+        <td>{% if let Some(profit_fmt) = run.profit_fmt %}{{ profit_fmt }}{% endif %} aUEC</td>
+        <td>{% if let Some(margin_pct_fmt) = run.margin_pct_fmt %}{{ margin_pct_fmt }}%{% endif %}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="8"><em>No sales yet.</em></td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

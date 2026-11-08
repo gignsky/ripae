@@ -1,0 +1,26 @@
+<tr id="run-{{ run.id }}">
+  <td colspan="9">
+    <form hx-post="/runs/{{ run.id }}/close" hx-target="#run-{{ run.id }}" hx-swap="outerHTML">
+      {% if let Some(error) = error %}
+      <p style="color: var(--pico-del-color);">{{ error }}</p>
+      {% endif %}
+      <p>Closing <strong>{{ run.commodity }}</strong> ({{ run.scu }} SCU, bought at {{ run.buy_terminal }}).</p>
+      <div class="grid">
+        <label>Sold at (date)
+          <input type="text" name="sold_at" required />
+        </label>
+        <label>Sell terminal
+          <input type="text" name="sell_terminal" value="{{ run.destination_input }}" required />
+        </label>
+        <label>Sell price / SCU
+          <input type="number" step="0.01" min="0" name="sell_price_scu" required />
+        </label>
+        <label>SCU sold
+          <input type="number" step="0.01" min="0" name="scu_sold" value="{{ run.scu }}" required />
+        </label>
+      </div>
+      <button type="submit">Record sale</button>
+      <a href="/" role="button" class="secondary">Cancel</a>
+    </form>
+  </td>
+</tr>

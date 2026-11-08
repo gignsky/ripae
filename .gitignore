@@ -1,0 +1,9 @@
+/target
+.env
+.env.*
+*.db
+*.db-shm
+*.db-wal
+.direnv/
+result
+result-*
