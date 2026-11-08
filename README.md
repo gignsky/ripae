@@ -36,14 +36,11 @@ Two ways, per the brief (§6):
   the `docker` CLI but no reachable daemon (`/var/run/docker.sock` doesn't
   exist), so this has only been reviewed by eye, not actually built. Treat it
   as unverified until someone with a working daemon runs it.
-- **Nix (NOT verified here):** `nix build .#container` via `flake.nix`
-  (crane + `dockerTools.buildLayeredImage`). The sandbox this was built in
-  has GitHub access scoped to three specific repos, so `nix build`/`nix
-  flake check` here fail immediately trying to fetch `crane`,
-  `rust-overlay`, etc. -- not a defect in the flake that could be diagnosed
-  from in here. Treat the Nix path as unverified until it's tried somewhere
-  with normal GitHub access (e.g. by the dotfiles roll that consumes this
-  as a flake input).
+- **Nix:** `nix build .#container` via `flake.nix` (crane +
+  `dockerTools.buildLayeredImage`). `nix flake check` (builds the binary and
+  runs the 17 tests) and `nix build .#container` both pass, and the image
+  contains `static/`. The image has not yet been loaded and run under
+  docker/podman.
 
 ## Deploying to spacedock
 
@@ -90,8 +87,8 @@ Open / unverified:
 - [ ] `docker build .` -- Dockerfile written, not actually run: this
       sandbox has the `docker` CLI but no reachable daemon (see "Building
       the image" above).
-- [ ] `nix build .#container` -- flake written, not buildable from this
-      sandbox (see "Building the image" above).
+- [ ] Run the Nix-built image (`docker load < result`) -- it builds, but
+      hasn't been started yet.
 - [ ] Actual spacedock deployment -- the dotfiles-side module is written
       and pushed on its own roll branch, but nothing has been switched on
       the real host; that's an operator action, not bundled here.
@@ -99,9 +96,8 @@ Open / unverified:
       alpha.
 
 Per §9's suggested order of work, steps 1-6 (scaffold through htmx
-edit/close/delete) are done and tested; step 7 (container image) is
-written but unverified on both paths (no docker daemon or Nix network
-access in this sandbox); step 8 (spacedock module + README deploy section +
+edit/close/delete) are done and tested; step 7 (container image) builds via
+Nix but hasn't been run, and the Dockerfile path is still unverified; step 8 (spacedock module + README deploy section +
 `v0.1.0` tag) is split across repos -- the dotfiles half is done, the tag
 is left for whoever graduates that roll.
 
