@@ -28,11 +28,14 @@ cargo build --release
 
 Two ways, per the brief (§6):
 
-- **Docker (verified in this environment):** `docker build -t ripae:0.1.0 .`
-  -- a plain multi-stage build (`rust:1-slim-bookworm` → `debian:bookworm-slim`).
+- **Docker (NOT verified here):** `docker build -t ripae:0.1.0 .` -- a plain
+  multi-stage build (`rust:1-slim-bookworm` → `debian:bookworm-slim`).
   Migrations and templates are compiled into the binary; only `static/`
   (vendored `pico.min.css` + `htmx.min.js`) needs to exist alongside it at
-  runtime, and the Dockerfile copies it in.
+  runtime, and the Dockerfile copies it in. The sandbox this was built in has
+  the `docker` CLI but no reachable daemon (`/var/run/docker.sock` doesn't
+  exist), so this has only been reviewed by eye, not actually built. Treat it
+  as unverified until someone with a working daemon runs it.
 - **Nix (NOT verified here):** `nix build .#container` via `flake.nix`
   (crane + `dockerTools.buildLayeredImage`). The sandbox this was built in
   has GitHub access scoped to three specific repos, so `nix build`/`nix
@@ -69,7 +72,6 @@ reasonable 0.2 addition; not built here, kept to scope.
 ## Status (Definition of Done, §1)
 
 Done:
-- [x] `docker build .` produces a working image (verified).
 - [x] Two accounts seeded from env vars at first boot, idempotently.
 - [x] Login, log a run, edit/delete own run, see every run in a shared table.
 - [x] A run can be logged before it's sold (status, destination, stored-at);
@@ -85,6 +87,9 @@ Done:
 - [x] This README.
 
 Open / unverified:
+- [ ] `docker build .` -- Dockerfile written, not actually run: this
+      sandbox has the `docker` CLI but no reachable daemon (see "Building
+      the image" above).
 - [ ] `nix build .#container` -- flake written, not buildable from this
       sandbox (see "Building the image" above).
 - [ ] Actual spacedock deployment -- the dotfiles-side module is written
@@ -93,8 +98,10 @@ Open / unverified:
 - [ ] No password-rotation CLI (see above) -- a manual SQL UPDATE works for
       alpha.
 
-Per §9's suggested order of work, steps 1 (scaffold) through 7 (container,
-Docker side) are done; step 8 (spacedock module + README deploy section +
+Per §9's suggested order of work, steps 1-6 (scaffold through htmx
+edit/close/delete) are done and tested; step 7 (container image) is
+written but unverified on both paths (no docker daemon or Nix network
+access in this sandbox); step 8 (spacedock module + README deploy section +
 `v0.1.0` tag) is split across repos -- the dotfiles half is done, the tag
 is left for whoever graduates that roll.
 
