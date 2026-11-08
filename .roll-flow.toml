@@ -1,0 +1,17 @@
+config_version = 1
+repo_root = "/home/gig/local_repos/ripae"
+rolling_branch = "rolling"
+stable_branch = "master"
+roll_prefix = "roll/"
+version_gate = false
+tag_on_promote = false
+push_tag = false
+mode = "manage"
+username = "gig"
+hosts = []
+roll_to_rolling_gates = ["cargo test", "cargo build --release"]
+rolling_to_main_gates = ["cargo test", "cargo build --release"]
+host_gates = []
+clean_protect = []
+
+[host_active]
