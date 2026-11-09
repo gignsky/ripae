@@ -3,6 +3,19 @@
 Every notable change to Ripae. Newest first. This file is also what the
 version badge in the corner of the site shows.
 
+## 0.2.7
+
+### Fixed
+- **Detach only where it means something.** A load's *Detach* button now
+  shows only when its voyage has another open load to leave behind. On a
+  voyage with a single load it used to just move the load to a new voyage
+  number.
+
+### Changed
+- **Write off moved into the crate manifest.** *Write off* is no longer on
+  every load row; open *Crates* and it sits in the manifest header next to
+  *All aboard* and *All stored*. It still asks before anything is lost.
+
 ## 0.2.6
 
 ### Changed
