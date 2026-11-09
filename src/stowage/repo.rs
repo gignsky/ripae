@@ -12,8 +12,8 @@ use sqlx::{Row, SqliteConnection, SqlitePool};
 use std::collections::HashMap;
 
 use super::model::{
-    expand_boxes, BoxMix, Condition, Crate, Load, PriceMode, Resale, Sale, Share, Ship, User, Voyage,
-    Whereabouts,
+    expand_boxes, BoxMix, Condition, Crate, Load, LoadKind, PriceMode, Resale, Sale, Share, ShareInput, Ship, User,
+    Voyage, Whereabouts,
 };
 
 // ---------------------------------------------------------------------------
@@ -29,6 +29,7 @@ pub struct NewVoyage {
 
 #[derive(Debug, Clone)]
 pub struct NewLoad {
+    pub kind: LoadKind,
     pub commodity: String,
     pub buy_terminal: String,
     pub price_mode: PriceMode,
@@ -37,6 +38,8 @@ pub struct NewLoad {
     pub stop_no: u32,
     pub destination: Option<String>,
     pub boxes: BoxMix,
+    /// A haul's promised payout.
+    pub reward: Option<f64>,
     /// Stamped onto every crate (the New Run form takes one status for all).
     pub whereabouts: Whereabouts,
     pub stored_at: Option<String>,
@@ -49,10 +52,13 @@ pub struct EditVoyage {
     pub bought_at: String,
     pub notes: Option<String>,
     pub entered_by: i64,
+    /// Replaces the voyage-wide shares every close starts from.
+    pub shares: Vec<ShareInput>,
 }
 
 #[derive(Debug, Clone)]
 pub struct EditLoad {
+    pub kind: LoadKind,
     pub commodity: String,
     pub buy_terminal: String,
     pub price_mode: PriceMode,
@@ -60,6 +66,7 @@ pub struct EditLoad {
     pub buy_price_lot: f64,
     pub stop_no: u32,
     pub destination: Option<String>,
+    pub reward: Option<f64>,
     /// `Some` moves every live crate there (the edit form's status field);
     /// `None` leaves the crates where they are (a split load).
     pub whereabouts: Option<Whereabouts>,
@@ -107,12 +114,14 @@ fn row_to_voyage(row: &SqliteRow) -> Result<Voyage> {
 
 fn row_to_load(row: &SqliteRow) -> Result<Load> {
     let mode: String = row.try_get("price_mode")?;
+    let kind: String = row.try_get("kind")?;
     let stop_no: i64 = row.try_get("stop_no")?;
     Ok(Load {
         id: row.try_get("id")?,
         voyage_id: row.try_get("voyage_id")?,
         submitted_by: row.try_get("submitted_by")?,
         submitted_by_name: row.try_get("submitted_by_name")?,
+        kind: kind.parse().map_err(|e| anyhow!("bad load kind in db: {e}"))?,
         commodity: row.try_get("commodity")?,
         buy_terminal: row.try_get("buy_terminal")?,
         price_mode: mode.parse().map_err(|e| anyhow!("bad price_mode in db: {e}"))?,
@@ -124,6 +133,7 @@ fn row_to_load(row: &SqliteRow) -> Result<Load> {
         sell_terminal: row.try_get("sell_terminal")?,
         sell_price_scu: row.try_get("sell_price_scu")?,
         sell_price_lot: row.try_get("sell_price_lot")?,
+        reward: row.try_get("reward")?,
         notes: row.try_get("notes")?,
         crates: Vec::new(),
         shares: Vec::new(),
@@ -170,8 +180,8 @@ const SELECT_VOYAGE: &str = "SELECT v.id, v.logged_by, u.display_name AS logged_
     JOIN users e ON e.id = COALESCE(v.entered_by, v.logged_by) LEFT JOIN ships s ON s.id = v.ship_id";
 
 const SELECT_LOAD: &str = "SELECT l.id, l.voyage_id, l.submitted_by, u.display_name AS submitted_by_name,
-    l.commodity, l.buy_terminal, l.price_mode, l.buy_price_scu, l.buy_price_lot, l.stop_no,
-    l.destination, l.sold_at, l.sell_terminal, l.sell_price_scu, l.sell_price_lot, l.notes
+    l.kind, l.commodity, l.buy_terminal, l.price_mode, l.buy_price_scu, l.buy_price_lot, l.stop_no,
+    l.destination, l.sold_at, l.sell_terminal, l.sell_price_scu, l.sell_price_lot, l.reward, l.notes
     FROM loads l JOIN users u ON u.id = l.submitted_by";
 
 const SELECT_CRATE: &str =
@@ -366,12 +376,13 @@ async fn insert_load(
     new: &NewLoad,
 ) -> Result<i64> {
     let row = sqlx::query(
-        "INSERT INTO loads (voyage_id, submitted_by, commodity, buy_terminal, price_mode,
-            buy_price_scu, buy_price_lot, stop_no, destination, notes)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+        "INSERT INTO loads (voyage_id, submitted_by, kind, commodity, buy_terminal, price_mode,
+            buy_price_scu, buy_price_lot, stop_no, destination, reward, notes)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
     )
     .bind(voyage_id)
     .bind(submitted_by)
+    .bind(new.kind.as_str())
     .bind(&new.commodity)
     .bind(&new.buy_terminal)
     .bind(new.price_mode.as_str())
@@ -379,6 +390,7 @@ async fn insert_load(
     .bind(new.buy_price_lot)
     .bind(new.stop_no as i64)
     .bind(new.destination.as_deref())
+    .bind(new.reward)
     .bind(new.notes.as_deref())
     .fetch_one(&mut *conn)
     .await?;
@@ -449,6 +461,7 @@ async fn touch_voyage(conn: &mut SqliteConnection, voyage_id: i64) -> Result<()>
 }
 
 pub async fn update_voyage(pool: &SqlitePool, id: i64, edit: &EditVoyage) -> Result<()> {
+    let mut tx = pool.begin().await?;
     sqlx::query(
         "UPDATE voyages SET ship_id = ?, bought_at = ?, notes = ?, entered_by = ?, updated_at = datetime('now') WHERE id = ?",
     )
@@ -457,18 +470,58 @@ pub async fn update_voyage(pool: &SqlitePool, id: i64, edit: &EditVoyage) -> Res
     .bind(edit.notes.as_deref())
     .bind(edit.entered_by)
     .bind(id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+    sqlx::query("DELETE FROM voyage_shares WHERE voyage_id = ?").bind(id).execute(&mut *tx).await?;
+    for s in &edit.shares {
+        sqlx::query(
+            "INSERT INTO voyage_shares (voyage_id, to_user, paid_to, kind, amount, reason) VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind(id)
+        .bind(s.to_user)
+        .bind(s.paid_to.unwrap_or(s.to_user))
+        .bind(s.kind.as_str())
+        .bind(s.amount)
+        .bind(s.reason.as_deref())
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
     Ok(())
+}
+
+/// The shares set for a whole voyage, in the order they were entered.
+pub async fn voyage_shares(pool: &SqlitePool, voyage_id: i64) -> Result<Vec<ShareInput>> {
+    let rows = sqlx::query(
+        "SELECT to_user, paid_to, kind, amount, reason FROM voyage_shares WHERE voyage_id = ? ORDER BY id",
+    )
+    .bind(voyage_id)
+    .fetch_all(pool)
+    .await?;
+    rows.iter()
+        .map(|r| {
+            let to_user: i64 = r.try_get("to_user")?;
+            let paid_to: i64 = r.try_get("paid_to")?;
+            let kind: String = r.try_get("kind")?;
+            Ok(ShareInput {
+                to_user,
+                paid_to: (paid_to != to_user).then_some(paid_to),
+                kind: kind.parse().map_err(|e| anyhow!("bad share kind in db: {e}"))?,
+                amount: r.try_get("amount")?,
+                reason: r.try_get("reason")?,
+            })
+        })
+        .collect()
 }
 
 pub async fn update_load(pool: &SqlitePool, id: i64, edit: &EditLoad) -> Result<()> {
     let mut tx = pool.begin().await?;
     sqlx::query(
-        "UPDATE loads SET commodity = ?, buy_terminal = ?, price_mode = ?, buy_price_scu = ?,
-            buy_price_lot = ?, stop_no = ?, destination = ?, notes = ?, updated_at = datetime('now')
+        "UPDATE loads SET kind = ?, commodity = ?, buy_terminal = ?, price_mode = ?, buy_price_scu = ?,
+            buy_price_lot = ?, stop_no = ?, destination = ?, reward = ?, notes = ?, updated_at = datetime('now')
          WHERE id = ?",
     )
+    .bind(edit.kind.as_str())
     .bind(&edit.commodity)
     .bind(&edit.buy_terminal)
     .bind(edit.price_mode.as_str())
@@ -476,6 +529,7 @@ pub async fn update_load(pool: &SqlitePool, id: i64, edit: &EditLoad) -> Result<
     .bind(edit.buy_price_lot)
     .bind(edit.stop_no as i64)
     .bind(edit.destination.as_deref())
+    .bind(edit.reward)
     .bind(edit.notes.as_deref())
     .bind(id)
     .execute(&mut *tx)
@@ -540,7 +594,17 @@ pub async fn move_load(
             .bind(from)
             .fetch_one(&mut *tx)
             .await?;
-            row.try_get("id")?
+            let id: i64 = row.try_get("id")?;
+            // a detached load keeps the split its voyage was set up with
+            sqlx::query(
+                "INSERT INTO voyage_shares (voyage_id, to_user, paid_to, kind, amount, reason)
+                 SELECT ?, to_user, paid_to, kind, amount, reason FROM voyage_shares WHERE voyage_id = ? ORDER BY id",
+            )
+            .bind(id)
+            .bind(from)
+            .execute(&mut *tx)
+            .await?;
+            id
         }
     };
     if to != from {
@@ -648,11 +712,11 @@ pub async fn close_load(
         load_id
     } else {
         let row = sqlx::query(
-            "INSERT INTO loads (voyage_id, submitted_by, commodity, buy_terminal, price_mode,
-                buy_price_scu, buy_price_lot, stop_no, destination, notes,
+            "INSERT INTO loads (voyage_id, submitted_by, kind, commodity, buy_terminal, price_mode,
+                buy_price_scu, buy_price_lot, stop_no, destination, reward, notes,
                 sold_at, sell_terminal, sell_price_scu, sell_price_lot)
-             SELECT voyage_id, ?, commodity, buy_terminal, price_mode,
-                buy_price_scu, buy_price_lot, stop_no, destination, notes, ?, ?, ?, ?
+             SELECT voyage_id, ?, kind, commodity, buy_terminal, price_mode,
+                buy_price_scu, buy_price_lot, stop_no, destination, reward, notes, ?, ?, ?, ?
              FROM loads WHERE id = ? RETURNING id",
         )
         .bind(seller)
@@ -825,6 +889,7 @@ mod tests {
     fn new_load(commodity: &str, boxes: BoxMix, dest: Option<&str>) -> NewLoad {
         let scu: u32 = boxes.iter().map(|(n, s)| n * s).sum();
         NewLoad {
+            kind: LoadKind::Trade,
             commodity: commodity.into(),
             buy_terminal: "ArcCorp Mining Area 141".into(),
             price_mode: PriceMode::Scu,
@@ -833,6 +898,7 @@ mod tests {
             stop_no: 1,
             destination: dest.map(Into::into),
             boxes,
+            reward: None,
             whereabouts: Whereabouts::Aboard,
             stored_at: None,
             notes: None,
@@ -1101,6 +1167,8 @@ mod tests {
             &pool,
             load.id,
             &EditLoad {
+                kind: LoadKind::Trade,
+                reward: None,
                 commodity: "Titanium".into(),
                 buy_terminal: "Shubin Mining Facility SCD-1".into(),
                 price_mode: PriceMode::Lot,
@@ -1130,7 +1198,7 @@ mod tests {
         let v = create_voyage(&pool, jt, jt, &new_voyage(None), &[new_load("Laranite", vec![(1, 8)], None)])
             .await
             .unwrap();
-        let edit = EditVoyage { ship_id: None, bought_at: "2026-11-08".into(), notes: None, entered_by: gig };
+        let edit = EditVoyage { ship_id: None, bought_at: "2026-11-08".into(), notes: None, entered_by: gig, shares: vec![] };
         update_voyage(&pool, v, &edit).await.unwrap();
         let voyage = find_voyage(&pool, v).await.unwrap().unwrap();
         assert_eq!((voyage.logged_by, voyage.entered_by), (jt, gig));
@@ -1206,5 +1274,78 @@ mod tests {
         let open = create_voyage(&pool, gig, gig, &new_voyage(None), &[new_load("Agricium", vec![(1, 8)], None)]).await.unwrap();
         let open = find_voyage(&pool, open).await.unwrap().unwrap().loads.remove(0);
         assert!(update_sale(&pool, open.id, gig, "2026-11-10", "x", &resale).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn a_haul_rides_with_bought_cargo_and_its_payout_is_all_profit() {
+        let (pool, gig, _) = test_pool().await;
+        let mut haul = new_load("Processed Food", vec![(2, 8), (1, 4)], Some("Area18 TDD"));
+        haul.kind = LoadKind::Haul;
+        haul.buy_terminal = "Baijini Point".into();
+        haul.price_mode = PriceMode::Lot;
+        haul.buy_price_scu = 0.0;
+        haul.buy_price_lot = 0.0;
+        haul.reward = Some(45_000.0);
+        let v = create_voyage(&pool, gig, gig, &new_voyage(None), &[new_load("Laranite", vec![(1, 8)], None), haul])
+            .await
+            .unwrap();
+        let voyage = find_voyage(&pool, v).await.unwrap().unwrap();
+        let (trade, haul) = (&voyage.loads[0], &voyage.loads[1]);
+        assert_eq!(trade.kind, LoadKind::Trade);
+        assert_eq!(haul.kind, LoadKind::Haul);
+        assert_eq!(haul.reward, Some(45_000.0));
+        assert_eq!(haul.cost(), 0.0);
+        // the promised reward isn't counted until the delivery is recorded
+        let t = crate::stowage::model::Totals::from_voyages([&voyage]);
+        assert_eq!((t.committed, t.realised, t.open_loads), (80.0, 0.0, 2));
+
+        // deliver part of it: the delivered row keeps the kind and reward
+        let first = haul.crates[0].id;
+        let sale = settle(haul, &SaleInput { crate_ids: vec![first], price_mode: PriceMode::Lot, price: 20_000.0, shares: vec![] })
+            .unwrap();
+        let sold_id = close_load(&pool, haul.id, gig, &sale, "2026-11-09", "Area18 TDD").await.unwrap();
+        let delivered = find_load(&pool, sold_id).await.unwrap().unwrap();
+        assert_eq!(delivered.kind, LoadKind::Haul);
+        assert_eq!(delivered.reward, Some(45_000.0));
+        assert_eq!(delivered.profit(), Some(20_000.0));
+        // losing the rest of the contract's boxes costs nothing
+        write_off_load(&pool, haul.id).await.unwrap();
+        let rest = find_load(&pool, haul.id).await.unwrap().unwrap();
+        assert!(!rest.is_open());
+        assert_eq!(rest.written_off(), 0.0);
+    }
+
+    #[tokio::test]
+    async fn voyage_shares_round_trip_follow_a_detach_and_go_with_the_voyage() {
+        let (pool, gig, jt) = test_pool().await;
+        let v = create_voyage(
+            &pool,
+            gig,
+            gig,
+            &new_voyage(None),
+            &[new_load("Laranite", vec![(1, 8)], None), new_load("Agricium", vec![(1, 8)], None)],
+        )
+        .await
+        .unwrap();
+        let split = vec![
+            ShareInput { to_user: jt, paid_to: None, kind: ShareKind::Pct, amount: 50.0, reason: Some("crew".into()) },
+            ShareInput { to_user: jt, paid_to: Some(gig), kind: ShareKind::Flat, amount: 1000.0, reason: None },
+        ];
+        let edit = EditVoyage { ship_id: None, bought_at: "2026-11-08".into(), notes: None, entered_by: gig, shares: split.clone() };
+        update_voyage(&pool, v, &edit).await.unwrap();
+        assert_eq!(voyage_shares(&pool, v).await.unwrap(), split);
+
+        // a detached load's new voyage starts with the same split
+        let second = find_voyage(&pool, v).await.unwrap().unwrap().loads[1].id;
+        let detached = move_load(&pool, second, MoveTarget::New, gig).await.unwrap();
+        assert_eq!(voyage_shares(&pool, detached).await.unwrap(), split);
+
+        // saving the voyage again replaces the split wholesale
+        update_voyage(&pool, v, &EditVoyage { shares: vec![], ..edit }).await.unwrap();
+        assert!(voyage_shares(&pool, v).await.unwrap().is_empty());
+
+        delete_voyage(&pool, detached).await.unwrap();
+        let left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM voyage_shares").fetch_one(&pool).await.unwrap();
+        assert_eq!(left, 0, "a voyage's shares go with it");
     }
 }

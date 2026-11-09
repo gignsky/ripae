@@ -156,6 +156,8 @@ pub struct LedgerFrag {
 #[derive(Template)]
 #[template(path = "partials/sale.html")]
 pub struct SaleFrag {
+    /// A hauling contract delivered, rather than a commodity sold.
+    pub haul: bool,
     pub who_upper: String,
     /// The bookkeeper, when someone other than the seller recorded it.
     pub kept_by_upper: Option<String>,
@@ -204,6 +206,7 @@ pub struct VoyageOverlayFrag {
 #[derive(Template)]
 #[template(path = "partials/sale_overlay.html")]
 pub struct SaleOverlayFrag {
+    pub haul: bool,
     pub id: i64,
     pub voyage_id: i64,
     pub commodity_upper: String,

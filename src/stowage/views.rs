@@ -161,6 +161,10 @@ pub enum LoadExtra {
 pub struct LoadView {
     pub id: i64,
     pub voyage_id: i64,
+    /// A hauling contract: no cost, paid on delivery.
+    pub is_haul: bool,
+    /// A haul's promised payout, signed; empty when not given.
+    pub reward_fmt: String,
     pub commodity_upper: String,
     pub scu: u32,
     pub scu_lost: u32,
@@ -208,6 +212,8 @@ impl LoadView {
         Self {
             id: l.id,
             voyage_id: l.voyage_id,
+            is_haul: l.is_haul(),
+            reward_fmt: l.reward.map(fmt_signed).unwrap_or_default(),
             commodity_upper: l.commodity.to_uppercase(),
             scu: l.scu(),
             scu_lost: l.scu_lost(),
@@ -245,7 +251,8 @@ impl LoadView {
             scu_sold: l.scu_sold(),
             profit_fmt: l.profit().map(fmt_signed).unwrap_or_default(),
             profit_neg: l.profit().map_or(false, |p| p < 0.0),
-            margin_fmt: l.margin().map(fmt_margin).unwrap_or_default(),
+            // nothing was paid for a haul, so there's no margin on it
+            margin_fmt: if l.is_haul() { "—".into() } else { l.margin().map(fmt_margin).unwrap_or_default() },
             shares: l.shares.iter().map(ShareView::new).collect(),
             extra: LoadExtra::None,
         }
@@ -308,6 +315,10 @@ impl VoyageView {
 
 #[derive(Clone, Default)]
 pub struct LoadFormView {
+    /// `trade` (bought commodity) or `haul` (hauling contract).
+    pub kind: String,
+    /// A haul's contract reward.
+    pub reward: String,
     pub commodity: String,
     pub boxes: String,
     pub scu: String,
@@ -336,6 +347,7 @@ pub struct LoadFormView {
 impl LoadFormView {
     pub fn blank(terminal: &str) -> Self {
         Self {
+            kind: "trade".into(),
             price_mode: "scu".into(),
             stop_no: "1".into(),
             terminal: terminal.into(),
@@ -352,6 +364,8 @@ impl LoadFormView {
             _ => "",
         };
         Self {
+            kind: l.kind.as_str().into(),
+            reward: l.reward.map(|r| trim_num(to_cents(r))).unwrap_or_default(),
             commodity: l.commodity.clone(),
             boxes: format_boxes(&l.boxes()),
             scu: l.scu().to_string(),
@@ -384,6 +398,11 @@ pub struct VoyageFormView {
     /// Who typed the voyage in (user id), correctable here; the crew list.
     pub entered_by: String,
     pub users: Vec<User>,
+    /// Shares every load closed on the voyage starts with.
+    pub shares: Vec<ShareFormRow>,
+    /// Whose run it is (user id): they keep the remainder, so they hold no
+    /// share and a new share row picks someone else.
+    pub owner: String,
     pub error: Option<String>,
 }
 
