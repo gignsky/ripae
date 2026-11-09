@@ -89,7 +89,11 @@
           inputsFrom = [ ripae ];
           packages = [
             rustToolchain
-            pkgs.sqlx-cli
+            # nixpkgs' sqlx-cli 0.9.0 links -lsqlite3 but omits sqlite from
+            # buildInputs, so it fails to build; add it until upstream fixes it.
+            (pkgs.sqlx-cli.overrideAttrs (old: {
+              buildInputs = (old.buildInputs or [ ]) ++ [ pkgs.sqlite ];
+            }))
           ];
         };
 
