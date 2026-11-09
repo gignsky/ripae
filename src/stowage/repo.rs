@@ -12,8 +12,8 @@ use sqlx::{Row, SqliteConnection, SqlitePool};
 use std::collections::HashMap;
 
 use super::model::{
-    expand_boxes, BoxMix, Condition, Crate, Load, LoadKind, PriceMode, Resale, Sale, Share, Ship, User, Voyage,
-    Whereabouts,
+    expand_boxes, BoxMix, Condition, Crate, Load, LoadKind, PriceMode, Resale, Sale, Share, ShareInput, Ship, User,
+    Voyage, Whereabouts,
 };
 
 // ---------------------------------------------------------------------------
@@ -52,6 +52,8 @@ pub struct EditVoyage {
     pub bought_at: String,
     pub notes: Option<String>,
     pub entered_by: i64,
+    /// Replaces the voyage-wide shares every close starts from.
+    pub shares: Vec<ShareInput>,
 }
 
 #[derive(Debug, Clone)]
@@ -459,6 +461,7 @@ async fn touch_voyage(conn: &mut SqliteConnection, voyage_id: i64) -> Result<()>
 }
 
 pub async fn update_voyage(pool: &SqlitePool, id: i64, edit: &EditVoyage) -> Result<()> {
+    let mut tx = pool.begin().await?;
     sqlx::query(
         "UPDATE voyages SET ship_id = ?, bought_at = ?, notes = ?, entered_by = ?, updated_at = datetime('now') WHERE id = ?",
     )
@@ -467,9 +470,48 @@ pub async fn update_voyage(pool: &SqlitePool, id: i64, edit: &EditVoyage) -> Res
     .bind(edit.notes.as_deref())
     .bind(edit.entered_by)
     .bind(id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+    sqlx::query("DELETE FROM voyage_shares WHERE voyage_id = ?").bind(id).execute(&mut *tx).await?;
+    for s in &edit.shares {
+        sqlx::query(
+            "INSERT INTO voyage_shares (voyage_id, to_user, paid_to, kind, amount, reason) VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind(id)
+        .bind(s.to_user)
+        .bind(s.paid_to.unwrap_or(s.to_user))
+        .bind(s.kind.as_str())
+        .bind(s.amount)
+        .bind(s.reason.as_deref())
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
     Ok(())
+}
+
+/// The shares set for a whole voyage, in the order they were entered.
+pub async fn voyage_shares(pool: &SqlitePool, voyage_id: i64) -> Result<Vec<ShareInput>> {
+    let rows = sqlx::query(
+        "SELECT to_user, paid_to, kind, amount, reason FROM voyage_shares WHERE voyage_id = ? ORDER BY id",
+    )
+    .bind(voyage_id)
+    .fetch_all(pool)
+    .await?;
+    rows.iter()
+        .map(|r| {
+            let to_user: i64 = r.try_get("to_user")?;
+            let paid_to: i64 = r.try_get("paid_to")?;
+            let kind: String = r.try_get("kind")?;
+            Ok(ShareInput {
+                to_user,
+                paid_to: (paid_to != to_user).then_some(paid_to),
+                kind: kind.parse().map_err(|e| anyhow!("bad share kind in db: {e}"))?,
+                amount: r.try_get("amount")?,
+                reason: r.try_get("reason")?,
+            })
+        })
+        .collect()
 }
 
 pub async fn update_load(pool: &SqlitePool, id: i64, edit: &EditLoad) -> Result<()> {
@@ -552,7 +594,17 @@ pub async fn move_load(
             .bind(from)
             .fetch_one(&mut *tx)
             .await?;
-            row.try_get("id")?
+            let id: i64 = row.try_get("id")?;
+            // a detached load keeps the split its voyage was set up with
+            sqlx::query(
+                "INSERT INTO voyage_shares (voyage_id, to_user, paid_to, kind, amount, reason)
+                 SELECT ?, to_user, paid_to, kind, amount, reason FROM voyage_shares WHERE voyage_id = ? ORDER BY id",
+            )
+            .bind(id)
+            .bind(from)
+            .execute(&mut *tx)
+            .await?;
+            id
         }
     };
     if to != from {
@@ -1146,7 +1198,7 @@ mod tests {
         let v = create_voyage(&pool, jt, jt, &new_voyage(None), &[new_load("Laranite", vec![(1, 8)], None)])
             .await
             .unwrap();
-        let edit = EditVoyage { ship_id: None, bought_at: "2026-11-08".into(), notes: None, entered_by: gig };
+        let edit = EditVoyage { ship_id: None, bought_at: "2026-11-08".into(), notes: None, entered_by: gig, shares: vec![] };
         update_voyage(&pool, v, &edit).await.unwrap();
         let voyage = find_voyage(&pool, v).await.unwrap().unwrap();
         assert_eq!((voyage.logged_by, voyage.entered_by), (jt, gig));
@@ -1261,5 +1313,39 @@ mod tests {
         let rest = find_load(&pool, haul.id).await.unwrap().unwrap();
         assert!(!rest.is_open());
         assert_eq!(rest.written_off(), 0.0);
+    }
+
+    #[tokio::test]
+    async fn voyage_shares_round_trip_follow_a_detach_and_go_with_the_voyage() {
+        let (pool, gig, jt) = test_pool().await;
+        let v = create_voyage(
+            &pool,
+            gig,
+            gig,
+            &new_voyage(None),
+            &[new_load("Laranite", vec![(1, 8)], None), new_load("Agricium", vec![(1, 8)], None)],
+        )
+        .await
+        .unwrap();
+        let split = vec![
+            ShareInput { to_user: jt, paid_to: None, kind: ShareKind::Pct, amount: 50.0, reason: Some("crew".into()) },
+            ShareInput { to_user: jt, paid_to: Some(gig), kind: ShareKind::Flat, amount: 1000.0, reason: None },
+        ];
+        let edit = EditVoyage { ship_id: None, bought_at: "2026-11-08".into(), notes: None, entered_by: gig, shares: split.clone() };
+        update_voyage(&pool, v, &edit).await.unwrap();
+        assert_eq!(voyage_shares(&pool, v).await.unwrap(), split);
+
+        // a detached load's new voyage starts with the same split
+        let second = find_voyage(&pool, v).await.unwrap().unwrap().loads[1].id;
+        let detached = move_load(&pool, second, MoveTarget::New, gig).await.unwrap();
+        assert_eq!(voyage_shares(&pool, detached).await.unwrap(), split);
+
+        // saving the voyage again replaces the split wholesale
+        update_voyage(&pool, v, &EditVoyage { shares: vec![], ..edit }).await.unwrap();
+        assert!(voyage_shares(&pool, v).await.unwrap().is_empty());
+
+        delete_voyage(&pool, detached).await.unwrap();
+        let left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM voyage_shares").fetch_one(&pool).await.unwrap();
+        assert_eq!(left, 0, "a voyage's shares go with it");
     }
 }

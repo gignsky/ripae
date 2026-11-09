@@ -596,17 +596,7 @@ fn head_with(v: &Voyage, extra: VoyageExtra, status: StatusCode) -> Response {
 
 pub async fn voyage_edit_form(State(state): State<AppState>, _user: CurrentUser, Path(id): Path<i64>) -> Response {
     match find_voyage(&state, id).await {
-        Ok(v) => {
-            let form = VoyageFormView {
-                bought_at: v.bought_at.clone(),
-                ship: v.ship.as_ref().map(|s| s.name.clone()).unwrap_or_default(),
-                notes: v.notes.clone().unwrap_or_default(),
-                entered_by: v.entered_by.to_string(),
-                users: repo::list_users(&state.pool).await.unwrap_or_default(),
-                error: None,
-            };
-            head_with(&v, VoyageExtra::Edit(form), StatusCode::OK)
-        }
+        Ok(v) => head_with(&v, VoyageExtra::Edit(voyage_form(&state, &v).await), StatusCode::OK),
         Err(r) => r,
     }
 }
@@ -627,8 +617,23 @@ pub async fn voyage_update(State(state): State<AppState>, _user: CurrentUser, Pa
     }
 }
 
-/// Validates and saves the voyage form (ship, date, notes, who logged it);
-/// on failure hands the form back with its error to re-render.
+/// The voyage form filled in as the voyage stands, its shares included.
+async fn voyage_form(state: &AppState, v: &Voyage) -> VoyageFormView {
+    VoyageFormView {
+        bought_at: v.bought_at.clone(),
+        ship: v.ship.as_ref().map(|s| s.name.clone()).unwrap_or_default(),
+        notes: v.notes.clone().unwrap_or_default(),
+        entered_by: v.entered_by.to_string(),
+        users: repo::list_users(&state.pool).await.unwrap_or_default(),
+        shares: share_rows_of(&repo::voyage_shares(&state.pool, v.id).await.unwrap_or_default()),
+        owner: v.logged_by.to_string(),
+        error: None,
+    }
+}
+
+/// Validates and saves the voyage form (ship, date, notes, who logged it,
+/// the voyage-wide shares); on failure hands the form back with its error
+/// to re-render.
 async fn save_voyage_form(state: &AppState, v: &Voyage, body: &str) -> Result<(), VoyageFormView> {
     let form = FormData::parse(body);
     let mut view = VoyageFormView {
@@ -637,13 +642,17 @@ async fn save_voyage_form(state: &AppState, v: &Voyage, body: &str) -> Result<()
         notes: form.get("notes").into(),
         entered_by: form.get("entered_by").into(),
         users: repo::list_users(&state.pool).await.unwrap_or_default(),
+        shares: share_rows_from(&form),
+        owner: v.logged_by.to_string(),
         error: None,
     };
     let parsed = async {
         let bought_at = parse_date(&view.bought_at, today()).map_err(|e| format!("Bought on: {e}"))?;
         let ship_id = pick_ship(state, &view.ship).await?;
         let entered_by = pick_member(&view.entered_by, v.entered_by, &view.users, "Logged by")?;
-        Ok::<_, String>(EditVoyage { ship_id, bought_at, notes: opt(&view.notes), entered_by })
+        // the run's owner sells by default and keeps the remainder
+        let shares = parse_shares(&view.shares, &view.users, v.logged_by, "run's owner")?;
+        Ok::<_, String>(EditVoyage { ship_id, bought_at, notes: opt(&view.notes), entered_by, shares })
     }
     .await;
     let edit = match parsed {
@@ -675,17 +684,7 @@ fn voyage_overlay(v: &Voyage, f: VoyageFormView, status: StatusCode) -> Response
 /// voyage: the ledger's way in to one that's already closed.
 pub async fn voyage_details_form(State(state): State<AppState>, _user: CurrentUser, Path(id): Path<i64>) -> Response {
     match find_voyage(&state, id).await {
-        Ok(v) => {
-            let f = VoyageFormView {
-                bought_at: v.bought_at.clone(),
-                ship: v.ship.as_ref().map(|s| s.name.clone()).unwrap_or_default(),
-                notes: v.notes.clone().unwrap_or_default(),
-                entered_by: v.entered_by.to_string(),
-                users: repo::list_users(&state.pool).await.unwrap_or_default(),
-                error: None,
-            };
-            voyage_overlay(&v, f, StatusCode::OK)
-        }
+        Ok(v) => voyage_overlay(&v, voyage_form(&state, &v).await, StatusCode::OK),
         Err(r) => r,
     }
 }
@@ -1148,7 +1147,11 @@ pub async fn load_where(State(state): State<AppState>, _user: CurrentUser, Path(
 // close
 // ---------------------------------------------------------------------------
 
-fn blank_close(load: &Load, users: Vec<User>) -> CloseFormView {
+/// A close form for `load`, filled in with what it most likely is: today,
+/// its destination, the sound crates, and its voyage's shares (less any
+/// share held by the load's owner, who sells it and keeps the remainder).
+fn blank_close(load: &Load, users: Vec<User>, voyage_shares: &[ShareInput]) -> CloseFormView {
+    let shares: Vec<ShareInput> = voyage_shares.iter().filter(|s| s.to_user != load.submitted_by).cloned().collect();
     CloseFormView {
         sold_at: today().to_string(),
         sell_terminal: load.destination.clone().unwrap_or_default(),
@@ -1160,7 +1163,7 @@ fn blank_close(load: &Load, users: Vec<User>) -> CloseFormView {
         balance_after: String::new(),
         selected: load.crates.iter().filter(|c| c.default_selected()).map(|c| c.id).collect(),
         write_off_glitched: true,
-        shares: Vec::new(),
+        shares: share_rows_of(&shares),
         users,
         sold_by: load.submitted_by.to_string(),
         error: None,
@@ -1177,11 +1180,11 @@ pub async fn close_form(State(state): State<AppState>, _user: CurrentUser, Path(
         return (StatusCode::CONFLICT, "That load is already sold.").into_response();
     }
     let users = repo::list_users(&state.pool).await.unwrap_or_default();
-    load_response(&state, id, LoadExtra::Close(blank_close(&load, users)), StatusCode::OK).await
+    let shares = repo::voyage_shares(&state.pool, load.voyage_id).await.unwrap_or_default();
+    load_response(&state, id, LoadExtra::Close(blank_close(&load, users, &shares)), StatusCode::OK).await
 }
 
 fn close_form_from(form: &FormData, users: Vec<User>) -> CloseFormView {
-    let n = form.count("share_to");
     CloseFormView {
         sold_at: form.get("sold_at").into(),
         sell_terminal: form.get("sell_terminal").into(),
@@ -1192,15 +1195,7 @@ fn close_form_from(form: &FormData, users: Vec<User>) -> CloseFormView {
         balance_after: form.get("sell_bal_after").into(),
         selected: form.all("crate").iter().filter_map(|v| v.parse().ok()).collect(),
         write_off_glitched: form.get("write_off_glitched") == "1",
-        shares: (0..n)
-            .map(|i| ShareFormRow {
-                to_user: form.nth("share_to", i).into(),
-                paid_to: form.nth("share_paid_to", i).into(),
-                kind: form.nth("share_kind", i).into(),
-                amount: form.nth("share_amount", i).into(),
-                reason: form.nth("share_reason", i).into(),
-            })
-            .collect(),
+        shares: share_rows_from(form),
         users,
         sold_by: form.get("sold_by").into(),
         error: None,
@@ -1225,14 +1220,49 @@ async fn parse_sale(
             PriceMode::Lot => (PriceMode::Lot, parse_money(&f.sell_lot, "Amount received for the lot")?),
         },
     };
+    let shares = parse_shares(&f.shares, users, seller, "seller")?;
+    Ok((sold_at, sell_terminal, price_mode, price, shares))
+}
+
+/// Share rows as submitted (`share_to`, `share_kind`, … repeated per row).
+fn share_rows_from(form: &FormData) -> Vec<ShareFormRow> {
+    (0..form.count("share_to"))
+        .map(|i| ShareFormRow {
+            to_user: form.nth("share_to", i).into(),
+            paid_to: form.nth("share_paid_to", i).into(),
+            kind: form.nth("share_kind", i).into(),
+            amount: form.nth("share_amount", i).into(),
+            reason: form.nth("share_reason", i).into(),
+        })
+        .collect()
+}
+
+/// Shares back into form rows, to fill a form in.
+fn share_rows_of(shares: &[ShareInput]) -> Vec<ShareFormRow> {
+    shares
+        .iter()
+        .map(|s| ShareFormRow {
+            to_user: s.to_user.to_string(),
+            paid_to: s.paid_to.map(|p| p.to_string()).unwrap_or_default(),
+            kind: s.kind.as_str().into(),
+            amount: views::trim_num(s.amount),
+            reason: s.reason.clone().unwrap_or_default(),
+        })
+        .collect()
+}
+
+/// Validates share rows for `seller`, who keeps the remainder and so can't
+/// hold a share; `who` names them in the error ("seller", "run's owner").
+fn parse_shares(rows: &[ShareFormRow], users: &[User], seller: i64, who: &str) -> Result<Vec<ShareInput>, String> {
     let mut shares = Vec::new();
-    for (i, s) in f.shares.iter().enumerate() {
+    let mut pct_total = 0.0;
+    for (i, s) in rows.iter().enumerate() {
         let to_user: i64 = s.to_user.trim().parse().map_err(|_| format!("Share {}: pick a crew member.", i + 1))?;
         if !users.iter().any(|u| u.id == to_user) {
             return Err(format!("Share {}: that crew member doesn't exist.", i + 1));
         }
         if to_user == seller {
-            return Err(format!("Share {}: the seller can't share with themself -- the remainder is already theirs.", i + 1));
+            return Err(format!("Share {}: the {who} can't share with themself -- the remainder is already theirs.", i + 1));
         }
         let paid_to = match opt(&s.paid_to) {
             None => None,
@@ -1246,12 +1276,18 @@ async fn parse_sale(
         };
         let kind: ShareKind = s.kind.parse().unwrap_or(ShareKind::Pct);
         let amount = parse_money(&s.amount, &format!("Share {} amount", i + 1))?;
-        if kind == ShareKind::Pct && amount > 100.0 {
-            return Err(format!("Share {}: a percentage can't exceed 100.", i + 1));
+        if kind == ShareKind::Pct {
+            if amount > 100.0 {
+                return Err(format!("Share {}: a percentage can't exceed 100.", i + 1));
+            }
+            pct_total += amount;
         }
         shares.push(ShareInput { to_user, paid_to, kind, amount, reason: opt(&s.reason) });
     }
-    Ok((sold_at, sell_terminal, price_mode, price, shares))
+    if pct_total > 100.0 + 1e-9 {
+        return Err(format!("Percentage shares add up to {}% -- more than the whole profit.", views::trim_num(pct_total)));
+    }
+    Ok(shares)
 }
 
 /// `POST /loads/:id/close` -- records the sale; answers with the SALE banner.
@@ -1513,5 +1549,37 @@ mod tests {
         assert!(balance_delta("1200", "1000", true).unwrap_err().contains("swapped"));
         assert!(balance_delta("", "1000", false).unwrap_err().contains("Balance before"));
         assert!(balance_delta("1000", "", true).unwrap_err().contains("Balance after"));
+    }
+
+    fn crew() -> Vec<User> {
+        [(1, "Lord Gig"), (2, "JT"), (3, "Crew-03")]
+            .iter()
+            .map(|(id, n)| User { id: *id, handle: n.to_lowercase(), display_name: n.to_string(), created_at: String::new() })
+            .collect()
+    }
+
+    fn row(to: &str, kind: &str, amount: &str) -> ShareFormRow {
+        ShareFormRow { to_user: to.into(), paid_to: String::new(), kind: kind.into(), amount: amount.into(), reason: String::new() }
+    }
+
+    #[test]
+    fn a_close_starts_from_the_voyage_split_less_the_sellers_own_share() {
+        use model::fixtures::{load, sound};
+        let mut l = load(1, 10.0, vec![sound(1, 8)]);
+        l.submitted_by = 2; // JT's load, on a voyage where JT holds a share
+        let voyage = parse_shares(&[row("2", "pct", "33.33"), row("3", "pct", "33.33")], &crew(), 1, "run's owner").unwrap();
+        let f = blank_close(&l, crew(), &voyage);
+        assert_eq!(f.shares.len(), 1);
+        assert_eq!((f.shares[0].to_user.as_str(), f.shares[0].amount.as_str()), ("3", "33.33"));
+    }
+
+    #[test]
+    fn voyage_shares_refuse_the_owner_and_more_than_the_whole() {
+        let err = parse_shares(&[row("1", "pct", "10")], &crew(), 1, "run's owner").unwrap_err();
+        assert!(err.contains("run's owner can't share"), "{err}");
+        let err = parse_shares(&[row("2", "pct", "60"), row("3", "pct", "50")], &crew(), 1, "run's owner").unwrap_err();
+        assert!(err.contains("110%"), "{err}");
+        // flat fees don't count toward the 100 %
+        assert!(parse_shares(&[row("2", "pct", "100"), row("3", "flat", "5000")], &crew(), 1, "run's owner").is_ok());
     }
 }
