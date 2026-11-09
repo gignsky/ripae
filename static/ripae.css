@@ -267,8 +267,9 @@ label.crate.sound{color:var(--fg)}
 label.crate:has(input:disabled){cursor:not-allowed;opacity:.6}
 .inline-label{display:inline-grid;grid-auto-flow:column;gap:.3rem;align-items:center;font-size:.7rem;letter-spacing:.1em;text-transform:uppercase;color:var(--fg-dim);margin-left:.6rem}
 .inline-label input{width:11rem;padding:.1rem .35rem;font-size:.8rem}
-.inline-label.write-off{display:flex;margin:.5rem 0 0;text-transform:none;letter-spacing:.04em}
-.inline-label.write-off input{width:auto;margin:0}
+.inline-label.write-off,.inline-label.check{display:flex;margin:.5rem 0 0;text-transform:none;letter-spacing:.04em}
+.inline-label.check{align-self:end;margin:0}
+.inline-label.write-off input,.inline-label.check input{width:auto;margin:0}
 /* fuzzy pick-list menu (static/picker.js) */
 .pick{position:relative;min-width:0}
 .pick-menu{position:absolute;left:0;right:0;z-index:30;margin:0;padding:0;list-style:none;max-height:14rem;overflow-y:auto;background:var(--bg);border:1px solid var(--fg-dim);box-shadow:var(--glow)}
@@ -321,3 +322,5 @@ body::before{content:"";position:fixed;left:0;right:0;top:0;height:22vh;pointer-
 .screen{animation:vsync 11s steps(1,end) infinite}
 @keyframes vsync{0%{transform:none}63%{transform:translateX(1px) skewX(-.4deg)}63.6%{transform:translateX(-2px)}64.2%{transform:none}91%{transform:translateY(1px)}91.4%{transform:none}}
 @media (prefers-reduced-motion:reduce){.scan,pre.scan{animation:none}body::after,.screen{animation:none}body::before{display:none}}
+/* ledger: eleven columns leave no room for side-by-side commands -- stack them so the Cmd column stays inside the panel */
+#ledger .actions{flex-direction:column;align-items:flex-start;gap:.2rem}
