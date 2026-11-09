@@ -348,6 +348,8 @@ pub struct User {
     pub display_name: String,
     /// `users.created_at` -- the "aboard since" date on the service record.
     pub created_at: String,
+    /// Their Discord avatar, for the service record; `None` before Discord.
+    pub avatar_url: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1351,9 +1353,9 @@ pub(crate) mod fixtures {
 
     pub fn users() -> Vec<User> {
         vec![
-            User { id: GIG, handle: "lordgig".into(), display_name: "Lord Gig".into(), created_at: "2026-10-21 18:00:00".into() },
-            User { id: JT, handle: "firstofficer".into(), display_name: "JT".into(), created_at: "2026-10-21 18:00:00".into() },
-            User { id: THIRD, handle: "crew03".into(), display_name: "Crew-03".into(), created_at: "2026-11-01 09:00:00".into() },
+            User { id: GIG, handle: "lordgig".into(), display_name: "Lord Gig".into(), created_at: "2026-10-21 18:00:00".into(), avatar_url: None },
+            User { id: JT, handle: "firstofficer".into(), display_name: "JT".into(), created_at: "2026-10-21 18:00:00".into(), avatar_url: None },
+            User { id: THIRD, handle: "crew03".into(), display_name: "Crew-03".into(), created_at: "2026-11-01 09:00:00".into(), avatar_url: None },
         ]
     }
 

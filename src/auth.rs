@@ -1,14 +1,17 @@
 use argon2::password_hash::PasswordVerifier;
 use argon2::Argon2;
-use axum::extract::{FromRequestParts, State};
+use axum::extract::{FromRequestParts, Query, State};
 use axum::http::request::Parts;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::Form;
+use base64::Engine;
+use rand::Rng;
 use serde::Deserialize;
 use sqlx::SqlitePool;
 use tower_sessions::Session;
 
+use crate::discord::{self, Refusal};
 use crate::templates::{render, LoginTemplate};
 use crate::AppState;
 
@@ -16,12 +19,23 @@ const SESSION_USER_ID: &str = "user_id";
 /// Set once the welcome splash has played for this session, so it doesn't
 /// replay on every page load (RIPAE-ROLL7.md §3, 7.5).
 const SESSION_SPLASH_SEEN: &str = "splash_seen";
+/// The OAuth `state` of a Discord sign-in in flight; the callback must
+/// echo it back (the CSRF guard on the round trip).
+const SESSION_OAUTH_STATE: &str = "oauth_state";
+/// An old account whose password checked out, waiting for Discord to claim
+/// it. It isn't signed in until Discord vouches for the claimant.
+const SESSION_CLAIM: &str = "claim_user_id";
+
+const DOOR_SHUT: &str = "The door does not open. Check the handle and password.";
+const NOT_VOUCHED: &str = "Discord did not vouch for you. Try again.";
+const NOT_A_MEMBER: &str = "The door does not open. NISC members only.";
+const NO_SESSION: &str = "Could not start a session. Try again.";
 
 #[derive(Debug, Clone)]
 pub struct CurrentUser {
     pub id: i64,
-    /// The handle lives on the leaderboard, not the rail; kept here for
-    /// the Discord OAuth roster. // TODO(0.3): org roster / OAuth identity
+    /// The handle lives on the leaderboard, not the rail. With Discord
+    /// sign-in it is the member's Discord username.
     #[allow(dead_code)]
     pub handle: String,
     pub display_name: String,
@@ -126,46 +140,121 @@ pub struct LoginForm {
     pub password: String,
 }
 
+/// `POST /login`. Without Discord this signs you in. With Discord it only
+/// takes the password of an account nobody has claimed yet, and sends you
+/// on to Discord to claim it: once linked, Discord is the only way in.
 pub async fn login(
     State(state): State<AppState>,
     session: Session,
     Form(form): Form<LoginForm>,
 ) -> Response {
-    match authenticate(&state.pool, form.handle.trim(), &form.password).await {
-        Ok(Some(user_id)) => {
-            if session.insert(SESSION_USER_ID, user_id).await.is_err() {
-                return gate(
-                    &state,
-                    Some("Could not start a session. Try again."),
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                )
-                .await;
+    let claiming = state.discord.is_some();
+    match authenticate(&state.pool, form.handle.trim(), &form.password, claiming).await {
+        Ok(Some(user_id)) if claiming => {
+            if session.insert(SESSION_CLAIM, user_id).await.is_err() {
+                return gate(&state, Some(NO_SESSION), StatusCode::INTERNAL_SERVER_ERROR).await;
             }
-            // the gate itself was the splash: don't play the welcome as well
-            let _ = session.insert(SESSION_SPLASH_SEEN, true).await;
-            Redirect::to("/").into_response()
+            Redirect::to("/auth/discord").into_response()
         }
-        _ => {
-            gate(
-                &state,
-                Some("The door does not open. Check the handle and password."),
-                StatusCode::UNAUTHORIZED,
-            )
-            .await
-        }
+        Ok(Some(user_id)) => start_session(&state, &session, user_id).await,
+        _ => gate(&state, Some(DOOR_SHUT), StatusCode::UNAUTHORIZED).await,
     }
 }
 
+/// Signs `user_id` in on a fresh session id and goes to the ledger.
+async fn start_session(state: &AppState, session: &Session, user_id: i64) -> Response {
+    // a new id on sign-in, so a session id planted before it is worthless
+    if session.cycle_id().await.is_err() || session.insert(SESSION_USER_ID, user_id).await.is_err() {
+        return gate(state, Some(NO_SESSION), StatusCode::INTERNAL_SERVER_ERROR).await;
+    }
+    // the gate itself was the splash: don't play the welcome as well
+    let _ = session.insert(SESSION_SPLASH_SEEN, true).await;
+    Redirect::to("/").into_response()
+}
+
+/// `GET /auth/discord` -- off to Discord, with a fresh `state` to check
+/// on the way back.
+pub async fn discord_start(State(state): State<AppState>, session: Session) -> Response {
+    let Some(discord) = state.discord.as_deref() else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    if current_user(&state, &session).await.is_some() {
+        return Redirect::to("/").into_response();
+    }
+    let mut bytes = [0u8; 32];
+    rand::rng().fill_bytes(&mut bytes);
+    let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
+    if session.insert(SESSION_OAUTH_STATE, &token).await.is_err() {
+        return gate(&state, Some(NO_SESSION), StatusCode::INTERNAL_SERVER_ERROR).await;
+    }
+    Redirect::to(&discord.authorize_url(&token)).into_response()
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DiscordCallback {
+    code: Option<String>,
+    state: Option<String>,
+    /// e.g. `access_denied` when the member pressed Cancel.
+    error: Option<String>,
+}
+
+/// `GET /auth/discord/callback` -- Discord sends the member back here. In
+/// the NISC server: signed in (claiming an old account, if a password
+/// sign-in just checked out). Not in it, or the round trip doesn't add
+/// up: the gate again.
+pub async fn discord_callback(
+    State(state): State<AppState>,
+    session: Session,
+    Query(q): Query<DiscordCallback>,
+) -> Response {
+    let Some(discord) = state.discord.as_deref() else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    // both are single-use, whatever happens next
+    let expected: Option<String> = session.remove(SESSION_OAUTH_STATE).await.ok().flatten();
+    let claim: Option<i64> = session.remove(SESSION_CLAIM).await.ok().flatten();
+    let code = match (q.code, q.state, expected) {
+        (Some(code), Some(got), Some(want)) if got == want => code,
+        _ => {
+            tracing::info!(error = ?q.error, "Discord sign-in did not complete");
+            return gate(&state, Some(NOT_VOUCHED), StatusCode::UNAUTHORIZED).await;
+        }
+    };
+    let profile = match discord.member(&code).await {
+        Ok(Some(p)) => p,
+        Ok(None) => return gate(&state, Some(NOT_A_MEMBER), StatusCode::FORBIDDEN).await,
+        Err(e) => {
+            tracing::warn!(error = ?e, "Discord sign-in failed");
+            return gate(&state, Some(NOT_VOUCHED), StatusCode::BAD_GATEWAY).await;
+        }
+    };
+    let refused = match discord::sign_in(&state.pool, &profile, claim).await {
+        Ok(Ok(user_id)) => return start_session(&state, &session, user_id).await,
+        Ok(Err(Refusal::DiscordTaken)) => "That Discord account already signs in as someone else.",
+        Ok(Err(Refusal::AccountTaken)) => "That account is already claimed by another Discord account.",
+        Err(e) => {
+            tracing::error!(error = ?e, "could not record a Discord sign-in");
+            return gate(&state, Some(NO_SESSION), StatusCode::INTERNAL_SERVER_ERROR).await;
+        }
+    };
+    gate(&state, Some(refused), StatusCode::CONFLICT).await
+}
+
+/// The account behind a handle and password. `unclaimed_only` (Discord
+/// sign-in is on) ignores accounts already linked to Discord.
 async fn authenticate(
     pool: &SqlitePool,
     handle: &str,
     password: &str,
+    unclaimed_only: bool,
 ) -> anyhow::Result<Option<i64>> {
-    let row =
-        sqlx::query_as::<_, (i64, String)>("SELECT id, password_hash FROM users WHERE handle = ?")
-            .bind(handle)
-            .fetch_optional(pool)
-            .await?;
+    let row = sqlx::query_as::<_, (i64, String)>(
+        "SELECT id, password_hash FROM users WHERE handle = ? AND (NOT ? OR discord_id IS NULL)",
+    )
+    .bind(handle)
+    .bind(unclaimed_only)
+    .fetch_optional(pool)
+    .await?;
     let Some((id, hash)) = row else {
         return Ok(None);
     };
@@ -197,21 +286,49 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            authenticate(&pool, "lordgig", "wrong-password")
+            authenticate(&pool, "lordgig", "wrong-password", false)
                 .await
                 .unwrap(),
             None
         );
-        assert!(authenticate(&pool, "lordgig", "correct-password")
+        assert!(authenticate(&pool, "lordgig", "correct-password", false)
             .await
             .unwrap()
             .is_some());
         assert_eq!(
-            authenticate(&pool, "nobody", "correct-password")
+            authenticate(&pool, "nobody", "correct-password", false)
                 .await
                 .unwrap(),
             None
         );
+    }
+
+    #[tokio::test]
+    async fn with_discord_a_claimed_account_no_longer_takes_its_password() {
+        let pool = db::connect(":memory:").await.unwrap();
+        db::migrate(&pool).await.unwrap();
+        let hash = db::hash_password("pw").unwrap();
+        for (handle, discord_id) in [("lordgig", None), ("firstofficer", Some("200"))] {
+            sqlx::query("INSERT INTO users (handle, display_name, password_hash, discord_id) VALUES (?, ?, ?, ?)")
+                .bind(handle)
+                .bind(handle)
+                .bind(&hash)
+                .bind(discord_id)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        assert!(authenticate(&pool, "lordgig", "pw", true).await.unwrap().is_some());
+        assert_eq!(authenticate(&pool, "firstofficer", "pw", true).await.unwrap(), None);
+        // without Discord configured, passwords still work for everyone
+        assert!(authenticate(&pool, "firstofficer", "pw", false).await.unwrap().is_some());
+        // accounts made through Discord have no password at all
+        sqlx::query("INSERT INTO users (handle, display_name, password_hash) VALUES ('jt', 'JT', '')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(authenticate(&pool, "jt", "", true).await.unwrap(), None);
+        assert_eq!(authenticate(&pool, "jt", "", false).await.unwrap(), None);
     }
 
     #[test]
