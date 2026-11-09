@@ -3,7 +3,7 @@
 Every notable change to Ripae. Newest first. This file is also what the
 version badge in the corner of the site shows.
 
-## 0.2.5-roll16
+## 0.2.5
 
 ### Changed
 - **MU-TH-UR screen.** Everything that paints in now comes up a line at a
