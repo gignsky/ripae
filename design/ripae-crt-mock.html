@@ -1,0 +1,1084 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>[hidden]{display:none!important}</style></head><body><title>Ripae CRT</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=VT323&family=Share+Tech+Mono&display=swap">
+<style>
+/* Layout: one phosphor screen; a header rail, a totals strip, then bordered panels stacked (OPEN CARGO grouped by voyage, LOAD PLAN, NEW RUN hidden behind a command, LEDGER). Single committed dark look, by choice. */
+:root{
+  --bg:#050806;            /* glass */
+  --bg-2:#0a120c;          /* panel field */
+  --fg:#7dff8a;            /* phosphor */
+  --fg-dim:#3f9a4c;        /* phosphor, low beam */
+  --fg-faint:#1d4a26;      /* rules, scan ghosts */
+  --amber:#f2b23a;         /* stored / parked */
+  --cyan:#5fd8e6;          /* awaiting pickup at terminal */
+  --red:#ff5a4e;           /* loss / destructive */
+  --glow:0 0 2px rgba(125,255,138,.75),0 0 10px rgba(125,255,138,.28);
+  --display:'VT323',ui-monospace,monospace;
+  --mono:'Share Tech Mono',ui-monospace,'SFMono-Regular',Menlo,monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{
+  background:var(--bg);color:var(--fg);font-family:var(--mono);font-size:15px;line-height:1.4;
+  padding-block:1.25rem 3rem;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));
+  text-shadow:var(--glow);font-variant-numeric:tabular-nums;min-height:100%;
+}
+body::after{content:"";position:fixed;inset:0;pointer-events:none;z-index:50;
+  background:repeating-linear-gradient(0deg,rgba(0,0,0,0) 0 2px,rgba(0,0,0,.22) 2px 3px),
+             radial-gradient(ellipse at center,rgba(0,0,0,0) 55%,rgba(0,0,0,.55) 100%);}
+.screen{max-width:1180px;margin:0 auto;display:grid;gap:1.1rem}
+a{color:inherit}
+h1,h2,h3{margin:0;font-weight:400;text-wrap:balance}
+.rail{display:flex;flex-wrap:wrap;justify-content:space-between;gap:.4rem 1.5rem;border-bottom:1px solid var(--fg-dim);padding-bottom:.5rem;text-transform:uppercase;letter-spacing:.08em}
+.rail h1{font-family:var(--display);font-size:2.3rem;letter-spacing:.12em;line-height:1}
+.rail h1 small{font-family:var(--mono);font-size:.8rem;letter-spacing:.2em;color:var(--fg-dim);margin-left:.75rem;vertical-align:middle}
+.rail .meta{display:flex;flex-wrap:wrap;gap:.35rem 1.5rem;align-items:center;font-size:.85rem;color:var(--fg-dim)}
+.rail .meta b{color:var(--fg);font-weight:400}
+.cmd{background:none;border:0;padding:0;font:inherit;color:var(--fg);cursor:pointer;text-shadow:inherit;letter-spacing:.06em;text-transform:uppercase;white-space:nowrap}
+.cmd::before{content:"[";color:var(--fg-dim)}.cmd::after{content:"]";color:var(--fg-dim)}
+.cmd:hover,.cmd:focus-visible{background:var(--fg);color:var(--bg);text-shadow:none;outline:none}
+.cmd:hover::before,.cmd:hover::after,.cmd:focus-visible::before,.cmd:focus-visible::after{color:var(--bg)}
+.cmd.warn{color:var(--amber)}.cmd.danger{color:var(--red)}
+.cmd.warn:hover{background:var(--amber)}.cmd.danger:hover{background:var(--red)}
+.cmd.boxed{border:1px solid var(--fg);padding:.35rem .9rem}
+/* totals */
+.totals{display:grid;grid-template-columns:repeat(auto-fit,minmax(14rem,1fr));gap:1rem}
+.tile{border:1px solid var(--fg-dim);padding:.7rem .9rem;position:relative;background:var(--bg-2)}
+.tile .lbl{font-size:.75rem;letter-spacing:.18em;text-transform:uppercase;color:var(--fg-dim)}
+.tile .val{font-family:var(--display);font-size:2.6rem;line-height:1;margin-top:.3rem}
+.tile .val small{font-size:1.1rem;color:var(--fg-dim);margin-left:.3rem}
+.tile.sub .val{font-size:1.9rem}
+/* panels */
+.panel{border:1px solid var(--fg-dim);background:var(--bg-2);min-width:0}
+.panel>header{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:baseline;gap:.4rem 1rem;padding:.45rem .9rem;border-bottom:1px solid var(--fg-faint);text-transform:uppercase;letter-spacing:.14em}
+.panel>header h2{font-size:.95rem}
+.panel>header h2::before{content:"// ";color:var(--fg-dim)}
+.panel>header .hint{font-size:.75rem;color:var(--fg-dim);letter-spacing:.05em;text-transform:none}
+.panel.collapsed>header{border-bottom:0}
+.panel.min>header{border-bottom:0}
+.panel.min>:not(header){display:none}
+.panel>header .minbtn{margin-left:auto}
+.tbl{overflow:visible}
+table{width:100%;border-collapse:collapse;white-space:normal;font-size:.9rem}
+th,td{padding:.45rem .6rem;text-align:left;vertical-align:top;border-bottom:1px solid var(--fg-faint)}
+th{font-weight:400;font-size:.72rem;letter-spacing:.16em;text-transform:uppercase;color:var(--fg-dim)}
+td.num,th.num{text-align:right}
+tbody tr:last-child td{border-bottom:0}
+tbody tr:not(.voyage):hover td{background:rgba(125,255,138,.05)}
+.status{display:inline-block;padding:0 .35rem;border:1px solid currentColor;font-size:.72rem;letter-spacing:.12em;text-transform:uppercase;line-height:1.5}
+.status.transit{color:var(--fg)}.status.stored{color:var(--amber)}.status.pickup{color:var(--cyan);border-style:dashed}
+.who{color:var(--fg-dim)}
+.where{white-space:normal}
+td.num,td .status,td .route,.actions{white-space:nowrap}
+.actions{display:flex;gap:.6rem;flex-wrap:nowrap}
+.pos{color:var(--fg)}.neg{color:var(--red)}
+tr.stored td:first-child{box-shadow:inset 3px 0 0 var(--amber)}
+tr.pickup td:first-child{box-shadow:inset 3px 0 0 var(--cyan)}
+/* voyage grouping */
+tr.voyage td{background:rgba(125,255,138,.07);border-top:1px solid var(--fg-dim);border-bottom:1px solid var(--fg-faint);letter-spacing:.08em;text-transform:uppercase;padding-block:.35rem}
+tr.voyage td b{font-weight:400}
+tr.voyage td .who{letter-spacing:.05em}
+tr.voyage td .vmeta{display:inline-flex;flex-wrap:wrap;gap:0 1.25rem;color:var(--fg-dim);font-size:.78rem}
+tr.voyage td .vmeta b{color:var(--fg)}
+tr.line td:first-child{padding-left:1.9rem}
+tr.line td:first-child::before{content:"└ ";color:var(--fg-faint)}
+.stop{display:inline-block;min-width:1.5em;text-align:center;border:1px solid var(--fg-dim);font-size:.72rem;line-height:1.5;margin-right:.4rem;color:var(--fg)}
+.boxes{color:var(--fg-dim)}
+.boxes b{color:var(--fg);font-weight:400}
+.route{white-space:nowrap}
+.route .arr{color:var(--fg-dim);padding:0 .35rem}
+.route .via{color:var(--fg-dim)}
+/* load plan */
+.plans{display:grid;grid-template-columns:repeat(auto-fit,minmax(20rem,1fr));gap:0;padding:0}
+.plan{padding:.75rem .9rem;border-bottom:1px solid var(--fg-faint);min-width:0}
+.plans .plan:nth-child(odd){border-right:1px solid var(--fg-faint)}
+.plan h3{font-size:.8rem;letter-spacing:.14em;text-transform:uppercase;display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap}
+.plan h3 span{color:var(--fg-dim)}
+.plan ol{margin:.5rem 0 0;padding:0;list-style:none;display:grid;gap:.35rem}
+.plan li{display:grid;grid-template-columns:auto 1fr auto;gap:.6rem;align-items:baseline}
+.plan li .n{font-family:var(--display);font-size:1.5rem;line-height:1;color:var(--fg)}
+.plan li .n::after{content:".";color:var(--fg-dim)}
+.plan li .what{min-width:0}
+.plan li .what small{display:block;color:var(--fg-dim);font-size:.78rem;white-space:normal}
+.plan li .depth{font-size:.72rem;letter-spacing:.14em;text-transform:uppercase;color:var(--fg-dim)}
+.plan li:first-child .depth{color:var(--amber)}
+.plan p{margin:.5rem 0 0;color:var(--fg-dim);font-size:.78rem;white-space:normal}
+.plan.suggest{border-left:3px solid var(--amber)}
+.plan.suggest h3 span{color:var(--amber)}
+/* form */
+form.run{padding:.9rem;display:grid;gap:.9rem}
+.fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(11rem,1fr));gap:.8rem}
+label{display:grid;gap:.25rem;font-size:.72rem;letter-spacing:.16em;text-transform:uppercase;color:var(--fg-dim);min-width:0}
+input,select{font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--fg-dim);padding:.4rem .55rem;min-width:0;width:100%;text-shadow:var(--glow);caret-color:var(--fg)}
+input::placeholder{color:var(--fg-faint)}
+input:focus,select:focus{outline:none;border-color:var(--fg);box-shadow:0 0 0 1px var(--fg),var(--glow)}
+input[type=date]::-webkit-calendar-picker-indicator{filter:invert(.7) sepia(1) hue-rotate(70deg) saturate(3)}
+.cargo-lines{display:grid;gap:.6rem}
+.cargo-line{display:grid;grid-template-columns:auto 1fr;gap:.6rem;align-items:start;border-left:1px solid var(--fg-faint);padding-left:.7rem}
+.cargo-line .ln{font-family:var(--display);font-size:1.5rem;line-height:1.1;color:var(--fg-dim);padding-top:1.2rem}
+.cargo-line .fields{grid-template-columns:repeat(auto-fit,minmax(9rem,1fr))}
+.line-cmd{align-self:end;padding-bottom:.45rem}
+.calc.bad{color:var(--red)}
+.calc{font-size:.72rem;letter-spacing:.05em;text-transform:none;color:var(--fg-dim)}
+.calc b{color:var(--fg);font-weight:400}
+.sub-h{font-size:.72rem;letter-spacing:.18em;text-transform:uppercase;color:var(--fg-dim);display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap;align-items:baseline}
+.formfoot{display:flex;flex-wrap:wrap;gap:1rem 1.5rem;align-items:center;justify-content:space-between}
+.formfoot .note{font-size:.78rem;color:var(--fg-dim)}
+/* slow-raster reveal: each .ras line is drawn as a whole, in stepped order, no easing */
+.panel.collapsed .body{display:none}
+.ras{visibility:hidden}
+.ras.lit{visibility:visible}
+.ras.lit.flash{background:rgba(125,255,138,.12)}
+
+/* views, nav */
+.view{display:grid;gap:1.1rem;min-width:0}
+.views{display:inline-flex;gap:.8rem}
+.cmd.on{background:var(--fg-dim);color:var(--bg);text-shadow:none}
+.cmd.on::before,.cmd.on::after{color:var(--bg)}
+.rs{visibility:hidden}.rs.lit{visibility:visible}.rs.flash{outline:1px solid var(--fg);outline-offset:-1px}
+.ras.flash{background:rgba(125,255,138,.12)}
+/* leaderboard */
+td.rank{font-family:var(--display);font-size:1.5rem;line-height:1;color:var(--fg)}
+tr.dim td{color:var(--fg-faint)}
+th.bar,td.bar{width:28%}
+.meter{display:block;height:.9rem;position:relative;background:repeating-linear-gradient(90deg,var(--fg-faint) 0 2px,transparent 2px 6px)}
+.meter::before{content:"";position:absolute;inset:0;width:calc(var(--p,0)*1%);background:repeating-linear-gradient(90deg,var(--fg) 0 4px,transparent 4px 6px);box-shadow:var(--glow)}
+.meter::after{content:attr(data-pct) "%";position:absolute;left:calc(var(--p,0)*1% + .4rem);top:-.15rem;font-size:.72rem;color:var(--fg-dim)}
+.sortby{margin-left:auto}
+/* overlays */
+.overlay{position:fixed;inset:0;z-index:60;background:var(--bg);display:grid;place-items:center;padding:1rem;overflow:auto}
+.overlay[hidden]{display:none}
+.splash-in{display:grid;gap:1rem;justify-items:center;text-align:center;max-width:100%}
+.ascii{margin:0;font-family:var(--mono);font-size:clamp(.5rem,2.2vw,1.1rem);line-height:1.05;text-shadow:0 0 4px rgba(125,255,138,.9),0 0 18px rgba(125,255,138,.45);max-width:100%;overflow:hidden}
+.tag{margin:0;letter-spacing:.2em;text-transform:uppercase;font-size:.8rem;color:var(--fg-dim)}
+.tag em{font-style:normal;color:var(--fg);text-transform:none;letter-spacing:.05em}
+.tag b{color:var(--fg);font-weight:400}
+.boot{margin:0;text-align:left;font-size:.8rem;color:var(--fg-dim);min-height:7.5em;width:min(34rem,100%);white-space:pre-wrap}
+.gate{display:grid;gap:.8rem;width:min(28rem,100%);text-align:left;justify-items:stretch}
+.gate .gate-line{text-align:center;color:var(--fg);letter-spacing:.25em}
+.gate .fields{grid-template-columns:1fr 1fr}
+.gate .any{text-align:center}
+#g-known b{color:var(--fg);font-weight:400}
+.gate-err{margin:0;font-size:.8rem;letter-spacing:.05em}
+.any{margin:0;font-size:.8rem;letter-spacing:.2em;text-transform:uppercase;color:var(--fg-dim)}
+.tag.neg{color:var(--red)}
+.cmd.boxed.danger{border-color:var(--red)}
+.ascii.womp{color:var(--amber);text-shadow:0 0 4px rgba(242,178,58,.9),0 0 18px rgba(242,178,58,.4)}
+.record{width:min(60rem,100%);text-align:left}
+.record[hidden]{display:none}
+.stats{margin:0;padding:.6rem .9rem;display:grid;grid-template-columns:repeat(auto-fit,minmax(13rem,1fr));gap:.6rem 1.2rem}
+.stats div{display:grid;gap:.1rem;border-bottom:1px solid var(--fg-faint);padding-bottom:.4rem}
+.stats dt{font-size:.68rem;letter-spacing:.16em;text-transform:uppercase;color:var(--fg-dim)}
+.stats dd{margin:0;font-family:var(--display);font-size:1.6rem;line-height:1}
+.stats dd small{font-family:var(--mono);font-size:.75rem;color:var(--fg-dim);margin-left:.3rem}
+.stats dd.txt{font-family:var(--mono);font-size:.95rem;line-height:1.3}
+.sale-fig{display:flex;align-items:baseline;gap:.6rem}
+.sale-fig .lbl{font-size:.75rem;letter-spacing:.18em;text-transform:uppercase;color:var(--fg-dim)}
+.sale-fig .val{font-family:var(--display);font-size:clamp(2.5rem,8vw,4.5rem);line-height:1}
+.sale-fig small{color:var(--fg-dim)}
+.sale-line{color:var(--fg-dim);font-size:.9rem}
+.sale-shares{display:grid;gap:.25rem;font-size:.9rem;min-width:min(26rem,100%)}
+.sale-shares div{display:flex;justify-content:space-between;gap:1rem;border-bottom:1px dashed var(--fg-faint);padding-bottom:.2rem}
+.sale-shares .who{color:var(--fg-dim)}
+#blackout{position:fixed;inset:0;z-index:70;background:#000;pointer-events:none;opacity:0}
+#blackout.go{animation:flick .9s steps(1,end) forwards}
+@keyframes flick{0%{opacity:0}8%{opacity:1}16%{opacity:0}24%{opacity:1}30%{opacity:.4}38%{opacity:1}52%{opacity:1}60%{opacity:0}68%{opacity:1}100%{opacity:1}}
+#blackout.off{animation:flickoff .7s steps(1,end) forwards}
+@keyframes flickoff{0%{opacity:1}30%{opacity:1}40%{opacity:0}50%{opacity:1}62%{opacity:0}74%{opacity:.6}84%{opacity:0}100%{opacity:0}}
+@media (prefers-reduced-motion:reduce){#blackout.go,#blackout.off{animation:none;opacity:0}}
+/* close form */
+tr.closing td{background:rgba(125,255,138,.04);padding:0}
+tr.closing form{padding:.9rem 1.2rem}
+.shares{display:grid;gap:.5rem}
+.share{border-left:1px solid var(--fg-faint);padding-left:.7rem}
+
+/* narrow screens: each row becomes a labelled card; thead hidden; no sideways scroll ever */
+@media (max-width:980px){
+  .cards thead{display:none}
+  .cards tr{display:grid;grid-template-columns:repeat(auto-fit,minmax(9rem,1fr));gap:.2rem .8rem;padding:.5rem .6rem;border-bottom:1px solid var(--fg-faint)}
+  .cards tr.voyage{display:block}
+  .cards td{display:block;border:0;padding:.1rem 0}
+  .cards td.num{text-align:left}
+  .cards td[data-l]::before{content:attr(data-l);display:block;font-size:.65rem;letter-spacing:.16em;text-transform:uppercase;color:var(--fg-dim)}
+  .cards tr.line td:first-child{padding-left:0}
+  .cards tr.line td:first-child::before{content:attr(data-l)}
+  .cards tr.closing{display:block;padding:0}
+}
+
+/* crate manifest */
+tr.chooser td{padding:.6rem 1.2rem;background:rgba(125,255,138,.03)}
+tr.chooser .crates-h{margin-bottom:.35rem}
+tr.manifest td{padding:.6rem 1.9rem .8rem;background:rgba(125,255,138,.03)}
+.crates-h{font-size:.72rem;letter-spacing:.16em;text-transform:uppercase;color:var(--fg-dim);display:flex;justify-content:space-between;flex-wrap:wrap;gap:.3rem 1rem;margin-bottom:.5rem}
+.crate-grid{display:flex;flex-wrap:wrap;gap:.5rem}
+.crate{font:inherit;cursor:pointer;background:var(--bg);color:var(--fg);border:1px solid var(--fg-dim);padding:.3rem .5rem;min-width:5.2rem;text-align:left;text-shadow:var(--glow);display:grid;gap:.1rem}
+.crate b{font-family:var(--display);font-size:1.4rem;line-height:1;font-weight:400}
+.crate small{font-size:.65rem;letter-spacing:.14em;text-transform:uppercase;color:var(--fg-dim)}
+.crate.glitched{color:var(--amber);border-color:var(--amber);border-style:dashed}
+.crate.glitched small{color:var(--amber)}
+.crate.kept{color:var(--fg-dim);border-style:dotted}
+.crate.lost{color:var(--red);border-color:var(--red);text-decoration:line-through}
+.crate.lost small{color:var(--red);text-decoration:none}
+.crate[disabled]{cursor:not-allowed;opacity:.6}
+.crate:hover,.crate:focus-visible{outline:1px solid var(--fg);outline-offset:1px}
+.crate-tile{display:grid;gap:.15rem}
+.crate-tile .wh{font:inherit;font-size:.62rem;letter-spacing:.14em;text-transform:uppercase;background:none;border:1px dotted var(--fg-faint);color:var(--fg-dim);cursor:pointer;padding:.1rem .3rem;text-shadow:none}
+.crate-tile .wh.stored{color:var(--amber);border-color:var(--amber)}
+.crate-tile .wh.pickup{color:var(--cyan);border-color:var(--cyan)}
+.crate-tile .wh:hover{background:var(--fg-dim);color:var(--bg)}
+.status.split{color:var(--amber);border-style:double}
+.boxes .loss{color:var(--red)}.boxes .glitch{color:var(--amber)}
+/* footer */
+.foot{display:flex;flex-wrap:wrap;justify-content:space-between;gap:.4rem 1.5rem;font-size:.78rem;color:var(--fg-dim);letter-spacing:.1em;text-transform:uppercase;border-top:1px solid var(--fg-dim);padding-top:.5rem}
+.cursor{display:inline-block;width:.6em;height:1em;background:var(--fg);vertical-align:-.15em;margin-left:.25rem;animation:blink 1.1s steps(1) infinite}
+@keyframes blink{50%{opacity:0}}
+@media (prefers-reduced-motion:reduce){.cursor{animation:none}}
+@media (max-width:640px){.rail h1{font-size:1.9rem}.tile .val{font-size:2.1rem}.plans .plan:nth-child(odd){border-right:0}}
+</style>
+
+<div class="screen">
+  <header class="rail" id="rail">
+    <h1>RIPAE <small>LEDGER TERMINAL · NISC CARGO</small></h1>
+    <div class="meta">
+      <span>CREW MEMBER: <b>LORD GIG</b></span>
+      <span>STARDATE <b>2026-11-08</b></span>
+      <nav class="views" aria-label="Screens"><button class="cmd on" type="button" data-go="ledger">Ledger</button><button class="cmd" type="button" data-go="leaderboard">Leaderboard</button></nav>
+      <button class="cmd" type="button">Log out</button>
+    </div>
+  </header>
+
+  <main id="ledger" class="view">
+
+  <section class="totals rs" aria-label="Totals">
+    <div class="tile"><div class="lbl">Committed · afloat</div><div class="val">2,564,160<small>aUEC</small></div></div>
+    <div class="tile"><div class="lbl">Realised · sold</div><div class="val">3,082,410<small>aUEC</small></div></div>
+    <div class="tile sub"><div class="lbl">Open voyages · loads</div><div class="val">3 <small>· 5 loads · 288 SCU</small></div></div>
+  </section>
+
+  <section class="panel rs">
+    <header><h2>Open Cargo</h2><span class="hint">Bought, not yet sold, grouped by voyage. Oldest first. Stop № is the order you mean to sell. Loads move between voyages with Merge and Detach.</span></header>
+    <div class="tbl"><table class="cards">
+      <thead><tr><th>Voyage / commodity</th><th class="num">SCU</th><th>Boxes</th><th>Bought at</th><th>Status</th><th>Stop · bound for</th><th>Where now</th><th class="num">Cost</th><th>By</th><th>Cmd</th></tr></thead>
+      <tbody>
+        <!-- Voyage 1 -->
+        <tr class="voyage" id="v7"><td colspan="10">
+          <span class="vmeta"><span><b>Voyage 7</b> · 11-07</span><span>Ship <b>—</b></span><span>Loads <b>1</b></span><span>Stops <b>1</b></span><span>Logged by <b class="who">GIG</b></span>
+          <span class="actions"><button class="cmd" type="button">Edit</button><button class="cmd add-load-v" type="button" title="Buy another commodity into this voyage">Add load</button><button class="cmd merge-into" type="button">Merge into…</button><button class="cmd danger del-voyage" type="button">Del</button></span></span>
+        </td></tr>
+        <tr class="line stored">
+          <td>LARANITE</td><td class="num">96</td><td class="boxes"><b>3</b>×32</td><td class="where" title="ArcCorp Mining Area 141">ArcCorp 141</td>
+          <td><span class="status stored">Stored</span></td><td><span class="stop">1</span>Lorville CBD</td><td class="where">at Everus Harbor</td>
+          <td class="num">268,800</td><td class="who">GIG</td>
+          <td><span class="actions"><button class="cmd" type="button">Edit</button><button class="cmd close-load" type="button" data-commodity="LARANITE" data-scu="96" data-cost="268800" data-from="ArcCorp 141" data-dest="Lorville CBD">Close</button><button class="cmd crates" type="button">Crates</button><button class="cmd detach" type="button" title="Move this load to a voyage of its own">Detach</button></span></td>
+        </tr>
+        <!-- Voyage 2 -->
+        <tr class="voyage" id="v8"><td colspan="10">
+          <span class="vmeta"><span><b>Voyage 8</b> · 11-08</span><span>Ship <b>Hull C</b></span><span>Loads <b>3</b></span><span>Stops <b>2</b></span><span>Logged by <b class="who">JT</b></span>
+          <span class="actions"><button class="cmd" type="button">Edit</button><button class="cmd add-load-v" type="button" title="Buy another commodity into this voyage">Add load</button><button class="cmd merge-into" type="button">Merge into…</button><button class="cmd danger del-voyage" type="button">Del</button></span></span>
+        </td></tr>
+        <tr class="line">
+          <td>QUANTAINIUM</td><td class="num">32</td><td class="boxes"><b>1</b>×32</td><td class="where" title="Shubin Mining Facility SCD-1">Shubin SCD-1</td>
+          <td><span class="status transit">In transit</span></td><td><span class="stop">1</span>Area18 TDD</td><td class="where">aboard JT's Hull C</td>
+          <td class="num">976,800</td><td class="who">JT</td>
+          <td><span class="actions"><button class="cmd" type="button">Edit</button><button class="cmd close-load" type="button">Close</button><button class="cmd crates" type="button">Crates</button><button class="cmd detach" type="button" title="Move this load to a voyage of its own">Detach</button></span></td>
+        </tr>
+        <tr class="line">
+          <td>AGRICIUM</td><td class="num">64</td><td class="boxes"><b>2</b>×32</td><td class="where" title="Shubin Mining Facility SCD-1">Shubin SCD-1</td>
+          <td><span class="status transit">In transit</span></td><td><span class="stop">2</span>Lorville CBD</td><td class="where">aboard JT's Hull C</td>
+          <td class="num">1,612,800</td><td class="who">JT</td>
+          <td><span class="actions"><button class="cmd" type="button">Edit</button><button class="cmd close-load" type="button">Close</button><button class="cmd crates" type="button">Crates</button><button class="cmd detach" type="button" title="Move this load to a voyage of its own">Detach</button></span></td>
+        </tr>
+        <tr class="line">
+          <td>ALUMINUM</td><td class="num">48</td><td class="boxes"><b>1</b>×32 <b>2</b>×8</td><td class="where" title="Shubin Mining Facility SCD-1">Shubin SCD-1</td>
+          <td><span class="status transit">In transit</span></td><td><span class="stop">1</span>Area18 TDD</td><td class="where">aboard JT's Hull C</td>
+          <td class="num">64,320</td><td class="who">JT</td>
+          <td><span class="actions"><button class="cmd" type="button">Edit</button><button class="cmd close-load" type="button">Close</button><button class="cmd crates" type="button">Crates</button><button class="cmd detach" type="button" title="Move this load to a voyage of its own">Detach</button></span></td>
+        </tr>
+        <!-- Voyage 3 -->
+        <tr class="voyage" id="v9"><td colspan="10">
+          <span class="vmeta"><span><b>Voyage 9</b> · 11-08</span><span>Ship <b>—</b></span><span>Loads <b>1</b></span><span>Stops <b>1</b></span><span>Logged by <b class="who">GIG</b></span>
+          <span class="actions"><button class="cmd" type="button">Edit</button><button class="cmd add-load-v" type="button" title="Buy another commodity into this voyage">Add load</button><button class="cmd merge-into" type="button">Merge into…</button><button class="cmd danger del-voyage" type="button">Del</button></span></span>
+        </td></tr>
+        <tr class="line pickup">
+          <td>TITANIUM</td><td class="num">48</td><td class="boxes"><b>6</b>×8</td><td class="where" title="Shubin Mining Facility SCD-1">Shubin SCD-1</td>
+          <td><span class="status pickup">Awaiting pickup</span></td><td><span class="stop">1</span>Area18 TDD</td><td class="where">at Shubin SCD-1 · freight</td>
+          <td class="num">364,800</td><td class="who">GIG</td>
+          <td><span class="actions"><button class="cmd" type="button">Edit</button><button class="cmd close-load" type="button">Close</button><button class="cmd crates" type="button">Crates</button><button class="cmd detach" type="button" title="Move this load to a voyage of its own">Detach</button></span></td>
+        </tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <section class="panel rs">
+    <header><h2>Stowage Plan</h2><span class="hint">Live, from Open Cargo. Last stop loads first, deepest in the hold. Unassigned voyages bound the same way are offered as one.</span></header>
+    <div class="plans" id="plans"></div>
+  </section>
+
+  <section class="panel collapsed rs" id="newrun">
+    <header><h2>New Run</h2><button class="cmd" type="button" id="newrun-toggle" aria-expanded="false" aria-controls="newrun-body">New run</button></header>
+    <div class="body" id="newrun-body">
+    <form class="run" onsubmit="event.preventDefault()">
+      <div class="ras sub-h"><span>Voyage</span><span>Ship and date apply to every load below</span></div>
+      <div class="ras fields">
+        <label>Bought on<input id="bought_at" type="date" value="2026-11-08"></label>
+        <label>Ship<input id="ship" type="text" value="Hull C"></label>
+        <label>Status<select id="status"><option>Awaiting pickup</option><option selected>In transit</option><option>Stored</option></select></label>
+        <label>Stored at<input id="stored_at" type="text" placeholder="—"></label>
+      </div>
+      <div class="ras sub-h"><span>Cargo loads</span><span>One per commodity. Boxes as count×SCU, comma-separated: 2×32, 4×8</span></div>
+      <div class="cargo-lines" id="loads"></div>
+      <template id="load-tpl">
+        <div class="ras cargo-line"><span class="ln">1</span><div class="fields">
+          <label>Commodity<input name="commodity" type="text" placeholder="LARANITE"></label>
+          <label>Boxes<input name="boxes" type="text" placeholder="2×32, 4×8"><span class="calc boxes-calc">= —</span></label>
+          <label>SCU<input name="scu" type="number" placeholder="0"></label>
+          <label>Price as<select name="mode" class="mode"><option value="scu" selected>Per SCU</option><option value="lot">Per lot</option></select></label>
+          <label class="price-scu">Buy price / SCU<input name="price_scu" type="number" placeholder="0.00"><span class="calc">lot = —</span></label>
+          <label class="price-lot" hidden>Paid for the lot<input name="price_lot" type="number" placeholder="0"><span class="calc">per SCU = —</span></label>
+          <label>Buy terminal<input name="terminal" type="text" value="Shubin Mining Facility SCD-1"></label>
+          <label>Stop №<input name="stop" type="number" value="1" min="1"></label>
+          <label>Bound for<input name="dest" type="text" placeholder="undecided"></label>
+          <span class="line-cmd"><button class="cmd danger rm" type="button">Remove</button></span>
+        </div></div>
+      </template>
+      <div class="ras"><button class="cmd" type="button" id="add-load">+ Add commodity</button></div>
+      <div class="ras formfoot">
+        <span class="actions"><button class="cmd boxed" type="submit">Log run</button><button class="cmd" type="button" id="newrun-cancel">Cancel</button></span>
+        <span class="note">Terminal and ship default to the crew's last delivery point and last hull.</span>
+      </div>
+    </form>
+    </div>
+  </section>
+
+  <section class="panel rs">
+    <header><h2>Ledger</h2><span class="hint">Sold loads, newest first. Route is buy terminal → sell terminal. aUEC throughout.</span></header>
+    <div class="tbl"><table class="cards">
+      <thead><tr><th>Commodity</th><th class="num">SCU sold</th><th>Route</th><th>Sold</th><th class="num">Sell / SCU</th><th class="num">Cost</th><th class="num">Profit</th><th class="num">Margin</th><th>By</th></tr></thead>
+      <tbody>
+        <tr><td>TITANIUM</td><td class="num">576</td><td class="route">ArcCorp 141<span class="arr">→</span>Area18 TDD</td><td>11-06</td><td class="num">8.90</td><td class="num">4,377,600</td><td class="num pos">+748,800</td><td class="num pos">+17.1%</td><td class="who">GIG</td></tr>
+        <tr><td>AGRICIUM</td><td class="num">96</td><td class="route">Shubin SCD-1<span class="arr">→</span>Lorville CBD</td><td>11-05</td><td class="num">27.40</td><td class="num">2,419,200</td><td class="num pos">+211,200</td><td class="num pos">+8.7%</td><td class="who">JT</td></tr>
+        <tr><td>MEDICAL SUPPLIES</td><td class="num">0</td><td class="route">Everus Harbor<span class="arr">→</span>Grim HEX <span class="via">(lost)</span></td><td>11-03</td><td class="num">0.00</td><td class="num">118,400</td><td class="num neg">−118,400</td><td class="num neg">−100.0%</td><td class="who">GIG</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  </main>
+
+  <main id="leaderboard" class="view" hidden>
+    <section class="panel rs">
+      <header><h2>Crew Standings</h2><span class="hint">Closed sales only. Shares credited to whoever received them.</span>
+        <span class="actions sortby"><button class="cmd on" type="button" data-sort="profit">By profit</button><button class="cmd" type="button" data-sort="runs">By runs</button><button class="cmd" type="button" data-sort="scu">By SCU</button></span></header>
+      <div class="tbl"><table id="board" class="cards">
+        <thead><tr><th>#</th><th>Crew</th><th class="num">Profit</th><th class="num">Runs</th><th class="num">Loads</th><th class="num">SCU hauled</th><th>Best route</th><th class="bar">Share of org profit</th></tr></thead>
+        <tbody>
+          <tr data-profit="1874300" data-runs="9" data-scu="1536"><td class="rank"></td><td><button class="cmd crew" type="button">Lord Gig</button> <span class="who">lordgig</span></td><td class="num pos">+1,874,300</td><td class="num">9</td><td class="num">14</td><td class="num">1,536</td><td class="route">ArcCorp 141<span class="arr">→</span>Area18 TDD</td><td class="bar"><span class="meter" data-pct="61"></span></td></tr>
+          <tr data-profit="1208110" data-runs="11" data-scu="1920"><td class="rank"></td><td><button class="cmd crew" type="button">JT</button> <span class="who">firstofficer</span></td><td class="num pos">+1,208,110</td><td class="num">11</td><td class="num">17</td><td class="num">1,920</td><td class="route">Shubin SCD-1<span class="arr">→</span>Lorville CBD</td><td class="bar"><span class="meter" data-pct="39"></span></td></tr>
+          <tr data-profit="0" data-runs="0" data-scu="0" class="dim"><td class="rank"></td><td><button class="cmd crew" type="button">Crew-03</button> <span class="who">example · joins at 0.3</span></td><td class="num">0</td><td class="num">0</td><td class="num">0</td><td class="num">0</td><td class="who">—</td><td class="bar"><span class="meter" data-pct="0"></span></td></tr>
+        </tbody>
+      </table></div>
+    </section>
+    <section class="totals rs" aria-label="Org totals">
+      <div class="tile"><div class="lbl">Org realised</div><div class="val">3,082,410<small>aUEC</small></div></div>
+      <div class="tile sub"><div class="lbl">Closed runs</div><div class="val">20</div></div>
+      <div class="tile sub"><div class="lbl">SCU hauled</div><div class="val">3,456</div></div>
+      <div class="tile sub"><div class="lbl">Shares paid out</div><div class="val">412,600<small>aUEC</small></div></div>
+    </section>
+    <section class="panel rs">
+      <header><h2>Recent Shares</h2><span class="hint">Profit split on close, by percentage or flat fee.</span></header>
+      <div class="tbl"><table class="cards">
+        <thead><tr><th>Sold</th><th>Load</th><th>From</th><th>To</th><th>Terms</th><th class="num">Paid</th></tr></thead>
+        <tbody>
+          <tr><td>11-06</td><td>TITANIUM · 576 SCU</td><td class="who">GIG</td><td>JT</td><td>25% of profit</td><td class="num">187,200</td></tr>
+          <tr><td>11-05</td><td>AGRICIUM · 96 SCU</td><td class="who">JT</td><td>GIG</td><td>flat · escort fee</td><td class="num">50,000</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <span>Interface ready for inquiry<span class="cursor"></span></span>
+    <span class="actions"><button class="cmd" type="button" id="replay-splash">Close</button><a href="#changelog">v0.1.2 · what's new</a></span>
+  </footer>
+</div>
+
+<div id="splash" class="overlay" aria-label="Splash">
+  <div class="splash-in">
+    <pre class="ascii ras" aria-hidden="true">██████╗ ██╗██████╗  █████╗ ███████╗
+██╔══██╗██║██╔══██╗██╔══██╗██╔════╝
+██████╔╝██║██████╔╝███████║█████╗  
+██╔══██╗██║██╔═══╝ ██╔══██║██╔══╝  
+██║  ██║██║██║     ██║  ██║███████╗
+╚═╝  ╚═╝╚═╝╚═╝     ╚═╝  ╚═╝╚══════╝</pre>
+    <p class="ras tag">LEDGER TERMINAL · NISC CARGO</p>
+    <pre class="ras boot" id="boot"></pre>
+    <form class="ras gate" id="gate" onsubmit="event.preventDefault()">
+      <p class="tag gate-line">Speak, friend, and enter<span class="cursor"></span></p>
+      <div class="fields">
+        <label>Handle<input id="g-handle" type="text" autocomplete="username" placeholder="lordgig"></label>
+        <label>Password<input id="g-pass" type="password" autocomplete="current-password" placeholder="••••••••"></label>
+      </div>
+      <p class="gate-err neg" id="g-err" hidden>The door does not open. Check the handle and password.</p>
+      <p class="any"><button class="cmd boxed" type="submit" id="g-enter">Enter</button></p>
+    </form>
+    <p class="ras any" id="g-known" hidden>Welcome back, <b id="g-who">LORD GIG</b> · Press any key<span class="cursor"></span> · <button class="cmd" type="button" id="g-logout">Log out</button></p>
+  </div>
+</div>
+
+<div id="blackout" aria-hidden="true"></div>
+
+<div id="sale" class="overlay" hidden aria-label="Sale recorded">
+  <div class="splash-in">
+    <pre class="ascii ras" aria-hidden="true">███████╗ █████╗ ██╗     ███████╗
+██╔════╝██╔══██╗██║     ██╔════╝
+███████╗███████║██║     █████╗  
+╚════██║██╔══██║██║     ██╔══╝  
+███████║██║  ██║███████╗███████╗
+╚══════╝╚═╝  ╚═╝╚══════╝╚══════╝</pre>
+    <p class="ras tag">CONGRATULATIONS ON YOUR SALE, <b id="sale-who">LORD GIG</b></p>
+    <div class="ras sale-fig"><span class="lbl">Profit</span><span class="val" id="sale-profit">+0</span><small>aUEC</small></div>
+    <div class="ras sale-line" id="sale-route"></div>
+    <div class="ras sale-shares" id="sale-shares"></div>
+    <p class="ras any"><button class="cmd boxed" type="button" id="sale-done">Continue</button></p>
+  </div>
+</div>
+
+<div id="verdict" class="overlay" hidden aria-label="Verdict">
+  <div class="splash-in">
+    <pre class="ascii ras" id="v-win" aria-hidden="true">██╗  ██╗ ██████╗  ██████╗ ██████╗  █████╗ ██╗   ██╗
+██║  ██║██╔═══██╗██╔═══██╗██╔══██╗██╔══██╗╚██╗ ██╔╝
+███████║██║   ██║██║   ██║██████╔╝███████║ ╚████╔╝
+██╔══██║██║   ██║██║   ██║██╔══██╗██╔══██║  ╚██╔╝
+██║  ██║╚██████╔╝╚██████╔╝██║  ██║██║  ██║   ██║
+╚═╝  ╚═╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝</pre>
+    <pre class="ascii ras womp" id="v-lose" aria-hidden="true">██╗    ██╗ ██████╗ ███╗   ███╗██████╗
+██║    ██║██╔═══██╗████╗ ████║██╔══██╗
+██║ █╗ ██║██║   ██║██╔████╔██║██████╔╝
+██║███╗██║██║   ██║██║╚██╔╝██║██╔═══╝
+╚███╔███╔╝╚██████╔╝██║ ╚═╝ ██║██║
+ ╚══╝╚══╝  ╚═════╝ ╚═╝     ╚═╝╚═╝
+
+██╗    ██╗ ██████╗ ███╗   ███╗██████╗
+██║    ██║██╔═══██╗████╗ ████║██╔══██╗
+██║ █╗ ██║██║   ██║██╔████╔██║██████╔╝
+██║███╗██║██║   ██║██║╚██╔╝██║██╔═══╝
+╚███╔███╔╝╚██████╔╝██║ ╚═╝ ██║██║
+ ╚══╝╚══╝  ╚═════╝ ╚═╝     ╚═╝╚═╝</pre>
+    <p class="ras tag" id="v-line"></p>
+    <section class="panel record" id="v-record" hidden>
+      <header><h2 id="v-name">Service record</h2><span class="hint" id="v-handle"></span></header>
+      <dl class="stats" id="v-stats"></dl>
+    </section>
+    <p class="ras any"><button class="cmd boxed" type="button" id="v-done">Continue</button></p>
+  </div>
+</div>
+
+<div id="confirm" class="overlay" hidden aria-label="Confirm deletion" role="alertdialog">
+  <div class="splash-in">
+    <pre class="ascii ras womp" aria-hidden="true">██████╗ ███████╗██╗     ███████╗████████╗███████╗
+██╔══██╗██╔════╝██║     ██╔════╝╚══██╔══╝██╔════╝
+██║  ██║█████╗  ██║     █████╗     ██║   █████╗  
+██║  ██║██╔══╝  ██║     ██╔══╝     ██║   ██╔══╝  
+██████╔╝███████╗███████╗███████╗   ██║   ███████╗
+╚═════╝ ╚══════╝╚══════╝╚══════╝   ╚═╝   ╚══════╝</pre>
+    <p class="ras tag" id="cf-title"></p>
+    <div class="ras sale-shares" id="cf-detail"></div>
+    <p class="ras tag neg">This cannot be undone. The loads and their crates go with it.</p>
+    <p class="ras any"><span class="actions"><button class="cmd boxed danger" type="button" id="cf-yes">Delete voyage</button><button class="cmd boxed" type="button" id="cf-no">Keep it</button></span></p>
+  </div>
+</div>
+
+<template id="close-tpl">
+  <tr class="closing"><td colspan="10">
+    <form class="run close-form" onsubmit="event.preventDefault()">
+      <div class="ras sub-h"><span>Close load · <b class="c-name"></b> · <span class="c-scu"></span> SCU bought at <span class="c-from"></span></span><span>Sale leg</span></div>
+      <div class="ras fields">
+        <label>Sold on<input name="sold_at" type="date" value="2026-11-08"></label>
+        <label>Sell terminal<input name="sell_terminal" type="text"></label>
+        <label>SCU sold · from crates<input name="scu_sold" type="number" readonly></label>
+        <label>Price as<select name="smode" class="mode"><option value="scu" selected>Per SCU</option><option value="lot">Per lot</option></select></label>
+        <label class="price-scu">Sell price / SCU<input name="sell_scu" type="number" placeholder="0.00"><span class="calc">revenue = —</span></label>
+        <label class="price-lot" hidden>Received for the lot<input name="sell_lot" type="number" placeholder="0"><span class="calc">per SCU = —</span></label>
+      </div>
+      <div class="ras sub-h"><span>Crates sold · <button class="cmd sel-all" type="button">All sound crates</button> <button class="cmd sel-none" type="button">None</button></span><span>Tap to toggle sold / kept. Kept crates stay open on the voyage. Glitched crates must be picked by hand; lost ones can't be sold.</span></div>
+      <div class="ras crate-grid sell-crates"></div>
+      <div class="ras sub-h"><span>Split profit</span><span>Percent of profit, or a flat fee. Remainder stays with the seller.</span></div>
+      <div class="shares" id="shares"></div>
+      <template class="share-tpl">
+        <div class="ras share fields">
+          <label>Crew<select name="crew"><option>JT</option><option>LORD GIG</option><option>CREW-03</option></select></label>
+          <label>Terms<select name="kind"><option value="pct" selected>% of profit</option><option value="flat">Flat fee</option></select></label>
+          <label>Amount<input name="amt" type="number" value="25" min="0"></label>
+          <label>For<input name="why" type="text" placeholder="escort, loan, half the hull"></label>
+          <span class="line-cmd"><button class="cmd danger rm-share" type="button">Remove</button></span>
+        </div>
+      </template>
+      <div class="ras"><button class="cmd add-share" type="button">+ Add share</button></div>
+      <div class="ras formfoot">
+        <span class="actions"><button class="cmd boxed record" type="submit">Record sale</button><button class="cmd cancel-close" type="button">Cancel</button></span>
+        <span class="note preview">profit = — · seller keeps —</span>
+      </div>
+    </form>
+  </td></tr>
+</template>
+
+<script>
+(function(){
+  var reduce=window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  // slow raster: paint (or unpaint) a list of lines one tick at a time, uneven tick, no easing
+  window.raster=raster;
+  function raster(lines,on,done){
+    if(reduce){lines.forEach(function(l){l.classList.toggle('lit',on);});if(done)done();return [];}
+    var t=0,timers=[];
+    var seq=on?lines:lines.slice().reverse();
+    seq.forEach(function(l,i){
+      t+=(i%3===2)?210:120;
+      timers.push(setTimeout(function(){
+        l.classList.add('flash'); l.classList.toggle('lit',on);
+        if(!on){l.classList.add('lit');} /* keep visible while flashing, then drop */
+        timers.push(setTimeout(function(){l.classList.remove('flash'); if(!on)l.classList.remove('lit');},90));
+      },t));
+    });
+    if(done)timers.push(setTimeout(done,t+120));
+    return timers;
+  }
+
+  var panel=document.getElementById('newrun');
+  var toggle=document.getElementById('newrun-toggle');
+  var cancel=document.getElementById('newrun-cancel');
+  var loads=document.getElementById('loads');
+  var tpl=document.getElementById('load-tpl');
+  var timers=[];
+  function clear(){timers.forEach(clearTimeout);timers=[];}
+  function allLines(){return Array.prototype.slice.call(panel.querySelectorAll('.ras'));}
+
+  function fmt(n){return n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});}
+  // "2×32, 4×8" or "2x32 4x8" -> [{n:2,size:32},{n:4,size:8}]
+  function parseBoxes(str){
+    var out=[]; str.split(/[,;\s]+/).forEach(function(tok){
+      var m=tok.match(/^(\d+)\s*[x×*]\s*(\d+)$/i); if(m)out.push({n:+m[1],size:+m[2]});
+    }); return out;
+  }
+  function wireLoad(line){
+    var mode=line.querySelector('.mode'), scuL=line.querySelector('.price-scu'), lotL=line.querySelector('.price-lot');
+    var scu=line.querySelector('[name=scu]'), p=line.querySelector('[name=price_scu]'), l=line.querySelector('[name=price_lot]');
+    var boxes=line.querySelector('[name=boxes]'), bcalc=line.querySelector('.boxes-calc');
+    var scuTouched=false;
+    function recalcBoxes(){
+      var bs=parseBoxes(boxes.value); var tot=0,cnt=0; bs.forEach(function(b){tot+=b.n*b.size;cnt+=b.n;});
+      if(!bs.length){bcalc.textContent='= —';bcalc.classList.remove('bad');}
+      else{
+        if(!scuTouched||!scu.value)scu.value=tot;
+        var q=parseFloat(scu.value)||0;
+        bcalc.innerHTML='= <b>'+tot+'</b> SCU · '+cnt+' box'+(cnt===1?'':'es')+(q&&q!==tot?' · SCU field says '+q:'');
+        bcalc.classList.toggle('bad',!!q&&q!==tot);
+      }
+    }
+    function recalcPrice(){
+      var q=parseFloat(scu.value)||0;
+      scuL.hidden=mode.value!=='scu'; lotL.hidden=mode.value==='scu';
+      if(mode.value==='scu'){var per=parseFloat(p.value)||0; scuL.querySelector('.calc').innerHTML=q&&per?'lot = <b>'+fmt(per*q)+'</b> · '+q+' SCU':'lot = —';}
+      else{var tot=parseFloat(l.value)||0; lotL.querySelector('.calc').innerHTML=q&&tot?'per SCU = <b>'+fmt(tot/q)+'</b> · '+q+' SCU':'per SCU = —';}
+    }
+    scu.addEventListener('input',function(){scuTouched=true;recalcBoxes();recalcPrice();});
+    boxes.addEventListener('input',function(){recalcBoxes();recalcPrice();});
+    [mode,p,l].forEach(function(el){el.addEventListener('input',recalcPrice);el.addEventListener('change',recalcPrice);});
+    line.querySelector('.rm').addEventListener('click',function(){
+      if(loads.children.length===1)return; // keep at least one load
+      raster([line],false,function(){line.remove();renumber();});
+    });
+    recalcBoxes();recalcPrice();
+  }
+  function renumber(){Array.prototype.forEach.call(loads.children,function(c,i){c.querySelector('.ln').textContent=i+1; c.querySelector('.rm').parentNode.hidden=(loads.children.length===1);});}
+  function addLoad(animate){
+    var line=tpl.content.firstElementChild.cloneNode(true);
+    loads.appendChild(line); wireLoad(line); renumber();
+    if(animate)raster([line],true); else line.classList.add('lit');
+    return line;
+  }
+  function resetLoads(){loads.innerHTML='';addLoad(false);loads.firstElementChild.classList.remove('lit');}
+
+  function open(){
+    clear(); resetLoads();
+    panel.classList.remove('collapsed');
+    toggle.setAttribute('aria-expanded','true'); toggle.textContent='Close';
+    var lines=allLines(); lines.forEach(function(l){l.classList.remove('lit','flash');});
+    timers=raster(lines,true,function(){var f=panel.querySelector('input');if(f)f.focus({preventScroll:true});});
+  }
+  function close(){
+    clear();
+    toggle.setAttribute('aria-expanded','false'); toggle.textContent='New run';
+    timers=raster(allLines(),false,function(){panel.classList.add('collapsed');});
+  }
+  toggle.addEventListener('click',function(){panel.classList.contains('collapsed')?open():close();});
+  cancel.addEventListener('click',close);
+  document.getElementById('add-load').addEventListener('click',function(){addLoad(true);});
+  resetLoads();
+})();
+</script>
+
+<script>
+(function(){
+  var reduce=window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var rasterFn=window.raster;
+  function fmt0(n){return Math.round(n).toLocaleString('en-US');}
+  function fmt2(n){return n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});}
+
+  /* ---- screens: flicker out, swap, flicker in ---- */
+  var views={ledger:document.getElementById('ledger'),leaderboard:document.getElementById('leaderboard')};
+  var current='ledger';
+  function secs(v){return Array.prototype.slice.call(v.querySelectorAll('.rs'));}
+  function show(name,instant){
+    if(!views[name]||name===current&&!instant)return;
+    document.querySelectorAll('[data-go]').forEach(function(b){b.classList.toggle('on',b.dataset.go===name);});
+    var from=views[current], to=views[name];
+    function paintIn(){
+      from.hidden=true; to.hidden=false; current=name;
+      secs(to).forEach(function(s){s.classList.remove('lit');});
+      rasterFn(secs(to),true);
+      if(name==='leaderboard')sortBoard(currentSort);
+    }
+    if(instant){secs(to).forEach(function(s){s.classList.add('lit');});from.hidden=true;to.hidden=false;current=name;return;}
+    rasterFn(secs(from),false,paintIn);
+  }
+  document.querySelectorAll('[data-go]').forEach(function(b){b.addEventListener('click',function(){show(b.dataset.go);});});
+  window.addEventListener('hashchange',function(){var h=location.hash.replace('#','');if(views[h])show(h);});
+  secs(views.ledger).forEach(function(s){s.classList.add('lit');});
+
+  /* ---- leaderboard sort + meters ---- */
+  var currentSort='profit';
+  function sortBoard(key){
+    currentSort=key;
+    document.querySelectorAll('[data-sort]').forEach(function(b){b.classList.toggle('on',b.dataset.sort===key);});
+    var tb=document.querySelector('#board tbody'); var rows=Array.prototype.slice.call(tb.rows);
+    rows.sort(function(a,b){return (+b.dataset[key])-(+a.dataset[key]);});
+    rows.forEach(function(r,i){tb.appendChild(r); r.querySelector('.rank').textContent=i+1; var m=r.querySelector('.meter'); m.style.setProperty('--p',m.dataset.pct);});
+  }
+  document.querySelectorAll('[data-sort]').forEach(function(b){b.addEventListener('click',function(){sortBoard(b.dataset.sort);});});
+  sortBoard('profit');
+
+  /* ---- splash ---- */
+  var splash=document.getElementById('splash'), boot=document.getElementById('boot');
+  var bootBase=['RIPAE INTERFACE v0.1.2 ........ ONLINE','LEDGER STORE /data/ripae.db .... MOUNTED','CREW ROSTER .................... 2 ABOARD','OPEN CARGO ..................... 5 LOADS · 288 SCU','PRICE FEED ..................... MANUAL (UEX IMPORT 0.4)',''];
+  var session=null; // the real thing reads the tower-sessions cookie; the mock remembers the handle in memory
+  var bootLines=bootBase;
+  var splashTimers=[];
+  function runSplash(){
+    splashTimers.forEach(clearTimeout);splashTimers=[];
+    splash.hidden=false; boot.textContent='';
+    var gate=document.getElementById('gate'), known=document.getElementById('g-known');
+    gate.hidden=!!session; known.hidden=!session; if(session)document.getElementById('g-who').textContent=session;
+    bootLines=bootBase.concat([session?'SESSION VALID · '+session:'IDENTIFY TO PROCEED']);
+    var parts=Array.prototype.slice.call(splash.querySelectorAll('.ras')).filter(function(p){return !p.hidden;}); parts.forEach(function(p){p.classList.remove('lit');});
+    rasterFn(parts.slice(0,2),true,function(){
+      boot.classList.add('lit');
+      var t=0;
+      bootLines.forEach(function(l,i){t+=reduce?0:(i===bootLines.length-1?420:160);splashTimers.push(setTimeout(function(){boot.textContent+=l+'\n';},t));});
+      splashTimers.push(setTimeout(function(){window.raster([parts[3]],true,function(){var h=document.getElementById('g-handle');if(h&&!session)h.focus({preventScroll:true});});armDismiss();},t+150));
+    });
+  }
+  var armed=false;
+  function armDismiss(){armed=true;}
+  // [LOG OUT] in the rail brings the gate back
+  document.querySelector('#rail .meta > .cmd:last-child').addEventListener('click',function(){session=null;runSplash();});
+  function dismissSplash(){
+    if(!armed)return; armed=false;
+    var parts=Array.prototype.slice.call(splash.querySelectorAll('.ras')).filter(function(p){return !p.hidden;});
+    rasterFn(parts,false,function(){splash.hidden=true;});
+  }
+  // with a session, any key or click lets you through; without one, only the gate does
+  ['keydown','click','touchstart'].forEach(function(ev){splash.addEventListener(ev,function(e){if(session&&!e.target.closest('.cmd'))dismissSplash();});});
+  document.addEventListener('keydown',function(){if(!splash.hidden&&session)dismissSplash();});
+  document.getElementById('g-logout').addEventListener('click',function(){session=null;runSplash();});
+  document.getElementById('gate').addEventListener('submit',function(){
+    var h=document.getElementById('g-handle').value.trim(), pw=document.getElementById('g-pass').value, err=document.getElementById('g-err');
+    if(!h||!pw){err.hidden=false;return;} // the real thing POSTs /login; the mock accepts any pair
+    err.hidden=true;
+    var names={lordgig:'LORD GIG',firstofficer:'JT'}; var who=names[h.toLowerCase()]||h.toUpperCase();
+    session=who; document.querySelector('#rail .meta b').textContent=who; document.getElementById('sale-who').textContent=who;
+    document.getElementById('g-pass').value='';
+    dismissSplash();
+  });
+  document.getElementById('replay-splash').addEventListener('click',function(e){e.stopPropagation();runSplash();});
+  runSplash();
+
+  /* ---- close a load: inline form, shares, then the sale banner ---- */
+  var closeTpl=document.getElementById('close-tpl');
+  document.querySelectorAll('.close-load').forEach(function(btn){
+    btn.addEventListener('click',function(){
+      var row=btn.closest('tr'); if(row.nextElementSibling&&row.nextElementSibling.classList.contains('closing'))return;
+      var txt=function(i){return row.cells[i].textContent.trim();};
+      var d={commodity:txt(0).replace(/^└\s*/,''),scu:txt(1),cost:txt(7).replace(/,/g,''),from:txt(3),dest:txt(5).replace(/^\d+\s*/,'')};
+      var tr=closeTpl.content.firstElementChild.cloneNode(true);
+      row.parentNode.insertBefore(tr,row.nextSibling);
+      var f=tr.querySelector('form');
+      f.querySelector('.c-name').textContent=d.commodity; f.querySelector('.c-scu').textContent=d.scu; f.querySelector('.c-from').textContent=d.from;
+      f.querySelector('[name=sell_terminal]').value=d.dest;
+      var cost=+d.cost;
+      // crates: reuse the manifest if it's been opened, else derive from the Boxes cell
+      var boxesCell=row.querySelector('.boxes');
+      if(!row._crates){var sizes=[];boxesCell.querySelectorAll('b').forEach(function(b){var n=+b.textContent,sz=+b.nextSibling.textContent.replace(/[^0-9]/g,'');for(var i=0;i<n;i++)sizes.push(sz);});row._crates=sizes.map(function(sz){return {size:sz,state:'ok'};});}
+      var sellGrid=f.querySelector('.sell-crates'); var sold=row._crates.map(function(c){return c.state==='ok';});
+      var paints=[];
+      f.querySelector('.sel-all').addEventListener('click',function(){row._crates.forEach(function(c,i){sold[i]=c.state==='ok';});paints.forEach(function(p){p();});syncScu();recalc();});
+      f.querySelector('.sel-none').addEventListener('click',function(){row._crates.forEach(function(c,i){sold[i]=false;});paints.forEach(function(p){p();});syncScu();recalc();});
+      function syncScu(){var q=0;row._crates.forEach(function(c,i){if(sold[i]&&c.state!=='lost')q+=c.size;});f.querySelector('[name=scu_sold]').value=q;}
+      row._crates.forEach(function(c,i){
+        var b=document.createElement('button'); b.type='button';
+        function paint(){var st=c.state==='lost'?'lost':(sold[i]?'ok':'kept'); if(c.state==='glitched'&&!sold[i])st='glitched'; b.className='crate '+st; b.disabled=c.state==='lost'; b.innerHTML='<b>'+c.size+'</b><small>#'+(i+1)+' · '+(c.state==='lost'?'lost':(c.state==='glitched'?'glitched · ':'')+(sold[i]?'sold':'kept'))+'</small>';}
+        b.addEventListener('click',function(){sold[i]=!sold[i];paint();syncScu();recalc();});
+        paints.push(paint); paint(); sellGrid.appendChild(b);
+      });
+      syncScu();
+      var sharesBox=f.querySelector('.shares'), shareTpl=f.querySelector('.share-tpl');
+      var mode=f.querySelector('.mode'), scuL=f.querySelector('.price-scu'), lotL=f.querySelector('.price-lot');
+      function revenue(){
+        var q=parseFloat(f.querySelector('[name=scu_sold]').value)||0;
+        if(mode.value==='scu'){var per=parseFloat(f.querySelector('[name=sell_scu]').value)||0;return {q:q,rev:per*q,per:per};}
+        var tot=parseFloat(f.querySelector('[name=sell_lot]').value)||0;return {q:q,rev:tot,per:q?tot/q:0};
+      }
+      function shares(profit){
+        var out=[];
+        sharesBox.querySelectorAll('.share').forEach(function(sh){
+          var crew=sh.querySelector('[name=crew]').value, kind=sh.querySelector('[name=kind]').value, amt=parseFloat(sh.querySelector('[name=amt]').value)||0, why=sh.querySelector('[name=why]').value;
+          var paid=kind==='pct'?Math.max(profit,0)*amt/100:amt;
+          out.push({crew:crew,paid:paid,terms:kind==='pct'?amt+'% of profit':'flat',why:why});
+        });
+        return out;
+      }
+      function recalc(){
+        scuL.hidden=mode.value!=='scu'; lotL.hidden=mode.value==='scu';
+        var r=revenue();
+        if(mode.value==='scu')scuL.querySelector('.calc').innerHTML=r.rev?'revenue = <b>'+fmt0(r.rev)+'</b> · '+r.q+' SCU':'revenue = —';
+        else lotL.querySelector('.calc').innerHTML=r.rev?'per SCU = <b>'+fmt2(r.per)+'</b> · '+r.q+' SCU':'per SCU = —';
+        var costSold=cost*(r.q/(+d.scu)); var profit=r.rev-costSold; var sh=shares(profit); var paid=sh.reduce(function(a,b){return a+b.paid;},0);
+        var pv=f.querySelector('.preview');
+        pv.innerHTML=r.rev?('profit = <b class="'+(profit<0?'neg':'pos')+'">'+(profit<0?'−':'+')+fmt0(Math.abs(profit))+'</b> · shares '+fmt0(paid)+' · seller keeps <b>'+fmt0(profit-paid)+'</b>'):'profit = — · seller keeps —';
+      }
+      function addShare(animate){
+        var sh=shareTpl.content.firstElementChild.cloneNode(true); sharesBox.appendChild(sh);
+        sh.querySelectorAll('input,select').forEach(function(el){el.addEventListener('input',recalc);el.addEventListener('change',recalc);});
+        sh.querySelector('.rm-share').addEventListener('click',function(){rasterFn([sh],false,function(){sh.remove();recalc();});});
+        if(animate)rasterFn([sh],true);else sh.classList.add('lit');
+        recalc();
+      }
+      f.querySelector('.add-share').addEventListener('click',function(){addShare(true);});
+      f.querySelectorAll('input,select').forEach(function(el){el.addEventListener('input',recalc);el.addEventListener('change',recalc);});
+      f.querySelector('.cancel-close').addEventListener('click',function(){rasterFn(Array.prototype.slice.call(tr.querySelectorAll('.ras')),false,function(){tr.remove();});});
+      f.addEventListener('submit',function(){
+        var r=revenue(); if(!r.rev)return;
+        var profit=r.rev-cost*(r.q/(+d.scu)); var allSold=row._crates.every(function(c,i){return c.state==='lost'||sold[i];}); var sh=shares(profit); var paid=sh.reduce(function(a,b){return a+b.paid;},0);
+        saleBanner({who:'LORD GIG',commodity:d.commodity,scu:r.q,from:d.from,to:f.querySelector('[name=sell_terminal]').value,profit:profit,kept:profit-paid,shares:sh},function(){
+          tr.remove(); if(allSold)row.remove(); else { // kept crates stay open
+            row._crates=row._crates.filter(function(c,i){return c.state==='lost'||!sold[i];}); var q=0,m={}; row._crates.forEach(function(c){if(c.state!=='lost'){q+=c.size;m[c.size]=(m[c.size]||0)+1;}});
+            row.cells[1].textContent=q; row.cells[7].textContent=fmt0(cost*q/(+d.scu)); boxesCell.removeAttribute('data-base'); boxesCell.innerHTML=Object.keys(m).sort(function(a,b){return b-a;}).map(function(k){return '<b>'+m[k]+'</b>×'+k;}).join(' ');
+          }
+        });
+      });
+      var parts=Array.prototype.slice.call(tr.querySelectorAll('.ras'));
+      rasterFn(parts,true,function(){
+        // one share pre-filled so the arithmetic shows; sample sell price of 3,600 / SCU
+        f.querySelector('[name=sell_scu]').value='3600'; addShare(true); recalc();
+      });
+    });
+  });
+
+  /* ---- sale banner: screen flickers to black, banner rasters in ---- */
+  var blackout=document.getElementById('blackout'), sale=document.getElementById('sale');
+  function saleBanner(o,after){
+    document.getElementById('sale-who').textContent=o.who;
+    var pe=document.getElementById('sale-profit'); pe.textContent=(o.profit<0?'−':'+')+fmt0(Math.abs(o.profit)); pe.className='val '+(o.profit<0?'neg':'pos');
+    document.getElementById('sale-route').innerHTML=o.commodity+' · '+o.scu+' SCU · '+o.from+' <span class="arr">→</span> '+o.to;
+    var box=document.getElementById('sale-shares'); box.innerHTML='';
+    o.shares.forEach(function(s){var dv=document.createElement('div');dv.innerHTML='<span>→ '+s.crew+' <span class="who">'+s.terms+(s.why?' · '+s.why:'')+'</span></span><span>'+fmt0(s.paid)+' aUEC</span>';box.appendChild(dv);});
+    var keep=document.createElement('div');keep.innerHTML='<span>'+o.who+' keeps</span><span><b>'+fmt0(o.kept)+' aUEC</b></span>';box.appendChild(keep);
+    var parts=Array.prototype.slice.call(sale.querySelectorAll('.ras')); parts.forEach(function(p){p.classList.remove('lit');});
+    blackout.classList.remove('off'); blackout.classList.add('go');
+    setTimeout(function(){
+      sale.hidden=false; if(after)after();
+      blackout.classList.remove('go'); blackout.classList.add('off');
+      rasterFn(parts,true);
+    },reduce?0:900);
+  }
+  document.getElementById('sale-done').addEventListener('click',function(){
+    var parts=Array.prototype.slice.call(sale.querySelectorAll('.ras'));
+    blackout.classList.remove('off'); blackout.classList.add('go');
+    setTimeout(function(){sale.hidden=true; blackout.classList.remove('go'); blackout.classList.add('off'); parts.forEach(function(p){p.classList.remove('lit');});},reduce?0:900);
+  });
+})();
+</script>
+
+<script>
+(function(){
+  var reduce=window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  // label every cell with its column header, so narrow screens can stack rows as cards
+  document.querySelectorAll('table.cards').forEach(function(t){
+    var hs=Array.prototype.map.call(t.tHead.rows[0].cells,function(c){return c.textContent.trim();});
+    Array.prototype.forEach.call(t.tBodies[0].rows,function(r){
+      if(r.cells.length<hs.length)return;
+      Array.prototype.forEach.call(r.cells,function(c,i){if(hs[i])c.setAttribute('data-l',hs[i]);});
+    });
+  });
+  // leaderboard verdict: rank 1 hoorays, everyone else womps
+  var v=document.getElementById('verdict'), blackout=document.getElementById('blackout');
+  var records={
+    'Lord Gig':{handle:'lordgig · aboard since 0.1.0',stats:[['Lifetime profit','+1,874,300<small>aUEC</small>'],['Runs closed','9'],['Loads sold','14'],['SCU hauled','1,536'],['Best trade','TITANIUM · +748,800',1],['Worst trade','MEDICAL SUPPLIES · −118,400',1],['Favourite commodity','LARANITE · 4 loads',1],['Favourite route','ArcCorp 141 → Area18 TDD',1],['Crates lost','2 <small>· 40 SCU</small>'],['Shares paid out','187,200<small>aUEC</small>'],['Shares received','50,000<small>aUEC</small>'],['Ships flown','Hull A · C2 Hercules',1],['First sale','2026-10-21',1],['Latest sale','2026-11-06',1]]},
+    'JT':{handle:'firstofficer · aboard since 0.1.0',stats:[['Lifetime profit','+1,208,110<small>aUEC</small>'],['Runs closed','11'],['Loads sold','17'],['SCU hauled','1,920'],['Best trade','AGRICIUM · +211,200',1],['Worst trade','ALUMINUM · −12,400',1],['Favourite commodity','AGRICIUM · 6 loads',1],['Favourite route','Shubin SCD-1 → Lorville CBD',1],['Crates lost','1 <small>· 8 SCU</small>'],['Shares paid out','50,000<small>aUEC</small>'],['Shares received','187,200<small>aUEC</small>'],['Ships flown','Hull A · Freelancer MAX',1],['First sale','2026-10-23',1],['Latest sale','2026-11-05',1]]},
+    'Crew-03':{handle:'example · no record yet',stats:[['Lifetime profit','0<small>aUEC</small>'],['Runs closed','0'],['Loads sold','0'],['SCU hauled','0'],['First sale','—',1]]}
+  };
+  var lines={win:['TOP OF THE BOARD, %s. THE ORG EATS TONIGHT.','%s HOLDS THE LINE. FIRST BY PROFIT.'],lose:['%s · NOT THIS WEEK. HAUL MORE, SELL HIGHER.','%s · THE BOARD IS UNMOVED. FLY SAFE, EARN MORE.']};
+  function flick(fn){blackout.classList.remove('off');blackout.classList.add('go');setTimeout(function(){fn();blackout.classList.remove('go');blackout.classList.add('off');},reduce?0:900);}
+  document.querySelectorAll('.crew').forEach(function(b){
+    b.addEventListener('click',function(){
+      var row=b.closest('tr'); var rank=+row.querySelector('.rank').textContent; var name=b.textContent.toUpperCase();
+      var win=rank===1; var pool=win?lines.win:lines.lose;
+      document.getElementById('v-win').hidden=!win; document.getElementById('v-lose').hidden=win;
+      document.getElementById('v-line').textContent=pool[Math.floor(Math.random()*pool.length)].replace('%s',name);
+      var parts=Array.prototype.slice.call(v.querySelectorAll('.ras')).filter(function(p){return !p.hidden;});
+      parts.forEach(function(p){p.classList.remove('lit');});
+      // banner and service record paint together, one raster pass top to bottom
+      var rec=document.getElementById('v-record'); var d=records[b.textContent.trim()]||records['Crew-03'];
+      document.getElementById('v-name').textContent='Service record · '+name; document.getElementById('v-handle').textContent=d.handle;
+      document.getElementById('v-stats').innerHTML=d.stats.map(function(s){return '<div><dt>'+s[0]+'</dt><dd'+(s[2]?' class="txt"':'')+'>'+s[1]+'</dd></div>';}).join('');
+      rec.hidden=false; rec.classList.add('ras'); rec.classList.remove('lit');
+      var done=document.getElementById('v-done').parentNode; parts=parts.filter(function(p){return p!==done;}); parts.push(rec,done);
+      flick(function(){v.hidden=false;window.raster(parts,true);});
+    });
+  });
+  document.getElementById('v-done').addEventListener('click',function(){flick(function(){v.hidden=true;});});
+})();
+</script>
+
+
+
+<script>
+(function(){
+  // crate manifest: every box is a crate. Tap cycles condition sound → glitched → lost;
+  // the small toggle beneath flips where it is (aboard ↔ stored); header commands move all at once.
+  var states=['ok','glitched','lost'], labels={ok:'sound',glitched:'glitched',lost:'lost'};
+  var whereLabel={aboard:'aboard',stored:'stored',pickup:'awaiting pickup'};
+  function parse(cell){var out=[];cell.querySelectorAll('b').forEach(function(b){var n=+b.textContent;var size=+b.nextSibling.textContent.replace(/[^0-9]/g,'');for(var i=0;i<n;i++)out.push(size);});return out;}
+  function initWhere(row){var st=row.querySelector('.status');return st.classList.contains('stored')?'stored':(st.classList.contains('pickup')?'pickup':'aboard');}
+  function ensure(row){
+    if(row._crates){row._crates.forEach(function(c){if(!c.where)c.where=initWhere(row);});return;}
+    var w=initWhere(row); row._crates=parse(row.querySelector('.boxes')).map(function(sz){return {size:sz,state:'ok',where:w};});
+  }
+  function place(row){ // derive status chip + where-now from crates
+    var live=row._crates.filter(function(c){return c.state!=='lost';}); var counts={};
+    live.forEach(function(c){counts[c.where]=(counts[c.where]||0)+1;});
+    var kinds=Object.keys(counts); var chip=row.querySelector('.status'); var whereCell=row.cells[6];
+    if(!row._station)row._station=(whereCell.textContent.match(/at (.+)/)||[,'Everus Harbor'])[1].replace(/\s*·.*$/,'').trim();
+    var vh=row.previousElementSibling; while(vh&&!vh.classList.contains('voyage'))vh=vh.previousElementSibling;
+    var vb=vh?vh.querySelectorAll('.vmeta > span > b'):null; var hull=vb?vb[1].textContent:'—'; var owner=vb?vb[4].textContent:'';
+    var ship=hull==='—'?'— no hull assigned':(owner+"'s "+hull);
+    function txt(k,n){return k==='aboard'?(n+' aboard '+ship):(k==='stored'?(n+' stored at '+row._station):(n+' awaiting pickup'));}
+    if(kinds.length===1){var k=kinds[0]; chip.className='status '+(k==='aboard'?'transit':k); chip.textContent=k==='aboard'?'In transit':(k==='stored'?'Stored':'Awaiting pickup'); whereCell.textContent=k==='aboard'?'aboard '+ship:(k==='stored'?'at '+row._station:'at pickup · freight'); row.classList.remove('stored','pickup'); if(k!=='aboard')row.classList.add(k);}
+    else if(kinds.length>1){chip.className='status split'; chip.textContent='Split'; whereCell.textContent=kinds.map(function(k){return txt(k,counts[k]);}).join(' · '); row.classList.remove('stored','pickup');}
+  }
+  document.querySelectorAll('.crates').forEach(function(btn){
+    btn.addEventListener('click',function(){
+      var row=btn.closest('tr'); var next=row.nextElementSibling;
+      if(next&&next.classList.contains('manifest')){window.raster([next],false,function(){next.remove();});return;}
+      ensure(row); var boxesCell=row.querySelector('.boxes');
+      var tr=document.createElement('tr'); tr.className='manifest ras';
+      var td=document.createElement('td'); td.colSpan=10; tr.appendChild(td);
+      var h=document.createElement('div'); h.className='crates-h'; td.appendChild(h);
+      var grid=document.createElement('div'); grid.className='crate-grid'; td.appendChild(grid);
+      var paints=[];
+      function tally(){
+        var lost=0,gl=0,lostScu=0; row._crates.forEach(function(c){if(c.state==='lost'){lost++;lostScu+=c.size;} if(c.state==='glitched')gl++;});
+        var base=boxesCell.getAttribute('data-base')||boxesCell.innerHTML; boxesCell.setAttribute('data-base',base);
+        boxesCell.innerHTML=base+(gl?' <span class="glitch">· '+gl+' glitched</span>':'')+(lost?' <span class="loss">· '+lost+' lost</span>':'');
+        h.innerHTML='<span>Crate manifest · '+row._crates.length+' crates · tap a crate to cycle sound → glitched → lost · <button class="cmd all-aboard" type="button">All aboard</button> <button class="cmd warn all-stored" type="button">All stored</button></span><span>'+(lostScu?'<span class="neg">'+lostScu+' SCU written off</span>':'nothing written off')+'</span>';
+        h.querySelector('.all-aboard').addEventListener('click',function(){row._crates.forEach(function(c){c.where='aboard';});paints.forEach(function(p){p();});place(row);});
+        h.querySelector('.all-stored').addEventListener('click',function(){row._crates.forEach(function(c){c.where='stored';});paints.forEach(function(p){p();});place(row);});
+        place(row);
+      }
+      row._crates.forEach(function(c,i){
+        var wrap=document.createElement('div'); wrap.className='crate-tile';
+        var b=document.createElement('button'); b.type='button'; var w=document.createElement('button'); w.type='button';
+        function paint(){b.className='crate '+c.state; b.innerHTML='<b>'+c.size+'</b><small>#'+(i+1)+' · '+labels[c.state]+'</small>'; w.className='wh '+c.where; w.textContent=whereLabel[c.where]; w.disabled=c.state==='lost';}
+        b.addEventListener('click',function(){c.state=states[(states.indexOf(c.state)+1)%3];paint();tally();});
+        w.addEventListener('click',function(){c.where=c.where==='aboard'?'stored':'aboard';paint();place(row);});
+        paints.push(paint); paint(); wrap.appendChild(b); wrap.appendChild(w); grid.appendChild(wrap);
+      });
+      tally(); row.parentNode.insertBefore(tr,row.nextSibling); window.raster([tr],true);
+    });
+  });
+})();
+</script>
+
+<script>
+(function(){
+  // voyage header [MERGE INTO…]: a chooser rasters in under the header; pick a target, the loads move
+  function voyages(){return Array.prototype.slice.call(document.querySelectorAll('#ledger tr.voyage'));}
+  function loadsOf(v){var out=[],n=v.nextElementSibling;while(n&&!n.classList.contains('voyage')){out.push(n);n=n.nextElementSibling;}return out;}
+  function label(v){return v.querySelector('.vmeta b').textContent;}
+  function recount(v){var ls=loadsOf(v).filter(function(r){return r.classList.contains('line');});var stops={};ls.forEach(function(r){stops[r.querySelector('.stop').textContent]=1;});var m=v.querySelectorAll('.vmeta > span > b');m[2].textContent=ls.length;m[3].textContent=Object.keys(stops).length;}
+  function moveLoads(from,to,rows){
+    rows.forEach(function(r){r.classList.add('ras','lit');});
+    window.raster(rows,false,function(){
+      var anchor=to.nextElementSibling; while(anchor&&!anchor.classList.contains('voyage'))anchor=anchor.nextElementSibling;
+      rows.forEach(function(r){to.parentNode.insertBefore(r,anchor);});
+      if(from&&loadsOf(from).length===0){from.classList.add('ras','lit');window.raster([from],false,function(){from.remove();});} else if(from)recount(from);
+      recount(to); window.raster(rows,true);
+    });
+  }
+  document.addEventListener('click',function(e){
+    var b=e.target.closest('.merge-into'); if(b){
+      var v=b.closest('tr.voyage'); var open=v.nextElementSibling;
+      if(open&&open.classList.contains('chooser')){window.raster([open],false,function(){open.remove();});return;}
+      var others=voyages().filter(function(o){return o!==v;});
+      var tr=document.createElement('tr'); tr.className='chooser ras'; var td=document.createElement('td'); td.colSpan=10; tr.appendChild(td);
+      td.innerHTML='<span class="crates-h"><span>Merge '+label(v)+' into…</span></span>';
+      var wrap=document.createElement('span'); wrap.className='actions'; td.appendChild(wrap);
+      others.forEach(function(o){var c=document.createElement('button');c.type='button';c.className='cmd';c.textContent=label(o)+' · '+o.querySelectorAll('.vmeta > span > b')[1].textContent;c.addEventListener('click',function(){var rows=loadsOf(v).filter(function(r){return r!==tr;});tr.remove();moveLoads(v,o,rows);});wrap.appendChild(c);});
+      var x=document.createElement('button');x.type='button';x.className='cmd danger';x.textContent='Cancel';x.addEventListener('click',function(){window.raster([tr],false,function(){tr.remove();});});wrap.appendChild(x);
+      v.parentNode.insertBefore(tr,v.nextSibling); window.raster([tr],true); return;
+    }
+    var d=e.target.closest('.detach'); if(d){
+      var row=d.closest('tr.line'); var from=row.previousElementSibling; while(from&&!from.classList.contains('voyage'))from=from.previousElementSibling;
+      if(loadsOf(from).filter(function(r){return r.classList.contains('line');}).length===1)return; // already alone
+      var n=Math.max.apply(null,voyages().map(function(v){return +label(v).replace(/\D/g,'');}))+1;
+      var nv=document.createElement('tr'); nv.className='voyage ras'; nv.innerHTML='<td colspan="10"><span class="vmeta"><span><b>Voyage '+n+'</b> · 11-08</span><span>Ship <b>—</b></span><span>Loads <b>1</b></span><span>Stops <b>1</b></span><span>Logged by <b class="who">GIG</b></span><span class="actions"><button class="cmd" type="button">Edit</button><button class="cmd add-load-v" type="button" title="Buy another commodity into this voyage">Add load</button><button class="cmd merge-into" type="button">Merge into…</button><button class="cmd danger del-voyage" type="button">Del</button></span></span></td>';
+      var tbody=from.parentNode; tbody.appendChild(nv); moveLoads(from,nv,[row]); window.raster([nv],true);
+    }
+  });
+})();
+</script>
+
+<script>
+(function(){
+  // voyage header [ADD LOAD]: a single-load form rasters in under the header; [ADD] appends the load row
+  var tpl=document.getElementById('load-tpl');
+  function fmt0(n){return Math.round(n).toLocaleString('en-US');}
+  function parseBoxes(str){var out=[];str.split(/[,;\s]+/).forEach(function(t){var m=t.match(/^(\d+)\s*[x×*]\s*(\d+)$/i);if(m)out.push({n:+m[1],size:+m[2]});});return out;}
+  document.addEventListener('click',function(e){
+    var b=e.target.closest('.add-load-v'); if(!b)return;
+    var v=b.closest('tr.voyage'); var open=v.nextElementSibling;
+    if(open&&open.classList.contains('addload')){window.raster([open],false,function(){open.remove();});return;}
+    var tr=document.createElement('tr'); tr.className='addload chooser ras'; var td=document.createElement('td'); td.colSpan=10; tr.appendChild(td);
+    td.innerHTML='<span class="crates-h"><span>Add a load to '+v.querySelector('.vmeta b').textContent+'</span><span>Same ship and date; its own commodity, crates, price and stop</span></span>';
+    var line=tpl.content.firstElementChild.cloneNode(true); line.classList.remove('ras'); line.querySelector('.ln').remove(); line.querySelector('.line-cmd').remove(); line.style.display='block'; line.style.border='0'; line.style.padding='0'; td.appendChild(line);
+    var foot=document.createElement('span'); foot.className='actions'; foot.style.marginTop='.6rem'; foot.innerHTML='<button class="cmd boxed go" type="button">Add load</button><button class="cmd x" type="button">Cancel</button>'; td.appendChild(foot);
+    var mode=line.querySelector('.mode'), scuL=line.querySelector('.price-scu'), lotL=line.querySelector('.price-lot'), scu=line.querySelector('[name=scu]'), boxes=line.querySelector('[name=boxes]');
+    function sync(){scuL.hidden=mode.value!=='scu';lotL.hidden=mode.value==='scu';var bs=parseBoxes(boxes.value),t=0;bs.forEach(function(x){t+=x.n*x.size;});if(bs.length)scu.value=t;}
+    [mode,boxes].forEach(function(el){el.addEventListener('input',sync);el.addEventListener('change',sync);}); sync();
+    foot.querySelector('.x').addEventListener('click',function(){window.raster([tr],false,function(){tr.remove();});});
+    foot.querySelector('.go').addEventListener('click',function(){
+      var name=(line.querySelector('[name=commodity]').value||'UNNAMED').toUpperCase(); var bs=parseBoxes(boxes.value); if(!bs.length){boxes.focus();return;}
+      var q=0;bs.forEach(function(x){q+=x.n*x.size;});
+      var per=mode.value==='scu'?(+line.querySelector('[name=price_scu]').value||0):((+line.querySelector('[name=price_lot]').value||0)/q);
+      var term=line.querySelector('[name=terminal]').value||'—', stop=line.querySelector('[name=stop]').value||'1', dest=line.querySelector('[name=dest]').value||'— undecided';
+      var ship=v.querySelectorAll('.vmeta > span > b')[1].textContent, who=v.querySelector('.vmeta .who').textContent;
+      var row=document.createElement('tr'); row.className='line ras';
+      row.innerHTML='<td>'+name+'</td><td class="num">'+q+'</td><td class="boxes">'+bs.map(function(x){return '<b>'+x.n+'</b>×'+x.size;}).join(' ')+'</td><td class="where" title="'+term+'">'+term.replace('Mining Facility ','').replace('Mining Area ','')+'</td><td><span class="status transit">In transit</span></td><td><span class="stop">'+stop+'</span>'+dest+'</td><td class="where">'+(ship==='—'?'— unassigned':"aboard "+who+"'s "+ship)+'</td><td class="num">'+fmt0(per*q)+'</td><td class="who">GIG</td><td><span class="actions"><button class="cmd" type="button">Edit</button><button class="cmd close-load" type="button">Close</button><button class="cmd crates" type="button">Crates</button><button class="cmd detach" type="button">Detach</button></span></td>';
+      var hs=['Voyage / commodity','SCU','Boxes','Bought at','Status','Stop · bound for','Where now','Cost','By','Cmd']; Array.prototype.forEach.call(row.cells,function(c,i){c.setAttribute('data-l',hs[i]);});
+      var anchor=v.nextElementSibling; while(anchor&&!anchor.classList.contains('voyage'))anchor=anchor.nextElementSibling;
+      window.raster([tr],false,function(){tr.remove(); v.parentNode.insertBefore(row,anchor); window.raster([row],true);
+        var ls=[],n=v.nextElementSibling;while(n&&!n.classList.contains('voyage')){if(n.classList.contains('line'))ls.push(n);n=n.nextElementSibling;}
+        var stops={};ls.forEach(function(r){stops[r.querySelector('.stop').textContent]=1;}); var m=v.querySelectorAll('.vmeta > span > b'); m[2].textContent=ls.length; m[3].textContent=Object.keys(stops).length;});
+    });
+    v.parentNode.insertBefore(tr,v.nextSibling); window.raster([tr],true); line.querySelector('[name=commodity]').focus({preventScroll:true});
+  });
+})();
+</script>
+
+<script>
+(function(){
+  // Stowage plan, derived live from the Open Cargo table.
+  var SIZES=[1,2,4,8,16,24,32], KEYS=['q','w','e','r','t','y','u'];
+  var plans=document.getElementById('plans'); var tbody=document.querySelector('#ledger table.cards tbody');
+  function voyages(){return Array.prototype.slice.call(tbody.querySelectorAll('tr.voyage'));}
+  function loadsOf(v){var out=[],n=v.nextElementSibling;while(n&&!n.classList.contains('voyage')){if(n.classList.contains('line'))out.push(n);n=n.nextElementSibling;}return out;}
+  function crates(row){ if(row._crates)return row._crates.filter(function(c){return c.state!=='lost';}).map(function(c){return c.size;});
+    var out=[];row.querySelector('.boxes').querySelectorAll('b').forEach(function(b){var n=+b.textContent,sz=+b.nextSibling.textContent.replace(/[^0-9]/g,'');for(var i=0;i<n;i++)out.push(sz);});return out;}
+  function mix(sizes){var m={};sizes.forEach(function(z){m[z]=(m[z]||0)+1;});return Object.keys(m).sort(function(a,b){return b-a;}).map(function(k){return '<b>'+m[k]+'</b>×'+k;}).join(' ');}
+  function info(v){var b=v.querySelectorAll('.vmeta > span > b');return {el:v,num:+b[0].textContent.replace(/\D/g,''),ship:b[1].textContent,owner:b[4].textContent,loads:loadsOf(v)};}
+  function loadInfo(r){return {row:r,name:r.cells[0].textContent.replace(/^└\s*/,'').trim(),stop:+r.querySelector('.stop').textContent,dest:r.cells[5].textContent.replace(/^\d+\s*/,'').trim(),sizes:crates(r)};}
+  var SLUG={'Hull A':'hull-a','Hull C':'hull-c','Hull D':'hull-d','Hull E':'hull-e','C2 Hercules':'c2 hercules','Freelancer MAX':'freelancer max'};
+  function link(ship,sizes){var m={};sizes.forEach(function(z){m[z]=(m[z]||0)+1;});var suf='';SIZES.forEach(function(z,i){if(m[z])suf+='-'+KEYS[i]+m[z];});return 'https://sc-cargo.space/#/viewer/'+encodeURIComponent(SLUG[ship]||ship.toLowerCase())+'-official'+suf;}
+  function order(loads){ // last stop first (deepest); within a stop larger crates first
+    var ls=loads.slice().sort(function(a,b){return b.stop-a.stop||Math.max.apply(null,b.sizes)-Math.max.apply(null,a.sizes);});
+    var minStop=Math.min.apply(null,ls.map(function(l){return l.stop;}));
+    return ls.map(function(l,i){return '<li><span class="n">'+(i+1)+'</span><span class="what">'+l.name+' <span class="boxes">'+mix(l.sizes)+'</span><small>stop '+l.stop+' · '+(l.dest||'undecided')+'</small></span><span class="depth">'+(i===0?'Deepest':(l.stop===minStop?'Door side':'Mid hold'))+'</span></li>';}).join('');
+  }
+  function summary(loads){var scu=0,n=0,stops={};loads.forEach(function(l){l.sizes.forEach(function(z){scu+=z;n++;});stops[l.stop]=1;});return Object.keys(stops).length+' stop'+(Object.keys(stops).length===1?'':'s')+' · '+scu+' SCU · '+n+' crates';}
+  function card(cls,title,sub,loads,foot){var d=document.createElement('div');d.className='plan '+cls;d.innerHTML='<h3>'+title+' <span>'+sub+'</span></h3><ol>'+order(loads)+'</ol>'+(foot?'<p>'+foot+'</p>':'');return d;}
+  function render(){
+    plans.innerHTML='';
+    var vs=voyages().map(info).filter(function(v){return v.loads.length;});
+    vs.filter(function(v){return v.ship!=='—';}).forEach(function(v){
+      var ls=v.loads.map(loadInfo); var all=[];ls.forEach(function(l){all=all.concat(l.sizes);});
+      plans.appendChild(card('','Voyage '+v.num+' · '+v.owner+"'s "+v.ship,summary(ls),ls,'<a href="'+link(v.ship,all)+'" target="_blank" rel="noopener">Open this load-out in sc-cargo.space ↗</a>'));
+    });
+    // unassigned: cluster voyages whose destinations overlap
+    var un=vs.filter(function(v){return v.ship==='—';}).map(function(v){v.ls=v.loads.map(loadInfo);v.dests={};v.ls.forEach(function(l){if(l.dest&&!/undecided/.test(l.dest))v.dests[l.dest]=1;});return v;});
+    var clusters=[];
+    un.forEach(function(v){var hit=clusters.filter(function(c){return c.some(function(o){return Object.keys(o.dests).some(function(d){return v.dests[d];});});});
+      if(!hit.length)clusters.push([v]); else {var m=hit[0];hit.slice(1).forEach(function(c){m.push.apply(m,c);clusters.splice(clusters.indexOf(c),1);});m.push(v);} });
+    clusters.forEach(function(c){
+      c.sort(function(a,b){return a.num-b.num;}); var ls=[];c.forEach(function(v){ls=ls.concat(v.ls);});
+      var nums=c.map(function(v){return v.num;}).join(' + ');
+      if(c.length===1){plans.appendChild(card('','Voyage '+nums+' · no hull yet',summary(ls),ls,'Assign a hull to get the sc-cargo.space link.'));return;}
+      var shared={};c.forEach(function(v){Object.keys(v.dests).forEach(function(d){shared[d]=(shared[d]||0)+1;});});
+      var why=Object.keys(shared).filter(function(d){return shared[d]>1;}).join(', ');
+      var d=card('suggest','Suggested · Voyages '+nums,summary(ls),ls,'…');
+      var p=d.querySelector('p'); p.innerHTML='Unassigned and all bound for <b>'+why+'</b>. <button class="cmd warn" type="button">Merge '+nums+' into Voyage '+c[0].num+'</button> · or assign hulls separately.';
+      p.querySelector('button').addEventListener('click',function(){
+        var target=c[0].el; c.slice(1).forEach(function(v){var rows=v.loads; rows.forEach(function(r){r.classList.add('ras','lit');});
+          window.raster(rows,false,function(){var anchor=target.nextElementSibling;while(anchor&&!anchor.classList.contains('voyage'))anchor=anchor.nextElementSibling;rows.forEach(function(r){target.parentNode.insertBefore(r,anchor);});v.el.classList.add('ras','lit');window.raster([v.el],false,function(){v.el.remove();});window.raster(rows,true);
+            var all=loadsOf(target),stops={};all.forEach(function(r){stops[r.querySelector('.stop').textContent]=1;});var m=target.querySelectorAll('.vmeta > span > b');m[2].textContent=all.length;m[3].textContent=Object.keys(stops).length;});});
+      });
+      plans.appendChild(d);
+    });
+    plans.querySelectorAll('.plan').forEach(function(pl){pl.classList.add('ras','lit');});
+  }
+  var t; new MutationObserver(function(){clearTimeout(t);t=setTimeout(render,200);}).observe(tbody,{childList:true,subtree:true,characterData:true});
+  render();
+})();
+</script>
+
+<script>
+(function(){
+  // every panel header gets [HIDE]/[SHOW]; the body rasters out and in
+  document.querySelectorAll('.panel > header').forEach(function(h){
+    var panel=h.parentNode; if(panel.id==='newrun'||panel.classList.contains('record'))return;
+    var b=document.createElement('button'); b.type='button'; b.className='cmd minbtn'; b.textContent='Hide'; b.setAttribute('aria-expanded','true'); h.appendChild(b);
+    b.addEventListener('click',function(){
+      var body=Array.prototype.slice.call(panel.children).filter(function(c){return c!==h;});
+      if(panel.classList.contains('min')){panel.classList.remove('min');b.textContent='Hide';b.setAttribute('aria-expanded','true');body.forEach(function(c){c.classList.add('ras');c.classList.remove('lit');});window.raster(body,true);}
+      else {body.forEach(function(c){c.classList.add('ras','lit');});window.raster(body,false,function(){panel.classList.add('min');b.textContent='Show';b.setAttribute('aria-expanded','false');});}
+    });
+  });
+})();
+</script>
+
+<script>
+(function(){
+  // [DEL] on a voyage: screen flickers to black, a confirmation rasters in; only [DELETE VOYAGE] does it
+  var reduce=window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var cf=document.getElementById('confirm'), blackout=document.getElementById('blackout'); var pending=null;
+  function flick(fn){blackout.classList.remove('off');blackout.classList.add('go');setTimeout(function(){fn();blackout.classList.remove('go');blackout.classList.add('off');},reduce?0:900);}
+  function fmt0(n){return Math.round(n).toLocaleString('en-US');}
+  document.addEventListener('click',function(e){
+    var b=e.target.closest('.del-voyage'); if(!b)return;
+    var v=b.closest('tr.voyage'); var rows=[],n=v.nextElementSibling; while(n&&!n.classList.contains('voyage')){rows.push(n);n=n.nextElementSibling;}
+    var loads=rows.filter(function(r){return r.classList.contains('line');});
+    var scu=0,cost=0; loads.forEach(function(r){scu+=+r.cells[1].textContent;cost+=+r.cells[7].textContent.replace(/,/g,'');});
+    var m=v.querySelectorAll('.vmeta > span > b');
+    document.getElementById('cf-title').innerHTML='Delete <b>'+m[0].textContent+'</b>? · ship '+m[1].textContent+' · logged by '+m[4].textContent;
+    document.getElementById('cf-detail').innerHTML=loads.map(function(r){return '<div><span>'+r.cells[0].textContent.replace(/^└\s*/,'')+' · '+r.cells[1].textContent+' SCU</span><span>'+r.cells[7].textContent+' aUEC</span></div>';}).join('')+'<div><span>'+loads.length+' load'+(loads.length===1?'':'s')+' · '+scu+' SCU</span><span><b>'+fmt0(cost)+' aUEC committed</b></span></div>';
+    pending={v:v,rows:rows};
+    var parts=Array.prototype.slice.call(cf.querySelectorAll('.ras')); parts.forEach(function(p){p.classList.remove('lit');});
+    flick(function(){cf.hidden=false;window.raster(parts,true);});
+  });
+  document.getElementById('cf-no').addEventListener('click',function(){flick(function(){cf.hidden=true;pending=null;});});
+  document.getElementById('cf-yes').addEventListener('click',function(){
+    var p=pending; pending=null;
+    flick(function(){cf.hidden=true; if(!p)return; var all=[p.v].concat(p.rows); all.forEach(function(r){r.classList.add('ras','lit');}); window.raster(all,false,function(){all.forEach(function(r){r.remove();});});});
+  });
+})();
+</script>
+</body></html>
