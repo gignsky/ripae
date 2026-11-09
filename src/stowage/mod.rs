@@ -185,6 +185,18 @@ fn ledger_frag(l: &Ledger, oob: bool) -> String {
     render_str(&LedgerFrag { rows: ledger_rows(&l.voyages), oob })
 }
 
+/// `GET /live/panels` -- every live panel of the ledger screen, refetched
+/// when another crew member changes something (see `crate::live`).
+pub async fn live_panels(State(state): State<AppState>, _user: CurrentUser) -> Response {
+    match ledger(&state).await {
+        Ok(l) => html(
+            StatusCode::OK,
+            [totals_frag(&l, false), open_cargo_frag(&l, false), plans_frag(&l, false), ledger_frag(&l, false)].concat(),
+        ),
+        Err(r) => r,
+    }
+}
+
 fn head_frag(v: VoyageView, head_oob: bool) -> String {
     render_str(&VoyageHeadFrag { v, head_oob })
 }
@@ -294,6 +306,24 @@ fn parse_money(raw: &str, what: &str) -> Result<f64, String> {
     Ok(v)
 }
 
+/// The game doesn't always show the real price, so a price can be entered as
+/// the wallet balance before and after the trade. A purchase must lower the
+/// balance and a sale raise it; the other way round is almost certainly the
+/// two figures swapped, so it's refused rather than flipped.
+fn balance_delta(before: &str, after: &str, selling: bool) -> Result<f64, String> {
+    let b = parse_money(before, "Balance before")?;
+    let a = parse_money(after, "Balance after")?;
+    let delta = if selling { a - b } else { b - a };
+    if delta < 0.0 {
+        return Err(if selling {
+            "The balance went down on a sale -- are before and after swapped?".into()
+        } else {
+            "The balance went up on a purchase -- are before and after swapped?".into()
+        });
+    }
+    Ok(delta)
+}
+
 /// Everything a load line needs, validated and canonicalised. Shared by New
 /// Run, Add Load and Edit.
 struct LoadParts {
@@ -327,10 +357,13 @@ async fn parse_load_line(state: &AppState, f: &LoadFormView, boxes_editable: boo
     } else {
         (Vec::new(), existing_scu)
     };
-    let price_mode: PriceMode = f.price_mode.parse().unwrap_or(PriceMode::Scu);
-    let price = match price_mode {
-        PriceMode::Scu => parse_money(&f.price_scu, "Buy price per SCU")?,
-        PriceMode::Lot => parse_money(&f.price_lot, "Price paid for the lot")?,
+    // "balance" is a form-only mode: the drop in balance is what the lot cost.
+    let (price_mode, price) = match f.price_mode.as_str() {
+        "balance" => (PriceMode::Lot, balance_delta(&f.balance_before, &f.balance_after, false)?),
+        mode => match mode.parse().unwrap_or(PriceMode::Scu) {
+            PriceMode::Scu => (PriceMode::Scu, parse_money(&f.price_scu, "Buy price per SCU")?),
+            PriceMode::Lot => (PriceMode::Lot, parse_money(&f.price_lot, "Price paid for the lot")?),
+        },
     };
     // Free cargo (price 0) may have no buy terminal; it's stored as "".
     let buy_terminal = match opt(&f.terminal) {
@@ -371,6 +404,8 @@ fn load_form_from(form: &FormData, i: usize) -> LoadFormView {
         price_mode: form.nth("price_mode", i).into(),
         price_scu: form.nth("price_scu", i).into(),
         price_lot: form.nth("price_lot", i).into(),
+        balance_before: form.nth("balance_before", i).into(),
+        balance_after: form.nth("balance_after", i).into(),
         terminal: form.nth("terminal", i).into(),
         stop_no: form.nth("stop_no", i).into(),
         destination: form.nth("destination", i).into(),
@@ -990,6 +1025,8 @@ fn blank_close(load: &Load, users: Vec<User>) -> CloseFormView {
         price_mode: "scu".into(),
         sell_scu: String::new(),
         sell_lot: String::new(),
+        balance_before: String::new(),
+        balance_after: String::new(),
         selected: load.crates.iter().filter(|c| c.default_selected()).map(|c| c.id).collect(),
         shares: Vec::new(),
         users,
@@ -1019,6 +1056,8 @@ fn close_form_from(form: &FormData, users: Vec<User>) -> CloseFormView {
         price_mode: form.get("sell_mode").into(),
         sell_scu: form.get("sell_scu").into(),
         sell_lot: form.get("sell_lot").into(),
+        balance_before: form.get("sell_bal_before").into(),
+        balance_after: form.get("sell_bal_after").into(),
         selected: form.all("crate").iter().filter_map(|v| v.parse().ok()).collect(),
         shares: (0..n)
             .map(|i| ShareFormRow {
@@ -1059,10 +1098,12 @@ pub async fn close_load(State(state): State<AppState>, user: CurrentUser, Path(i
         let sold_at = parse_date(&f.sold_at, today()).map_err(|e| format!("Sold on: {e}"))?;
         let terminal = opt(&f.sell_terminal).ok_or("Sell terminal is required.")?;
         let sell_terminal = pick(&state, Kind::Terminal, &terminal).await;
-        let price_mode: PriceMode = f.price_mode.parse().unwrap_or(PriceMode::Scu);
-        let price = match price_mode {
-            PriceMode::Scu => parse_money(&f.sell_scu, "Sell price per SCU")?,
-            PriceMode::Lot => parse_money(&f.sell_lot, "Amount received for the lot")?,
+        let (price_mode, price) = match f.price_mode.as_str() {
+            "balance" => (PriceMode::Lot, balance_delta(&f.balance_before, &f.balance_after, true)?),
+            mode => match mode.parse().unwrap_or(PriceMode::Scu) {
+                PriceMode::Scu => (PriceMode::Scu, parse_money(&f.sell_scu, "Sell price per SCU")?),
+                PriceMode::Lot => (PriceMode::Lot, parse_money(&f.sell_lot, "Amount received for the lot")?),
+            },
         };
         let mut shares = Vec::new();
         for (i, s) in f.shares.iter().enumerate() {
@@ -1211,5 +1252,16 @@ mod tests {
         assert_eq!(parse_money("1,250.5", "x").unwrap(), 1250.5);
         assert!(parse_money("-1", "x").is_err());
         assert!(parse_money("", "x").is_err());
+    }
+
+    #[test]
+    fn balance_delta_is_the_price_and_refuses_the_wrong_direction() {
+        assert_eq!(balance_delta("1,500,000", "1,262,400", false).unwrap(), 237_600.0);
+        assert_eq!(balance_delta("1262400", "1650000", true).unwrap(), 387_600.0);
+        assert_eq!(balance_delta("500", "500", false).unwrap(), 0.0);
+        assert!(balance_delta("1000", "1200", false).unwrap_err().contains("swapped"));
+        assert!(balance_delta("1200", "1000", true).unwrap_err().contains("swapped"));
+        assert!(balance_delta("", "1000", false).unwrap_err().contains("Balance before"));
+        assert!(balance_delta("1000", "", true).unwrap_err().contains("Balance after"));
     }
 }
