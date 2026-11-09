@@ -1,17 +1,17 @@
 <tbody class="load ras" id="load-{{ l.id }}"{% if load_oob %} hx-swap-oob="true"{% endif %}>
   <tr class="line {{ l.status_css }}">
-    <td{% if l.notes != "" %} title="{{ l.notes }}"{% endif %}>{{ l.commodity_upper }}</td>
+    <td{% if l.notes != "" %} title="{{ l.notes }}"{% endif %}>{{ l.commodity_upper }}{% if l.is_haul %}<span class="kind-tag" title="Hauling contract">Haul</span>{% endif %}</td>
     <td class="num">{{ l.scu }}</td>
     <td class="boxes">{% for b in l.boxes %}<b>{{ b.0 }}</b>×{{ b.1 }} {% endfor %}{% if l.glitched_count > 0 %}<span class="glitch">· {{ l.glitched_count }} glitched</span>{% endif %}{% if l.lost_count > 0 %} <span class="loss">· {{ l.lost_count }} lost</span>{% endif %}</td>
     <td class="where" title="{{ l.buy_terminal }}">{{ l.buy_terminal_short }}</td>
     <td><span class="status {{ l.status_css }}">{{ l.status_label }}</span></td>
     <td><span class="stop">{{ l.stop_no }}</span>{{ l.destination_label }}</td>
     <td class="where">{{ l.where_now }}</td>
-    <td class="num">{{ l.cost_fmt }}<small class="per-scu">{{ l.buy_price_scu_fmt }} / SCU</small></td>
+    {% if l.is_haul %}<td class="num pos" title="Contract reward, paid on delivery">{% if l.reward_fmt != "" %}{{ l.reward_fmt }}{% else %}—{% endif %}</td>{% else %}<td class="num">{{ l.cost_fmt }}<small class="per-scu">{{ l.buy_price_scu_fmt }} / SCU</small></td>{% endif %}
     <td class="who">{{ l.by_upper }}</td>
     <td><span class="actions">
       <button class="cmd" type="button" hx-get="/loads/{{ l.id }}/edit" hx-target="#load-{{ l.id }}" hx-swap="outerHTML">Edit</button>
-      <button class="cmd" type="button" hx-get="/loads/{{ l.id }}/close" hx-target="#load-{{ l.id }}" hx-swap="outerHTML">Close</button>
+      <button class="cmd" type="button" hx-get="/loads/{{ l.id }}/close" hx-target="#load-{{ l.id }}" hx-swap="outerHTML">{% if l.is_haul %}Deliver{% else %}Close{% endif %}</button>
       {% if let crate::stowage::views::LoadExtra::Manifest = l.extra %}
       <button class="cmd on" type="button" hx-get="/loads/{{ l.id }}" hx-target="#load-{{ l.id }}" hx-swap="outerHTML">Crates</button>
       {% else %}
@@ -71,16 +71,20 @@
   {% if let crate::stowage::views::LoadExtra::Close(f) = l.extra %}
   <tr class="closing"><td colspan="10">
     <form class="run close-form" hx-post="/loads/{{ l.id }}/close" hx-target="#load-{{ l.id }}" hx-swap="outerHTML" data-buy-scu="{{ l.buy_price_scu_fmt }}">
+      {% if l.is_haul %}
+      <div class="ras sub-h"><span>Deliver contract · <b>{{ l.commodity_upper }}</b> · {{ l.scu }} SCU picked up at {{ l.buy_terminal_short }}{% if l.reward_fmt != "" %} · reward {{ l.reward_fmt }}{% endif %}</span><span>Delivery · the payout is all profit</span></div>
+      {% else %}
       <div class="ras sub-h"><span>Close load · <b>{{ l.commodity_upper }}</b> · {{ l.scu }} SCU bought at {{ l.buy_terminal_short }} · {{ l.buy_price_scu_fmt }} / SCU</span><span>Sale leg</span></div>
+      {% endif %}
       {% if let Some(error) = f.error %}<p class="ras neg form-error">{{ error }}</p>{% endif %}
       <div class="ras fields">
-        <label>Sold by<select name="sold_by" title="Who made the sale: credit and the remainder are theirs; you may just be keeping the books">{% for u in f.users %}<option value="{{ u.id }}"{% if f.sold_by == u.id.to_string() %} selected{% endif %}>{{ u.display_name|upper }}</option>{% endfor %}</select></label>
-        <label>Sold on<input name="sold_at" type="date" value="{{ f.sold_at }}" data-today required /></label>
-        <label>Sell terminal<input name="sell_terminal" type="text" list="pick-terminals" data-pick autocomplete="off" value="{{ f.sell_terminal }}" required /></label>
-        <label>SCU sold · from crates<input name="scu_sold" type="number" readonly data-scu-sold /></label>
+        <label>{% if l.is_haul %}Delivered by{% else %}Sold by{% endif %}<select name="sold_by" title="Who made the sale: credit and the remainder are theirs; you may just be keeping the books">{% for u in f.users %}<option value="{{ u.id }}"{% if f.sold_by == u.id.to_string() %} selected{% endif %}>{{ u.display_name|upper }}</option>{% endfor %}</select></label>
+        <label>{% if l.is_haul %}Delivered on{% else %}Sold on{% endif %}<input name="sold_at" type="date" value="{{ f.sold_at }}" data-today required /></label>
+        <label>{% if l.is_haul %}Delivered to{% else %}Sell terminal{% endif %}<input name="sell_terminal" type="text" list="pick-terminals" data-pick autocomplete="off" value="{{ f.sell_terminal }}" required /></label>
+        <label>{% if l.is_haul %}SCU delivered{% else %}SCU sold{% endif %} · from crates<input name="scu_sold" type="number" readonly data-scu-sold /></label>
         {% include "partials/sale_price_fields.html" %}
       </div>
-      <div class="ras sub-h"><span>Crates sold · <button class="cmd sel-all" type="button">All sound crates</button> <button class="cmd sel-none" type="button">None</button></span><span>Tap to toggle sold / kept. Kept crates stay open on the voyage. Glitched crates must be picked by hand; lost ones can't be sold.</span></div>
+      <div class="ras sub-h"><span>Crates {% if l.is_haul %}delivered{% else %}sold{% endif %} · <button class="cmd sel-all" type="button">All sound crates</button> <button class="cmd sel-none" type="button">None</button></span><span>Tap to toggle sold / kept. Kept crates stay open on the voyage. Glitched crates must be picked by hand; lost ones can't be sold.</span></div>
       <div class="ras crate-grid sell-crates">
         {% for c in l.crates %}
         <label class="crate {% if c.is_lost %}lost{% else if c.is_glitched %}glitched{% else %}sound{% endif %}{% if !f.selected.contains(c.id) && !c.is_lost %} kept{% endif %}" data-sound="{% if c.condition == "sound" %}1{% else %}0{% endif %}" data-size="{{ c.size }}">
@@ -94,7 +98,7 @@
       {% endif %}
       {% include "partials/sale_shares.html" %}
       <div class="ras formfoot">
-        <span class="actions"><button class="cmd boxed record" type="submit">Record sale</button><button class="cmd cancel-close" type="button" hx-get="/loads/{{ l.id }}" hx-target="#load-{{ l.id }}" hx-swap="outerHTML">Cancel</button></span>
+        <span class="actions"><button class="cmd boxed record" type="submit">{% if l.is_haul %}Record delivery{% else %}Record sale{% endif %}</button><button class="cmd cancel-close" type="button" hx-get="/loads/{{ l.id }}" hx-target="#load-{{ l.id }}" hx-swap="outerHTML">Cancel</button></span>
         <span class="note preview">profit = — · seller keeps —</span>
       </div>
     </form>

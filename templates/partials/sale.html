@@ -5,7 +5,7 @@
 ╚════██║██╔══██║██║     ██╔══╝
 ███████║██║  ██║███████╗███████╗
 ╚══════╝╚═╝  ╚═╝╚══════╝╚══════╝</pre>
-  <p class="ras tag">CONGRATULATIONS ON YOUR SALE, <b>{{ who_upper }}</b>{% if let Some(keeper) = kept_by_upper %} · BOOKED BY {{ keeper }}{% endif %}</p>
+  <p class="ras tag">CONGRATULATIONS ON YOUR {% if haul %}DELIVERY{% else %}SALE{% endif %}, <b>{{ who_upper }}</b>{% if let Some(keeper) = kept_by_upper %} · BOOKED BY {{ keeper }}{% endif %}</p>
   <div class="ras sale-fig"><span class="lbl">Profit</span><span class="val {% if profit_neg %}neg{% else %}pos{% endif %}" id="sale-profit">{{ profit_fmt }}</span><small>aUEC</small></div>
   <div class="ras sale-line">{{ commodity_upper }} · {{ scu_sold }} SCU · {{ from_short }} <span class="arr">→</span> {{ to_short }}</div>
   <div class="ras sale-shares">
