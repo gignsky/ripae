@@ -8,11 +8,14 @@
 {% endif %}
 <label>SCU<input name="scu" type="number" placeholder="0" value="{{ f.scu }}" data-scu /></label>
 <label>Price as<select name="price_mode" class="mode" data-mode>
-  <option value="scu"{% if f.price_mode != "lot" %} selected{% endif %}>Per SCU</option>
+  <option value="scu"{% if f.price_mode != "lot" && f.price_mode != "balance" %} selected{% endif %}>Per SCU</option>
   <option value="lot"{% if f.price_mode == "lot" %} selected{% endif %}>Per lot</option>
+  <option value="balance"{% if f.price_mode == "balance" %} selected{% endif %}>From balance</option>
 </select></label>
-<label class="price-scu"{% if f.price_mode == "lot" %} hidden{% endif %}>Buy price / SCU<input name="price_scu" type="number" step="0.01" min="0" placeholder="0.00" value="{{ f.price_scu }}" /><span class="calc">lot = —</span></label>
+<label class="price-scu"{% if f.price_mode == "lot" || f.price_mode == "balance" %} hidden{% endif %}>Buy price / SCU<input name="price_scu" type="number" step="0.01" min="0" placeholder="0.00" value="{{ f.price_scu }}" /><span class="calc">lot = —</span></label>
 <label class="price-lot"{% if f.price_mode != "lot" %} hidden{% endif %}>Paid for the lot<input name="price_lot" type="number" step="0.01" min="0" placeholder="0" value="{{ f.price_lot }}" /><span class="calc">per SCU = —</span></label>
+<label class="price-bal"{% if f.price_mode != "balance" %} hidden{% endif %}>Balance before<input name="balance_before" type="number" step="any" min="0" placeholder="aUEC before buying" value="{{ f.balance_before }}" title="Your wallet before the purchase, when the terminal's price can't be trusted" /></label>
+<label class="price-bal"{% if f.price_mode != "balance" %} hidden{% endif %}>Balance after<input name="balance_after" type="number" step="any" min="0" placeholder="aUEC after buying" value="{{ f.balance_after }}" /><span class="calc">cost = —</span></label>
 <label>Buy terminal<input name="terminal" type="text" list="pick-terminals" data-pick autocomplete="off" value="{{ f.terminal }}" placeholder="Shubin Mining Facility SCD-1" title="Required unless the price is 0" /></label>
 <label>Stop №<input name="stop_no" type="number" value="{{ f.stop_no }}" min="1" /></label>
 <label>Bound for<input name="destination" type="text" list="pick-terminals" data-pick autocomplete="off" placeholder="undecided" value="{{ f.destination }}" /></label>
