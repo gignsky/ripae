@@ -3,6 +3,13 @@
 Every notable change to Ripae. Newest first. This file is also what the
 version badge in the corner of the site shows.
 
+## 0.1.3
+
+### Fixed
+- **Editing a run works again.** Saving the edit form used to fail, so
+  changes to a run were never stored. Edits now save and the row updates
+  in place.
+
 ## 0.1.2
 
 ### Changed
