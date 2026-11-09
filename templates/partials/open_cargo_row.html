@@ -12,14 +12,11 @@
     {% endif %}
   </td>
   <td>{{ run.cost_fmt }}</td>
+  <td>{{ run.submitted_by_name }}</td>
   <td>
-    {% if run.is_owner %}
     <button hx-get="/runs/{{ run.id }}/edit" hx-target="#run-{{ run.id }}" hx-swap="outerHTML">Edit</button>
     <button hx-get="/runs/{{ run.id }}/close" hx-target="#run-{{ run.id }}" hx-swap="outerHTML">Close</button>
     <button hx-delete="/runs/{{ run.id }}" hx-target="#run-{{ run.id }}" hx-swap="outerHTML swap:1s"
             hx-confirm="Delete this run?">Delete</button>
-    {% else %}
-    <em>read-only</em>
-    {% endif %}
   </td>
 </tr>
