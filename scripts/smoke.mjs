@@ -147,7 +147,7 @@ const run = async () => {
   ], "JT");
   check("second voyage listed", (await page.locator("#open-cargo tbody.vhead").count()) === 2);
   const jtHead = page.locator("#open-cargo tbody.vhead").nth(1);
-  check("run kept for JT is logged by JT", (await jtHead.textContent()).includes("Logged by JT"));
+  check("run kept for JT is logged by its bookkeeper, Gig", (await jtHead.textContent()).includes("Logged by LORD GIG"));
   const jtLoad = page.locator("#open-cargo tbody.load").nth(2);
   check("its load says JT bought it", (await jtLoad.locator("td.who").textContent()).trim() === "JT");
 
