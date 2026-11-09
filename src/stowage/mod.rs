@@ -257,7 +257,7 @@ async fn pick_opt(state: &AppState, kind: Kind, raw: &str) -> Option<String> {
 }
 
 /// Resolves a typed hull name. Blank = no hull; an unknown name is refused
-/// (a hull needs an sc-cargo.space slug, and the 80-ship list is the site's).
+/// (a hull needs an sc-cargo.space slug, so ships come from the seeded list).
 async fn pick_ship(state: &AppState, raw: &str) -> Result<Option<i64>, String> {
     let Some(name) = opt(raw) else { return Ok(None) };
     match repo::find_ship_by_name(&state.pool, &name).await {
@@ -312,7 +312,6 @@ struct LoadParts {
 
 async fn parse_load_line(state: &AppState, f: &LoadFormView, boxes_editable: bool, existing_scu: u32) -> Result<LoadParts, String> {
     let commodity = opt(&f.commodity).ok_or("Commodity is required.")?;
-    let buy_terminal = opt(&f.terminal).ok_or("Buy terminal is required.")?;
     let (boxes, scu) = if boxes_editable {
         let boxes = parse_boxes(&f.boxes).map_err(|e| format!("Boxes: {e}"))?;
         let total: u32 = boxes.iter().map(|(n, s)| n * s).sum();
@@ -333,6 +332,12 @@ async fn parse_load_line(state: &AppState, f: &LoadFormView, boxes_editable: boo
         PriceMode::Scu => parse_money(&f.price_scu, "Buy price per SCU")?,
         PriceMode::Lot => parse_money(&f.price_lot, "Price paid for the lot")?,
     };
+    // Free cargo (price 0) may have no buy terminal; it's stored as "".
+    let buy_terminal = match opt(&f.terminal) {
+        Some(t) => pick(state, Kind::Terminal, &t).await,
+        None if price == 0.0 => String::new(),
+        None => return Err("Buy terminal is required (leave it blank only when the price is 0).".into()),
+    };
     let (buy_price_scu, buy_price_lot) = model::derive_prices(price_mode, price, scu);
     let stop_no: u32 = match opt(&f.stop_no) {
         None => 1,
@@ -345,7 +350,7 @@ async fn parse_load_line(state: &AppState, f: &LoadFormView, boxes_editable: boo
     }
     Ok(LoadParts {
         commodity: pick(state, Kind::Commodity, &commodity).await,
-        buy_terminal: pick(state, Kind::Terminal, &buy_terminal).await,
+        buy_terminal,
         price_mode,
         buy_price_scu,
         buy_price_lot,

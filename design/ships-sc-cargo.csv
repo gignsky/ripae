@@ -33,6 +33,8 @@ Drake,Cutter,Cutter,cutter,4,0
 Drake,Cutter Rambler,Cutter Rambler,cutter rambler,2,0
 Drake,Cutter Scout,Cutter Scout,cutter scout,2,0
 Drake,Golem Ox,Golem Ox,golem ox,64,0
+Drake,Ironclad,Ironclad,ironclad,2204,0
+Drake,Ironclad Assault,Ironclad Assault,ironclad assault,1440,0
 Drake,Mule,Mule,mule,1,0
 Drake,Vulture,Vulture,vulture,13,0
 Esperia,Prowler Utility,Prowler Utility,prowler utility,32,0
@@ -69,6 +71,7 @@ Origin,M80,M80,m80,2,0
 RSI,Apollo Medivac,Apollo Medivac,apollo medivac,32,0
 RSI,Apollo Triage,Apollo Triage,apollo triage,32,0
 RSI,Arrastra [Concept],Arrastra,arrastra [concept],576,1
+RSI,Centaurus,Centaurus,centaurus,240,0
 RSI,Galaxy [Base Concept],Galaxy,galaxy [base concept],64,1
 RSI,Galaxy [Cargo Concept],Galaxy,galaxy [cargo concept],576,1
 RSI,Hermes,Hermes,hermes,288,0

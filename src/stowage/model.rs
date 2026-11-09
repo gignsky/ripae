@@ -371,6 +371,9 @@ impl Load {
                 return hull_text;
             }
             if pickup > 0 {
+                if self.buy_terminal.is_empty() {
+                    return "awaiting pickup".into();
+                }
                 return format!("awaiting pickup at {}", self.buy_terminal);
             }
             return format!("at {}", stations[0].0);
@@ -750,7 +753,7 @@ fn runs_closed_by(user_id: i64, voyages: &[Voyage]) -> usize {
 
 fn best_route_of(user_id: i64, voyages: &[Voyage]) -> Option<Route> {
     sold_loads(voyages)
-        .filter(|l| l.submitted_by == user_id)
+        .filter(|l| l.submitted_by == user_id && !l.buy_terminal.is_empty())
         .filter_map(|l| {
             Some(Route {
                 from: l.buy_terminal.clone(),
@@ -841,7 +844,7 @@ pub fn service_record(user: &User, users: &[User], voyages: &[Voyage]) -> Servic
     let mut by_route: HashMap<(&str, &str), usize> = HashMap::new();
     for l in &mine {
         *by_commodity.entry(l.commodity.as_str()).or_insert(0) += 1;
-        if let Some(to) = l.sell_terminal.as_deref() {
+        if let Some(to) = l.sell_terminal.as_deref().filter(|_| !l.buy_terminal.is_empty()) {
             *by_route.entry((l.buy_terminal.as_str(), to)).or_insert(0) += 1;
         }
     }
@@ -1446,6 +1449,22 @@ mod tests {
         assert_eq!(stored.where_now(None), "at Everus Harbor");
         let pickup = load(4, 10.0, vec![crate_(1, 8, Condition::Sound, Whereabouts::AwaitingPickup)]);
         assert_eq!(pickup.where_now(None), "awaiting pickup at ArcCorp Mining Area 141");
+        // free cargo may have no buy terminal
+        let mut free = load(5, 0.0, vec![crate_(1, 8, Condition::Sound, Whereabouts::AwaitingPickup)]);
+        free.buy_terminal = String::new();
+        assert_eq!(free.where_now(None), "awaiting pickup");
+    }
+
+    #[test]
+    fn a_load_without_a_buy_terminal_is_no_route() {
+        let mut free = sold_load(1, GIG, 0.0, 30.0, &[32], vec![]);
+        free.buy_terminal = String::new();
+        let vs = vec![voyage(1, GIG, None, vec![free])];
+        let rows = standings(&users(), &vs, SortKey::Profit);
+        let gig = rows.iter().find(|r| r.display_name == "Lord Gig").unwrap();
+        assert_eq!(gig.loads_sold, 1);
+        assert!(gig.best_route.is_none());
+        assert!(service_record(&users()[0], &users(), &vs).favourite_route.is_none());
     }
 
     // -- money -------------------------------------------------------------
