@@ -1,0 +1,10 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc bb534bb56ed70c0643c54286a1805c320e92d163f9a394854e191abd37cffac3 # shrinks to m = [(1, 32)]
+cc 41ca0e4030a15ccdc4e230a6740d593b788c3fef47c3904958666899e2bbb8c2 # shrinks to dests = [[0]]
+cc e290c3c97004d771f7a5f2ac5ee90bc752fa31fcdaf665c06ff301a412cc53e3 # shrinks to cs = [Crate { id: 1, load_id: 1, size_scu: 1, condition: Sound, whereabouts: Aboard, stored_at: None, sold_at: None }], buy = 0.0
+cc 5ca2d3b2b057b393dafc9561c5acea8ab2a4fff44a5544eef880f270c9948f2b # shrinks to cases = [(Load { id: 1, voyage_id: 1, submitted_by: 1, submitted_by_name: "Lord Gig", commodity: "Laranite", buy_terminal: "ArcCorp Mining Area 141", price_mode: Scu, buy_price_scu: 14.0, buy_price_lot: None, stop_no: 1, destination: Some("Area18 TDD"), sold_at: None, sell_terminal: None, sell_price_scu: None, sell_price_lot: None, notes: None, crates: [Crate { id: 1, load_id: 1, size_scu: 1, condition: Sound, whereabouts: Aboard, stored_at: None, sold_at: None }, Crate { id: 2, load_id: 1, size_scu: 1, condition: Sound, whereabouts: Aboard, stored_at: None, sold_at: None }, Crate { id: 3, load_id: 1, size_scu: 1, condition: Sound, whereabouts: Aboard, stored_at: None, sold_at: None }], shares: [] }, SaleInput { crate_ids: [3], price_mode: Lot, price: 43006.0, shares: [ShareInput { to_user: 3, paid_to: Some(2), kind: Pct, amount: 78.0, reason: None }] })]

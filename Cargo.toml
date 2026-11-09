@@ -21,3 +21,6 @@ tower-sessions = { version = "0.15.0", default-features = false, features = ["ax
 tower-sessions-sqlx-store = { version = "0.15.1", features = ["sqlite"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
+
+[dev-dependencies]
+proptest = "1"

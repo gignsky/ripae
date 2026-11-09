@@ -4,6 +4,7 @@ mod config;
 mod db;
 mod lookups;
 mod runs;
+mod stowage;
 mod templates;
 
 use axum::routing::{get, post};
