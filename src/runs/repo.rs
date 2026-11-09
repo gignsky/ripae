@@ -35,23 +35,42 @@ const SELECT_RUN: &str = "SELECT r.id, u.display_name AS submitted_by_name,
     FROM runs r JOIN users u ON u.id = r.submitted_by";
 
 pub async fn create(pool: &SqlitePool, submitted_by: i64, new_run: &NewRun) -> Result<i64> {
-    let commodity = super::model::normalise_name(&new_run.commodity);
-    let ship = new_run.ship.as_deref().map(super::model::normalise_name);
     let row = sqlx::query(
         "INSERT INTO runs (submitted_by, bought_at, commodity, scu, buy_terminal, buy_price_scu, destination, ship)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
     )
     .bind(submitted_by)
     .bind(&new_run.bought_at)
-    .bind(&commodity)
+    .bind(&new_run.commodity)
     .bind(new_run.scu)
     .bind(&new_run.buy_terminal)
     .bind(new_run.buy_price_scu)
     .bind(new_run.destination.as_deref())
-    .bind(ship.as_deref())
+    .bind(new_run.ship.as_deref())
     .fetch_one(pool)
     .await?;
     Ok(row.try_get("id")?)
+}
+
+/// Where the crew last delivered -- the sell terminal of the most recent
+/// sale -- used as the next run's default buy terminal.
+pub async fn latest_sell_terminal(pool: &SqlitePool) -> Result<Option<String>> {
+    Ok(sqlx::query_scalar(
+        "SELECT sell_terminal FROM runs WHERE status = 'sold'
+         ORDER BY sold_at DESC, updated_at DESC, id DESC LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await?)
+}
+
+/// The ship on the crew's most recently bought run, as the next default.
+pub async fn latest_ship(pool: &SqlitePool) -> Result<Option<String>> {
+    Ok(sqlx::query_scalar(
+        "SELECT ship FROM runs WHERE ship IS NOT NULL AND ship <> ''
+         ORDER BY bought_at DESC, id DESC LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await?)
 }
 
 pub async fn list_all(pool: &SqlitePool) -> Result<Vec<Run>> {
@@ -68,8 +87,6 @@ pub async fn find(pool: &SqlitePool, id: i64) -> Result<Option<Run>> {
 }
 
 pub async fn update(pool: &SqlitePool, id: i64, edit: &EditRun) -> Result<()> {
-    let commodity = super::model::normalise_name(&edit.commodity);
-    let ship = edit.ship.as_deref().map(super::model::normalise_name);
     sqlx::query(
         "UPDATE runs SET status = ?, bought_at = ?, commodity = ?, scu = ?, buy_terminal = ?,
             buy_price_scu = ?, destination = ?, stored_at = ?, ship = ?, notes = ?,
@@ -78,13 +95,13 @@ pub async fn update(pool: &SqlitePool, id: i64, edit: &EditRun) -> Result<()> {
     )
     .bind(edit.status.as_str())
     .bind(&edit.bought_at)
-    .bind(&commodity)
+    .bind(&edit.commodity)
     .bind(edit.scu)
     .bind(&edit.buy_terminal)
     .bind(edit.buy_price_scu)
     .bind(edit.destination.as_deref())
     .bind(edit.stored_at.as_deref())
-    .bind(ship.as_deref())
+    .bind(edit.ship.as_deref())
     .bind(edit.notes.as_deref())
     .bind(id)
     .execute(pool)
@@ -134,16 +151,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_then_find_round_trips_and_normalises_names() {
+    async fn create_then_find_round_trips() {
         let (pool, user_id) = test_pool_with_user().await;
         let new_run = NewRun {
             bought_at: "2026-01-01".into(),
-            commodity: "  laranite  ".into(),
+            commodity: "Laranite".into(),
             scu: 100.0,
             buy_terminal: "ArcCorp Mining Area 141".into(),
             buy_price_scu: 10.0,
             destination: Some("Everus Harbor".into()),
-            ship: Some("hull a".into()),
+            ship: Some("Hull A".into()),
         };
         let id = create(&pool, user_id, &new_run).await.unwrap();
         let run = find(&pool, id).await.unwrap().unwrap();
@@ -248,5 +265,43 @@ mod tests {
                 ("Laranite".to_string(), "Lord Gig".to_string()),
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn defaults_follow_the_latest_sale_and_ship() {
+        let (pool, user_id) = test_pool_with_user().await;
+        assert_eq!(latest_sell_terminal(&pool).await.unwrap(), None);
+        assert_eq!(latest_ship(&pool).await.unwrap(), None);
+
+        let bought = |bought_at: &str, ship: Option<&str>| NewRun {
+            bought_at: bought_at.into(),
+            commodity: "Laranite".into(),
+            scu: 100.0,
+            buy_terminal: "ArcCorp Mining Area 141".into(),
+            buy_price_scu: 10.0,
+            destination: None,
+            ship: ship.map(Into::into),
+        };
+        let sold = |sold_at: &str, sell_terminal: &str| CloseRun {
+            sold_at: sold_at.into(),
+            sell_terminal: sell_terminal.into(),
+            sell_price_scu: 15.0,
+            scu_sold: 100.0,
+        };
+
+        let older = create(&pool, user_id, &bought("2954-01-01", Some("Hull A"))).await.unwrap();
+        let newer = create(&pool, user_id, &bought("2954-01-03", Some("C2 Hercules"))).await.unwrap();
+        // A later-bought run with no ship doesn't blank the ship default.
+        create(&pool, user_id, &bought("2954-01-04", None)).await.unwrap();
+
+        // Closed out of order: the default follows the later sale date.
+        close(&pool, newer, &sold("2954-01-05", "Everus Harbor")).await.unwrap();
+        close(&pool, older, &sold("2954-01-02", "Area18 TDD")).await.unwrap();
+
+        assert_eq!(
+            latest_sell_terminal(&pool).await.unwrap(),
+            Some("Everus Harbor".to_string())
+        );
+        assert_eq!(latest_ship(&pool).await.unwrap(), Some("C2 Hercules".to_string()));
     }
 }

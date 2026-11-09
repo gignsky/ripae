@@ -163,24 +163,6 @@ pub struct EditRun {
     pub notes: Option<String>,
 }
 
-/// Trims and title-cases a free-text commodity/ship name on save, so a
-/// later `ships` lookup table (§2) can join on it cleanly.
-pub fn normalise_name(raw: &str) -> String {
-    raw.trim()
-        .split_whitespace()
-        .map(|word| {
-            let mut chars = word.chars();
-            match chars.next() {
-                Some(first) => {
-                    first.to_uppercase().collect::<String>() + &chars.as_str().to_lowercase()
-                }
-                None => String::new(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -262,12 +244,6 @@ mod tests {
         let totals = Totals::from_runs([&open, &sold]);
         assert_eq!(totals.committed, 1000.0);
         assert_eq!(totals.realised, 500.0);
-    }
-
-    #[test]
-    fn normalise_name_trims_and_title_cases() {
-        assert_eq!(normalise_name("  laranite  "), "Laranite");
-        assert_eq!(normalise_name("hull a"), "Hull A");
     }
 
     #[test]

@@ -110,6 +110,14 @@ pub struct IndexTemplate {
     pub committed_fmt: String,
     pub realised_fmt: String,
     pub form_error: Option<String>,
+    /// Pick-lists, rendered once as `<datalist>`s that every form on the
+    /// page (including htmx-swapped edit/close rows) draws from.
+    pub commodities: Vec<String>,
+    pub terminals: Vec<String>,
+    pub ships: Vec<String>,
+    /// New-run defaults: the crew's last delivery point and last ship.
+    pub default_buy_terminal: String,
+    pub default_ship: String,
 }
 
 #[derive(Template)]
