@@ -289,3 +289,28 @@ form.inline{display:inline}
 td.who{white-space:normal}
 /* service record inside the verdict overlay reveals as one line */
 .record .stats{margin:0}
+
+/* ================= roll 16: CRT effects (MU-TH-UR 6000) ================= */
+/* Each line in a block that rasters in flickers on with hard cuts and a phosphor overdrive,
+   staggered by ripae.js (scanIn sets animation-delay); a pre wipes down a row at a time. */
+.scan{animation:scan-on .32s linear both}
+pre.scan{animation:scan-on .32s linear both,scan-wipe .32s steps(6,end) both}
+@keyframes scan-on{
+  0%{opacity:0}
+  8%{opacity:1;text-shadow:0 0 3px #d8ffdc,0 0 14px rgba(125,255,138,.8),0 0 28px rgba(125,255,138,.45)}
+  18%{opacity:.1}
+  30%{opacity:1;text-shadow:0 0 3px #d8ffdc,0 0 14px rgba(125,255,138,.7)}
+  42%{opacity:.45}
+  54%,100%{opacity:1}
+}
+@keyframes scan-wipe{from{clip-path:inset(0 0 100% 0)}to{clip-path:inset(0)}}
+/* the glass hums: scanlines breathe irregularly, a refresh band rolls down, and now and then the sync slips */
+body::after{animation:hum 5.3s steps(1,end) infinite;box-shadow:inset 0 0 9rem rgba(0,0,0,.6)}
+@keyframes hum{0%{opacity:1}11%{opacity:.86}13%{opacity:1}47%{opacity:.93}49%{opacity:1}71%{opacity:.8}72%{opacity:.97}74%{opacity:1}}
+body::before{content:"";position:fixed;left:0;right:0;top:0;height:22vh;pointer-events:none;z-index:49;
+  background:linear-gradient(180deg,rgba(125,255,138,0),rgba(125,255,138,.035) 70%,rgba(125,255,138,.07) 96%,rgba(125,255,138,0));
+  animation:roll 8s linear infinite;will-change:transform}
+@keyframes roll{from{transform:translateY(-25vh)}to{transform:translateY(105vh)}}
+.screen{animation:vsync 11s steps(1,end) infinite}
+@keyframes vsync{0%{transform:none}63%{transform:translateX(1px) skewX(-.4deg)}63.6%{transform:translateX(-2px)}64.2%{transform:none}91%{transform:translateY(1px)}91.4%{transform:none}}
+@media (prefers-reduced-motion:reduce){.scan,pre.scan{animation:none}body::after,.screen{animation:none}body::before{display:none}}
