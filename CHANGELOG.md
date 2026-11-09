@@ -3,6 +3,16 @@
 Every notable change to Ripae. Newest first. This file is also what the
 version badge in the corner of the site shows.
 
+## 0.2.3
+
+### Added
+- **Price from your balance.** The trade terminal doesn't always show what
+  you actually paid or got. *Price as → From balance* takes your aUEC
+  balance before and after the trade and books the difference as the lot
+  price, on both the buy and the sale. A purchase that raises the balance
+  (or a sale that lowers it) is refused as probably swapped. The balances
+  aren't kept; the load stores the lot price as usual.
+
 ## 0.2.2
 
 ### Fixed
