@@ -56,7 +56,7 @@
         </div>
       </header>
 
-      <main id="{{ shell.screen }}" class="view">
+      <main id="view-{{ shell.screen }}" class="view">
         {% block content %}{% endblock %}
       </main>
 
@@ -91,7 +91,7 @@
           {% if let Some(err) = shell.gate_error %}<p class="gate-err neg" id="g-err">{{ err }}</p>{% endif %}
           <p class="any"><button class="cmd boxed" type="submit" id="g-enter">Enter</button></p>
         </form>
-        <p class="ras any" id="g-known"{% if shell.splash_mode == "gate" %} hidden{% endif %}>Welcome back, <b id="g-who">{{ shell.splash_who }}</b> · Press any key<span class="cursor"></span> · <form method="post" action="/logout" class="inline"><button class="cmd" type="submit" id="g-logout">Log out</button></form></p>
+        <div class="ras any" id="g-known"{% if shell.splash_mode == "gate" %} hidden{% endif %}>Welcome back, <b id="g-who">{{ shell.splash_who }}</b> · Press any key<span class="cursor"></span> · <form method="post" action="/logout" class="inline"><button class="cmd" type="submit" id="g-logout">Log out</button></form></div>
       </div>
     </div>
 
