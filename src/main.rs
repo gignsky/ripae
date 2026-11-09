@@ -80,6 +80,10 @@ async fn main() -> anyhow::Result<()> {
             get(stowage::close_form).post(stowage::close_load),
         )
         .route("/loads/{id}/delete", get(stowage::load_delete_confirm))
+        .route(
+            "/loads/{id}/write-off",
+            get(stowage::load_write_off_confirm).post(stowage::load_write_off),
+        )
         .route("/crates/{id}/condition", post(stowage::crate_condition))
         .route("/crates/{id}/where", post(stowage::crate_where))
         .nest_service("/static", ServeDir::new("static"))

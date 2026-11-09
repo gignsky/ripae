@@ -12,6 +12,7 @@
     <td><span class="actions">
       <button class="cmd" type="button" hx-get="/loads/{{ l.id }}/edit" hx-target="#load-{{ l.id }}" hx-swap="outerHTML">Edit</button>
       <button class="cmd" type="button" hx-get="/loads/{{ l.id }}/close" hx-target="#load-{{ l.id }}" hx-swap="outerHTML">Close</button>
+      <button class="cmd warn" type="button" title="Mark every crate still open lost: for glitched or vanished cargo you won't sell" hx-get="/loads/{{ l.id }}/write-off" hx-target="#overlay" hx-swap="innerHTML">Write off</button>
       {% if let crate::stowage::views::LoadExtra::Manifest = l.extra %}
       <button class="cmd on" type="button" hx-get="/loads/{{ l.id }}" hx-target="#load-{{ l.id }}" hx-swap="outerHTML">Crates</button>
       {% else %}
@@ -94,6 +95,9 @@
         </label>
         {% endfor %}
       </div>
+      {% if l.glitched_count > 0 %}
+      <label class="ras inline-label write-off"><input type="checkbox" name="write_off_glitched" value="1"{% if f.write_off_glitched %} checked{% endif %} /> Write off glitched crates I'm not selling -- they're marked lost instead of staying open on the voyage</label>
+      {% endif %}
       <div class="ras sub-h"><span>Split profit</span><span>Percent of profit, or a flat fee. Remainder stays with the seller. Nothing is owed on a loss.</span></div>
       <div class="shares">
         {% for s in f.shares %}

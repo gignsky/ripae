@@ -419,6 +419,9 @@ pub struct CloseFormView {
     pub balance_after: String,
     /// Which crate ids are ticked.
     pub selected: Vec<i64>,
+    /// Write off (mark lost) the glitched crates left unsold, so they don't
+    /// hold the load open. On by default.
+    pub write_off_glitched: bool,
     pub shares: Vec<ShareFormRow>,
     pub users: Vec<User>,
     /// Who sold it (user id): the load's buyer by default, any crew member
@@ -603,7 +606,7 @@ pub struct LedgerRow {
 pub fn ledger_rows(voyages: &[Voyage]) -> Vec<LedgerRow> {
     let mut sold: Vec<(&Voyage, &Load)> = voyages
         .iter()
-        .flat_map(|v| v.loads.iter().filter(|l| l.is_sold()).map(move |l| (v, l)))
+        .flat_map(|v| v.loads.iter().filter(|l| l.was_sold()).map(move |l| (v, l)))
         .collect();
     sold.sort_by(|a, b| b.1.sold_at.cmp(&a.1.sold_at).then(b.1.id.cmp(&a.1.id)));
     sold.into_iter()
