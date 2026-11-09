@@ -294,6 +294,10 @@ pub struct Voyage {
     pub id: i64,
     pub logged_by: i64,
     pub logged_by_name: String,
+    /// Who typed it in (the bookkeeper), shown as "Logged by"; `logged_by`
+    /// is whose run it is.
+    pub entered_by: i64,
+    pub entered_by_name: String,
     pub ship: Option<Ship>,
     pub bought_at: String,
     pub notes: Option<String>,
@@ -338,6 +342,26 @@ impl Load {
 
     pub fn is_sold(&self) -> bool {
         !self.is_open()
+    }
+
+    /// Closed by an actual sale -- as opposed to every crate lost or written
+    /// off, which also takes a load out of Open Cargo but earns nothing and
+    /// has no place in the ledger.
+    pub fn was_sold(&self) -> bool {
+        self.sold_at.is_some()
+    }
+
+    /// Marks every glitched crate not in `keep` lost, as a close does when
+    /// the unsold glitched cargo is written off. Returns their ids.
+    pub fn write_off_glitched(&mut self, keep: &[i64]) -> Vec<i64> {
+        let mut ids = Vec::new();
+        for c in &mut self.crates {
+            if c.condition == Condition::Glitched && !keep.contains(&c.id) {
+                c.condition = Condition::Lost;
+                ids.push(c.id);
+            }
+        }
+        ids
     }
 
     /// `"n aboard <owner>'s <ship> · m stored at <station> · k awaiting pickup"`,
@@ -525,6 +549,9 @@ pub struct Sale {
     pub sold: Vec<Crate>,
     /// The crates that stay open on the voyage (lost ones stay here too).
     pub kept: Vec<Crate>,
+    /// Glitched crates this close writes off as lost (see
+    /// `Load::write_off_glitched`); they sit in `kept`, already lost.
+    pub written_off: Vec<i64>,
     pub scu_sold: u32,
     pub sell_price_scu: f64,
     pub sell_price_lot: f64,
@@ -611,6 +638,7 @@ pub fn settle(load: &Load, input: &SaleInput) -> Result<Sale, String> {
     Ok(Sale {
         sold,
         kept,
+        written_off: Vec::new(),
         scu_sold,
         sell_price_scu,
         sell_price_lot,
@@ -682,7 +710,8 @@ pub struct Standing {
     pub board_credit: f64,
     /// What the member actually holds: kept as seller + shares received.
     pub cash: f64,
-    /// Voyages with every load sold, where this member sold at least one.
+    /// Voyages with every load sold, where this member took part in one
+    /// (sold it or held a share).
     pub runs_closed: usize,
     pub loads_sold: usize,
     pub scu_hauled: u32,
@@ -740,20 +769,26 @@ pub fn cash(user_id: i64, voyages: &[Voyage]) -> f64 {
 /// Every sold load across the ledger; `submitted_by` on a sold row is the
 /// member who closed it (the seller).
 fn sold_loads(voyages: &[Voyage]) -> impl Iterator<Item = &Load> {
-    voyages.iter().flat_map(|v| v.loads.iter()).filter(|l| l.is_sold())
+    voyages.iter().flat_map(|v| v.loads.iter()).filter(|l| l.was_sold())
 }
 
-/// Voyages with every load sold where `user_id` sold at least one of them.
+/// A member took part in a sold load when they sold it or hold a share of
+/// its profit -- a crewmate on 50 % flew the route as much as the seller.
+fn took_part(l: &Load, user_id: i64) -> bool {
+    l.submitted_by == user_id || l.shares.iter().any(|s| s.to_user == user_id)
+}
+
+/// Voyages with every load sold where `user_id` took part in at least one of them.
 fn runs_closed_by(user_id: i64, voyages: &[Voyage]) -> usize {
     voyages
         .iter()
-        .filter(|v| v.is_fully_sold() && v.loads.iter().any(|l| l.submitted_by == user_id))
+        .filter(|v| v.is_fully_sold() && v.loads.iter().any(|l| took_part(l, user_id)))
         .count()
 }
 
 fn best_route_of(user_id: i64, voyages: &[Voyage]) -> Option<Route> {
     sold_loads(voyages)
-        .filter(|l| l.submitted_by == user_id && !l.buy_terminal.is_empty())
+        .filter(|l| took_part(l, user_id) && !l.buy_terminal.is_empty())
         .filter_map(|l| {
             Some(Route {
                 from: l.buy_terminal.clone(),
@@ -769,7 +804,7 @@ pub fn standings(users: &[User], voyages: &[Voyage], key: SortKey) -> Vec<Standi
     let mut rows: Vec<Standing> = users
         .iter()
         .map(|u| {
-            let mine: Vec<&Load> = sold_loads(voyages).filter(|l| l.submitted_by == u.id).collect();
+            let mine: Vec<&Load> = sold_loads(voyages).filter(|l| took_part(l, u.id)).collect();
             Standing {
                 user_id: u.id,
                 handle: u.handle.clone(),
@@ -828,7 +863,7 @@ pub struct ServiceRecord {
 }
 
 pub fn service_record(user: &User, users: &[User], voyages: &[Voyage]) -> ServiceRecord {
-    let mine: Vec<&Load> = sold_loads(voyages).filter(|l| l.submitted_by == user.id).collect();
+    let mine: Vec<&Load> = sold_loads(voyages).filter(|l| took_part(l, user.id)).collect();
     let trade = |pick: fn(f64, f64) -> bool| -> Option<(String, f64)> {
         let mut best: Option<(String, f64)> = None;
         for l in &mine {
@@ -894,7 +929,8 @@ pub fn service_record(user: &User, users: &[User], voyages: &[Voyage]) -> Servic
         favourite_route,
         crates_lost: lost.len(),
         scu_lost: lost.iter().map(|c| c.size_scu).sum(),
-        shares_paid_out: mine.iter().map(|l| l.shares_paid()).sum(),
+        // only the seller pays shares out
+        shares_paid_out: mine.iter().filter(|l| l.submitted_by == user.id).map(|l| l.shares_paid()).sum(),
         shares_received: sold_loads(voyages)
             .flat_map(|l| l.shares.iter())
             .filter(|s| s.to_user == user.id)
@@ -1338,6 +1374,8 @@ pub(crate) mod fixtures {
             id,
             logged_by: owner,
             logged_by_name: name_of(owner),
+            entered_by: owner,
+            entered_by_name: name_of(owner),
             ship,
             bought_at: "2026-11-08".into(),
             notes: None,
@@ -1714,9 +1752,10 @@ mod tests {
         assert_eq!(rows.len(), 3);
         assert_eq!(rows[0].display_name, "JT");
         assert_eq!(rows[0].board_credit, 800.0); // 640 sold + 160 share
-        assert_eq!(rows[0].runs_closed, 0);
-        assert_eq!(rows[0].loads_sold, 1);
-        assert_eq!(rows[0].scu_hauled, 32);
+        // JT's share of Gig's load 1 counts: Gig's closed run, that load, its 64 SCU
+        assert_eq!(rows[0].runs_closed, 1);
+        assert_eq!(rows[0].loads_sold, 2);
+        assert_eq!(rows[0].scu_hauled, 96);
         assert_eq!(rows[1].display_name, "Lord Gig");
         assert_eq!(rows[1].board_credit, 496.0);
         assert_eq!(rows[1].runs_closed, 1);
@@ -1728,10 +1767,31 @@ mod tests {
         let pct: f64 = rows.iter().map(|r| r.pct_of_org).sum();
         assert!(approx(pct, 100.0));
 
+        // one closed run each: the tie goes to net profit
         let by_runs = standings(&users(), &vs, SortKey::Runs);
-        assert_eq!(by_runs[0].display_name, "Lord Gig");
+        assert_eq!((by_runs[0].display_name.as_str(), by_runs[0].runs_closed), ("JT", 1));
+        assert_eq!((by_runs[1].display_name.as_str(), by_runs[1].runs_closed), ("Lord Gig", 1));
         let by_scu = standings(&users(), &vs, SortKey::Scu);
-        assert_eq!(by_scu[0].display_name, "Lord Gig");
+        assert_eq!(by_scu.iter().map(|r| r.scu_hauled).collect::<Vec<_>>(), vec![96, 72, 0]);
+    }
+
+    #[test]
+    fn a_half_share_member_who_never_sold_still_flew_the_runs() {
+        // JT sells both routes; Gig holds 50 % of each
+        let vs = vec![
+            voyage(1, JT, None, vec![sold_load(1, JT, 10.0, 20.0, &[32], vec![(GIG, None, ShareKind::Pct, 50.0)])]),
+            voyage(2, JT, None, vec![sold_load(2, JT, 10.0, 15.0, &[8], vec![(GIG, None, ShareKind::Pct, 50.0)])]),
+        ];
+        let rows = standings(&users(), &vs, SortKey::Profit);
+        let gig = rows.iter().find(|r| r.user_id == GIG).unwrap();
+        assert_eq!((gig.runs_closed, gig.loads_sold, gig.scu_hauled), (2, 2, 40));
+        assert_eq!(gig.board_credit, 180.0); // half of 320 + half of 40
+        assert!(gig.best_route.is_some());
+        let rec = service_record(&users()[0], &users(), &vs);
+        assert_eq!(rec.user.id, GIG);
+        assert_eq!((rec.runs_closed, rec.loads_sold), (2, 2));
+        assert_eq!(rec.shares_paid_out, 0.0, "Gig paid nobody; JT paid Gig");
+        assert_eq!(rec.shares_received, 180.0);
     }
 
     #[test]

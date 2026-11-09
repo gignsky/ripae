@@ -12,6 +12,7 @@
     <td><span class="actions">
       <button class="cmd" type="button" hx-get="/loads/{{ l.id }}/edit" hx-target="#load-{{ l.id }}" hx-swap="outerHTML">Edit</button>
       <button class="cmd" type="button" hx-get="/loads/{{ l.id }}/close" hx-target="#load-{{ l.id }}" hx-swap="outerHTML">Close</button>
+      <button class="cmd warn" type="button" title="Mark every crate still open lost: for glitched or vanished cargo you won't sell" hx-get="/loads/{{ l.id }}/write-off" hx-target="#overlay" hx-swap="innerHTML">Write off</button>
       {% if let crate::stowage::views::LoadExtra::Manifest = l.extra %}
       <button class="cmd on" type="button" hx-get="/loads/{{ l.id }}" hx-target="#load-{{ l.id }}" hx-swap="outerHTML">Crates</button>
       {% else %}
@@ -76,11 +77,14 @@
         <label>Sell terminal<input name="sell_terminal" type="text" list="pick-terminals" data-pick autocomplete="off" value="{{ f.sell_terminal }}" required /></label>
         <label>SCU sold · from crates<input name="scu_sold" type="number" readonly data-scu-sold /></label>
         <label>Price as<select name="sell_mode" class="mode" data-mode>
-          <option value="scu"{% if f.price_mode != "lot" %} selected{% endif %}>Per SCU</option>
+          <option value="scu"{% if f.price_mode != "lot" && f.price_mode != "balance" %} selected{% endif %}>Per SCU</option>
           <option value="lot"{% if f.price_mode == "lot" %} selected{% endif %}>Per lot</option>
+          <option value="balance"{% if f.price_mode == "balance" %} selected{% endif %}>From balance</option>
         </select></label>
-        <label class="price-scu"{% if f.price_mode == "lot" %} hidden{% endif %}>Sell price / SCU<input name="sell_scu" type="number" step="any" min="0" placeholder="0.00" value="{{ f.sell_scu }}" /><span class="calc">revenue = —</span></label>
+        <label class="price-scu"{% if f.price_mode == "lot" || f.price_mode == "balance" %} hidden{% endif %}>Sell price / SCU<input name="sell_scu" type="number" step="any" min="0" placeholder="0.00" value="{{ f.sell_scu }}" /><span class="calc">revenue = —</span></label>
         <label class="price-lot"{% if f.price_mode != "lot" %} hidden{% endif %}>Received for the lot<input name="sell_lot" type="number" step="any" min="0" placeholder="0" value="{{ f.sell_lot }}" /><span class="calc">per SCU = —</span></label>
+        <label class="price-bal"{% if f.price_mode != "balance" %} hidden{% endif %}>Balance before<input name="sell_bal_before" type="number" step="any" min="0" placeholder="aUEC before selling" value="{{ f.balance_before }}" title="Your wallet before the sale, when the terminal's price can't be trusted" /></label>
+        <label class="price-bal"{% if f.price_mode != "balance" %} hidden{% endif %}>Balance after<input name="sell_bal_after" type="number" step="any" min="0" placeholder="aUEC after selling" value="{{ f.balance_after }}" /><span class="calc">revenue = —</span></label>
       </div>
       <div class="ras sub-h"><span>Crates sold · <button class="cmd sel-all" type="button">All sound crates</button> <button class="cmd sel-none" type="button">None</button></span><span>Tap to toggle sold / kept. Kept crates stay open on the voyage. Glitched crates must be picked by hand; lost ones can't be sold.</span></div>
       <div class="ras crate-grid sell-crates">
@@ -91,6 +95,9 @@
         </label>
         {% endfor %}
       </div>
+      {% if l.glitched_count > 0 %}
+      <label class="ras inline-label write-off"><input type="checkbox" name="write_off_glitched" value="1"{% if f.write_off_glitched %} checked{% endif %} /> Write off glitched crates I'm not selling -- they're marked lost instead of staying open on the voyage</label>
+      {% endif %}
       <div class="ras sub-h"><span>Split profit</span><span>Percent of profit, or a flat fee. Remainder stays with the seller. Nothing is owed on a loss.</span></div>
       <div class="shares">
         {% for s in f.shares %}

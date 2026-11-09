@@ -2,6 +2,7 @@ mod auth;
 mod changelog;
 mod config;
 mod db;
+mod live;
 mod lookups;
 mod stowage;
 mod templates;
@@ -20,6 +21,8 @@ use config::Config;
 #[derive(Clone)]
 pub struct AppState {
     pub pool: sqlx::SqlitePool,
+    /// Write announcements for `GET /live` (see `live`).
+    pub live: tokio::sync::broadcast::Sender<String>,
 }
 
 #[tokio::main]
@@ -40,7 +43,7 @@ async fn main() -> anyhow::Result<()> {
         .with_secure(config.cookie_secure)
         .with_signed(session_key);
 
-    let state = AppState { pool };
+    let state = AppState { pool, live: live::channel() };
 
     let app = Router::new()
         .route("/healthz", get(healthz))
@@ -48,6 +51,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/login", get(auth::login_form).post(auth::login))
         .route("/logout", post(auth::logout))
         .route("/", get(stowage::index))
+        .route("/live", get(live::events))
+        .route("/live/panels", get(stowage::live_panels))
         .route("/board", get(stowage::board))
         .route("/crew/{id}", get(stowage::crew))
         .route("/voyages", post(stowage::create_voyage))
@@ -75,9 +80,14 @@ async fn main() -> anyhow::Result<()> {
             get(stowage::close_form).post(stowage::close_load),
         )
         .route("/loads/{id}/delete", get(stowage::load_delete_confirm))
+        .route(
+            "/loads/{id}/write-off",
+            get(stowage::load_write_off_confirm).post(stowage::load_write_off),
+        )
         .route("/crates/{id}/condition", post(stowage::crate_condition))
         .route("/crates/{id}/where", post(stowage::crate_where))
         .nest_service("/static", ServeDir::new("static"))
+        .layer(axum::middleware::from_fn_with_state(state.clone(), live::announce))
         .layer(session_layer)
         .with_state(state);
 
