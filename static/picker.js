@@ -1,7 +1,8 @@
 // Fuzzy pick-list for inputs marked `data-pick list="<datalist id>"`.
 // The datalist is the source of truth (and the no-JS fallback); this swaps
-// the native suggestions for a fuzzy-ranked dropdown and refuses values
-// that aren't on the list. The server re-checks every name regardless.
+// the native suggestions for a fuzzy-ranked dropdown. Since 0.2 the lists
+// are suggestions, not gates: a name on the list snaps to the list's
+// spelling, any other name is kept as typed (the server does the same).
 (function () {
   "use strict";
 
@@ -98,14 +99,9 @@
     }
 
     function validate() {
-      var v = input.value.trim();
-      if (v && !canonical(v)) {
-        input.setCustomValidity("Pick an entry from the list.");
-        input.setAttribute("aria-invalid", "true");
-      } else {
-        input.setCustomValidity("");
-        input.removeAttribute("aria-invalid");
-      }
+      // names are suggestions, not gates (ruled 8 Nov 2026): nothing to refuse
+      input.setCustomValidity("");
+      input.removeAttribute("aria-invalid");
     }
 
     function setActive(i) {

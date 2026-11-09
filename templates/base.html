@@ -2,9 +2,12 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Ripae</title>
-    <link rel="stylesheet" href="/static/pico.min.css" />
+    <link rel="stylesheet" href="/static/ripae.css" />
+    {# Fragments mix <tbody> rows with out-of-band <section>s; template
+       parsing is the only way the HTML parser keeps both. #}
+    <meta name="htmx-config" content='{"useTemplateFragments": true}' />
     <script src="/static/htmx.min.js"></script>
     <script>
       // Validation failures come back as 422 with the form re-rendered and an
@@ -16,9 +19,6 @@
           e.detail.isError = false;
         }
       });
-    </script>
-    <script src="/static/picker.js" defer></script>
-    <script>
       // Date fields marked data-today are pre-filled with the server's UTC
       // date; swap in the viewer's local date unless they've changed it.
       document.addEventListener("htmx:load", function (e) {
@@ -33,65 +33,74 @@
         });
       });
     </script>
-    <style>
-      .pick { position: relative; }
-      .pick-menu {
-        position: absolute; left: 0; right: 0; z-index: 10;
-        margin: 0; padding: 0; list-style: none;
-        max-height: 16rem; overflow-y: auto;
-        background: var(--pico-background-color);
-        border: 1px solid var(--pico-muted-border-color);
-        border-radius: var(--pico-border-radius);
-        box-shadow: var(--pico-box-shadow);
-      }
-      .pick-menu[hidden] { display: none; }
-      .pick-menu li { list-style: none; margin: 0; padding: 0.4rem 0.75rem; cursor: pointer; }
-      .pick-menu li[aria-selected="true"] {
-        background: var(--pico-primary-background);
-        color: var(--pico-primary-inverse);
-      }
-      .pick-menu mark { padding: 0; background: none; color: inherit; font-weight: bold; }
-      .version-badge {
-        position: fixed; right: 0.75rem; bottom: 0.5rem; z-index: 20;
-        font-size: 0.75rem; color: var(--pico-muted-color);
-        text-decoration: none;
-      }
-      .version-badge:hover { color: var(--pico-primary); text-decoration: underline; }
-      [hidden] { display: none !important; }
-      .cmd { background: none; border: 0; padding: 0; margin: 0 .3rem 0 0; font: inherit; color: var(--pico-primary); cursor: pointer; text-decoration: underline; width: auto; display: inline; }
-      .cmd.danger { color: var(--pico-del-color); }
-      .cmd::before { content: "["; } .cmd::after { content: "]"; }
-      .status { border: 1px solid currentColor; padding: 0 .3rem; font-size: .75rem; text-transform: uppercase; }
-      .crate { display: inline-grid; border: 1px solid currentColor; padding: .2rem .4rem; margin: .2rem; width: auto; font: inherit; }
-      .crate.lost { text-decoration: line-through; color: var(--pico-del-color); }
-      .crate.glitched { border-style: dashed; }
-      .crate-tile { display: inline-grid; margin: .2rem; }
-      .neg { color: var(--pico-del-color); }
-    </style>
+    <script src="/static/picker.js" defer></script>
+    <script src="/static/ripae.js" defer></script>
   </head>
   <body>
-    <main class="container">
-      <header>
-        <h1>⚓ Ripae <small>LEDGER TERMINAL · NISC CARGO</small></h1>
-        {% block rail %}{% endblock %}
+    <div class="screen">
+      <header class="rail" id="rail">
+        <h1>RIPAE <small>LEDGER TERMINAL · NISC CARGO</small></h1>
+        <div class="meta">
+          {% if let Some(name) = shell.crew_name %}
+          <span>CREW MEMBER: <b>{{ name|upper }}</b></span>
+          <span>STARDATE <b>{{ shell.stardate }}</b></span>
+          <nav class="views" aria-label="Screens">
+            <a class="cmd{% if shell.screen == "ledger" %} on{% endif %}" href="/" data-go="ledger">Ledger</a>
+            <a class="cmd{% if shell.screen == "board" %} on{% endif %}" href="/board" data-go="board">Leaderboard</a>
+          </nav>
+          <form method="post" action="/logout"><button class="cmd" type="submit">Log out</button></form>
+          {% else %}
+          <span>STARDATE <b>{{ shell.stardate }}</b></span>
+          <span>IDENTIFY TO PROCEED</span>
+          {% endif %}
+        </div>
       </header>
-      {% block content %}{% endblock %}
-      <div id="overlay"></div>
-    </main>
 
-    {# Works as a plain link without JS; with htmx it opens the dialog. #}
-    <a class="version-badge" href="/changelog" title="What's new"
-       hx-get="/changelog" hx-target="#changelog-body" hx-swap="innerHTML"
-       onclick="document.getElementById('changelog').showModal()"
-       >v{{ crate::changelog::VERSION }}</a>
+      <main id="{{ shell.screen }}" class="view">
+        {% block content %}{% endblock %}
+      </main>
+
+      <footer class="foot">
+        <span>Interface ready for inquiry<span class="cursor"></span></span>
+        <span class="actions">
+          <button class="cmd" type="button" id="replay-splash">Close</button>
+          <a href="/changelog" title="What's new" hx-get="/changelog" hx-target="#changelog-body" hx-swap="innerHTML"
+             onclick="document.getElementById('changelog').showModal()">v{{ crate::changelog::VERSION }} · what's new</a>
+        </span>
+      </footer>
+    </div>
+
+    {# The splash is the login. data-mode: gate (no session), welcome (first
+       paint of a session), hidden (already welcomed; [CLOSE] replays it). #}
+    <div id="splash" class="overlay" aria-label="Splash" data-mode="{{ shell.splash_mode }}" data-who="{{ shell.splash_who }}" data-boot="{{ shell.boot_json }}" data-error="{% if shell.gate_error.is_some() %}1{% else %}0{% endif %}">
+      <div class="splash-in">
+        <pre class="ascii ras" aria-hidden="true">██████╗ ██╗██████╗  █████╗ ███████╗
+██╔══██╗██║██╔══██╗██╔══██╗██╔════╝
+██████╔╝██║██████╔╝███████║█████╗
+██╔══██╗██║██╔═══╝ ██╔══██║██╔══╝
+██║  ██║██║██║     ██║  ██║███████╗
+╚═╝  ╚═╝╚═╝╚═╝     ╚═╝  ╚═╝╚══════╝</pre>
+        <p class="ras tag">LEDGER TERMINAL · NISC CARGO</p>
+        <pre class="ras boot" id="boot"></pre>
+        <form class="ras gate" id="gate" method="post" action="/login"{% if shell.splash_mode != "gate" %} hidden{% endif %}>
+          <p class="tag gate-line">Speak, friend, and enter<span class="cursor"></span></p>
+          <div class="fields">
+            <label>Handle<input id="g-handle" name="handle" type="text" autocomplete="username" placeholder="lordgig" required /></label>
+            <label>Password<input id="g-pass" name="password" type="password" autocomplete="current-password" placeholder="••••••••" required /></label>
+          </div>
+          {% if let Some(err) = shell.gate_error %}<p class="gate-err neg" id="g-err">{{ err }}</p>{% endif %}
+          <p class="any"><button class="cmd boxed" type="submit" id="g-enter">Enter</button></p>
+        </form>
+        <p class="ras any" id="g-known"{% if shell.splash_mode == "gate" %} hidden{% endif %}>Welcome back, <b id="g-who">{{ shell.splash_who }}</b> · Press any key<span class="cursor"></span> · <form method="post" action="/logout" class="inline"><button class="cmd" type="submit" id="g-logout">Log out</button></form></p>
+      </div>
+    </div>
+
+    <div id="blackout" aria-hidden="true"></div>
+    <div id="overlay" class="overlay" hidden></div>
+
     <dialog id="changelog" onclick="if (event.target === this) this.close()">
-      <article>
-        <header>
-          <button aria-label="Close" rel="prev" onclick="this.closest('dialog').close()"></button>
-          <strong>Ripae v{{ crate::changelog::VERSION }}</strong>
-        </header>
-        <div id="changelog-body"></div>
-      </article>
+      <header><strong>Ripae v{{ crate::changelog::VERSION }}</strong><button class="cmd" type="button" onclick="this.closest('dialog').close()">Close</button></header>
+      <div id="changelog-body"></div>
     </dialog>
   </body>
 </html>

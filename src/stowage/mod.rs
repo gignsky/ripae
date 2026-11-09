@@ -17,12 +17,13 @@ use axum::extract::{Path, Query, State};
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Redirect, Response};
 use serde::Deserialize;
+use tower_sessions::Session;
 
-use crate::auth::CurrentUser;
+use crate::auth::{take_splash_mode, CurrentUser, SplashMode};
 use crate::lookups::{self, Kind};
 use crate::templates::{
     render_str, BoardTemplate, ConfirmFrag, ConfirmLine, IndexTemplate, LedgerFrag, LoadFrag,
-    OpenCargoFrag, PlansFrag, SaleFrag, TotalsFrag, VerdictFrag, VoyageHeadFrag,
+    OpenCargoFrag, PlansFrag, SaleFrag, Shell, TotalsFrag, VerdictFrag, VoyageHeadFrag,
 };
 use crate::AppState;
 use model::{
@@ -78,6 +79,52 @@ impl FormData {
 fn opt(s: &str) -> Option<String> {
     let t = s.trim();
     (!t.is_empty()).then(|| t.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// the shell: rail + splash data for every page
+// ---------------------------------------------------------------------------
+
+/// Boot-log lines the splash types out. Open-cargo figures only once
+/// identified; the roster count is harmless either way.
+pub async fn shell(
+    state: &AppState,
+    user: Option<&CurrentUser>,
+    screen: &'static str,
+    mode: SplashMode,
+    gate_error: Option<&'static str>,
+) -> Shell {
+    let crew: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+        .fetch_one(&state.pool)
+        .await
+        .unwrap_or(0);
+    let cargo = match user {
+        Some(_) => match repo::list_voyages(&state.pool).await {
+            Ok(v) => {
+                let t = Totals::from_voyages(&v);
+                format!("{} LOAD{} · {} SCU", t.open_loads, if t.open_loads == 1 { "" } else { "S" }, t.open_scu)
+            }
+            Err(_) => "UNREADABLE".to_string(),
+        },
+        None => "RESTRICTED".to_string(),
+    };
+    let lines = [
+        format!("RIPAE INTERFACE v{} ........ ONLINE", crate::changelog::VERSION),
+        "LEDGER STORE ................... MOUNTED".to_string(),
+        format!("CREW ROSTER .................... {crew} ABOARD"),
+        format!("OPEN CARGO ..................... {cargo}"),
+        "PRICE FEED ..................... MANUAL (UEX IMPORT 0.4)".to_string(),
+        String::new(),
+    ];
+    Shell {
+        crew_name: user.map(|u| u.display_name.clone()),
+        screen,
+        stardate: today().to_string(),
+        splash_mode: mode.as_str(),
+        splash_who: user.map(|u| u.display_name.to_uppercase()).unwrap_or_default(),
+        boot_json: serde_json::to_string(&lines).unwrap_or_else(|_| "[]".into()),
+        gate_error,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -336,11 +383,12 @@ fn load_form_from(form: &FormData, i: usize) -> LoadFormView {
 // GET /  -- the ledger terminal
 // ---------------------------------------------------------------------------
 
-pub async fn index(State(state): State<AppState>, user: CurrentUser) -> Response {
-    render_index(&state, &user, None).await
+pub async fn index(State(state): State<AppState>, user: CurrentUser, session: Session) -> Response {
+    let mode = take_splash_mode(&session, &user).await;
+    render_index(&state, &user, mode, None).await
 }
 
-async fn render_index(state: &AppState, user: &CurrentUser, new_run: Option<NewRunFormView>) -> Response {
+async fn render_index(state: &AppState, user: &CurrentUser, mode: SplashMode, new_run: Option<NewRunFormView>) -> Response {
     let l = match ledger(state).await {
         Ok(l) => l,
         Err(r) => return r,
@@ -368,8 +416,7 @@ async fn render_index(state: &AppState, user: &CurrentUser, new_run: Option<NewR
     html(
         status,
         render_str(&IndexTemplate {
-            display_name: user.display_name.clone(),
-            handle: user.handle.clone(),
+            shell: shell(state, Some(user), "ledger", mode, None).await,
             totals_html: totals_frag(&l, false),
             open_cargo_html: open_cargo_frag(&l, false),
             plans_html: plans_frag(&l, false),
@@ -378,7 +425,6 @@ async fn render_index(state: &AppState, user: &CurrentUser, new_run: Option<NewR
             commodities: list(Kind::Commodity).await,
             terminals: list(Kind::Terminal).await,
             ships: list(Kind::Ship).await,
-            today: today().to_string(),
         }),
     )
 }
@@ -405,13 +451,13 @@ pub async fn create_voyage(State(state): State<AppState>, user: CurrentUser, bod
             if let Err(e) = repo::create_voyage(&state.pool, user.id, &voyage, &loads).await {
                 tracing::error!(error = %e, "failed to create voyage");
                 view.error = Some("Could not save that run.".into());
-                return render_index(&state, &user, Some(view)).await;
+                return render_index(&state, &user, SplashMode::Hidden, Some(view)).await;
             }
             Redirect::to("/").into_response()
         }
         Err(e) => {
             view.error = Some(e);
-            render_index(&state, &user, Some(view)).await
+            render_index(&state, &user, SplashMode::Hidden, Some(view)).await
         }
     }
 }
@@ -542,11 +588,6 @@ pub async fn voyage_merge_chooser(State(state): State<AppState>, _user: CurrentU
         })
         .collect();
     head_with(v, VoyageExtra::Merge(choices), StatusCode::OK)
-}
-
-#[derive(Deserialize)]
-pub struct MoveForm {
-    pub voyage_id: String,
 }
 
 /// `POST /voyages/:id/move` with `voyage_id` -- every open load of the
@@ -1069,8 +1110,7 @@ pub async fn board(State(state): State<AppState>, user: CurrentUser, Query(q): Q
     html(
         StatusCode::OK,
         render_str(&BoardTemplate {
-            display_name: user.display_name.clone(),
-            handle: user.handle.clone(),
+            shell: shell(&state, Some(&user), "board", SplashMode::Hidden, None).await,
             board: board_view(&l.users, &l.voyages, SortKey::parse(&q.sort)),
         }),
     )

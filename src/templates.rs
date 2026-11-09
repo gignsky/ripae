@@ -45,18 +45,38 @@ pub fn fmt_auec(amount: f64) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// the shell every page shares: rail, footer, splash
+// ---------------------------------------------------------------------------
+
+/// What `base.html` needs: who's aboard, which screen is lit, and how the
+/// splash should play (`gate` / `welcome` / `hidden`).
+pub struct Shell {
+    pub crew_name: Option<String>,
+    /// `ledger` / `board` / `login` / `changelog` -- the `<main>` id.
+    pub screen: &'static str,
+    pub stardate: String,
+    pub splash_mode: &'static str,
+    /// Display name, upper-cased, for `SESSION VALID · <name>`.
+    pub splash_who: String,
+    /// JSON array of boot-log lines the splash types out.
+    pub boot_json: String,
+    pub gate_error: Option<&'static str>,
+}
+
+// ---------------------------------------------------------------------------
 // pages
 // ---------------------------------------------------------------------------
 
 #[derive(Template)]
 #[template(path = "login.html")]
 pub struct LoginTemplate {
-    pub error: Option<&'static str>,
+    pub shell: Shell,
 }
 
 #[derive(Template)]
 #[template(path = "changelog.html")]
 pub struct ChangelogTemplate {
+    pub shell: Shell,
     /// Rendered from our own CHANGELOG.md, so it's trusted HTML.
     pub body: &'static str,
 }
@@ -66,8 +86,7 @@ pub struct ChangelogTemplate {
 #[derive(Template)]
 #[template(path = "index.html")]
 pub struct IndexTemplate {
-    pub display_name: String,
-    pub handle: String,
+    pub shell: Shell,
     pub totals_html: String,
     pub open_cargo_html: String,
     pub plans_html: String,
@@ -76,14 +95,12 @@ pub struct IndexTemplate {
     pub commodities: Vec<String>,
     pub terminals: Vec<String>,
     pub ships: Vec<String>,
-    pub today: String,
 }
 
 #[derive(Template)]
 #[template(path = "board.html")]
 pub struct BoardTemplate {
-    pub display_name: String,
-    pub handle: String,
+    pub shell: Shell,
     pub board: BoardView,
 }
 

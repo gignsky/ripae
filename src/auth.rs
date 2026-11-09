@@ -3,7 +3,7 @@ use argon2::Argon2;
 use axum::extract::{FromRequestParts, State};
 use axum::http::request::Parts;
 use axum::http::StatusCode;
-use axum::response::{Html, IntoResponse, Redirect, Response};
+use axum::response::{IntoResponse, Redirect, Response};
 use axum::Form;
 use serde::Deserialize;
 use sqlx::SqlitePool;
@@ -13,12 +13,45 @@ use crate::templates::{render, LoginTemplate};
 use crate::AppState;
 
 const SESSION_USER_ID: &str = "user_id";
+/// Set once the welcome splash has played for this session, so it doesn't
+/// replay on every page load (RIPAE-ROLL7.md §3, 7.5).
+const SESSION_SPLASH_SEEN: &str = "splash_seen";
 
 #[derive(Debug, Clone)]
 pub struct CurrentUser {
     pub id: i64,
     pub handle: String,
     pub display_name: String,
+}
+
+/// How the splash plays: the gate (no session), the welcome line (first
+/// paint of a session), or not at all (already welcomed; `[CLOSE]` replays
+/// it in welcome mode).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SplashMode {
+    Gate,
+    Welcome,
+    Hidden,
+}
+
+impl SplashMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SplashMode::Gate => "gate",
+            SplashMode::Welcome => "welcome",
+            SplashMode::Hidden => "hidden",
+        }
+    }
+}
+
+/// Without a session the splash is the login; with one it welcomes the
+/// member back once, then stays out of the way.
+pub fn splash_mode(user: Option<&CurrentUser>, already_welcomed: bool) -> SplashMode {
+    match user {
+        None => SplashMode::Gate,
+        Some(_) if already_welcomed => SplashMode::Hidden,
+        Some(_) => SplashMode::Welcome,
+    }
 }
 
 /// Extracting `CurrentUser` on a route enforces login: a missing or stale
@@ -33,18 +66,27 @@ impl FromRequestParts<AppState> for CurrentUser {
         let session = Session::from_request_parts(parts, state)
             .await
             .map_err(|_| Redirect::to("/login"))?;
-        let user_id: Option<i64> = session
-            .get(SESSION_USER_ID)
+        current_user(state, &session)
             .await
-            .map_err(|_| Redirect::to("/login"))?;
-        let user_id = user_id.ok_or_else(|| Redirect::to("/login"))?;
-
-        find_user_by_id(&state.pool, user_id)
-            .await
-            .ok()
-            .flatten()
             .ok_or_else(|| Redirect::to("/login"))
     }
+}
+
+/// The member behind a session, if any.
+pub async fn current_user(state: &AppState, session: &Session) -> Option<CurrentUser> {
+    let user_id: i64 = session.get(SESSION_USER_ID).await.ok().flatten()?;
+    find_user_by_id(&state.pool, user_id).await.ok().flatten()
+}
+
+/// Reads the welcome flag and sets it, so the first `/` of a session plays
+/// the welcome splash and later ones don't.
+pub async fn take_splash_mode(session: &Session, user: &CurrentUser) -> SplashMode {
+    let seen: bool = session.get(SESSION_SPLASH_SEEN).await.ok().flatten().unwrap_or(false);
+    let mode = splash_mode(Some(user), seen);
+    if mode == SplashMode::Welcome {
+        let _ = session.insert(SESSION_SPLASH_SEEN, true).await;
+    }
+    mode
 }
 
 async fn find_user_by_id(pool: &SqlitePool, id: i64) -> anyhow::Result<Option<CurrentUser>> {
@@ -61,8 +103,18 @@ async fn find_user_by_id(pool: &SqlitePool, id: i64) -> anyhow::Result<Option<Cu
     }))
 }
 
-pub async fn login_form() -> Html<String> {
-    render(&LoginTemplate { error: None })
+async fn gate(state: &AppState, error: Option<&'static str>, status: StatusCode) -> Response {
+    let shell = crate::stowage::shell(state, None, "login", SplashMode::Gate, error).await;
+    (status, render(&LoginTemplate { shell })).into_response()
+}
+
+/// `GET /login` -- the splash with the gate. A member with a valid session
+/// goes straight to the ledger.
+pub async fn login_form(State(state): State<AppState>, session: Session) -> Response {
+    if current_user(&state, &session).await.is_some() {
+        return Redirect::to("/").into_response();
+    }
+    gate(&state, None, StatusCode::OK).await
 }
 
 #[derive(Debug, Deserialize)]
@@ -76,26 +128,28 @@ pub async fn login(
     session: Session,
     Form(form): Form<LoginForm>,
 ) -> Response {
-    match authenticate(&state.pool, &form.handle, &form.password).await {
+    match authenticate(&state.pool, form.handle.trim(), &form.password).await {
         Ok(Some(user_id)) => {
             if session.insert(SESSION_USER_ID, user_id).await.is_err() {
-                return (
+                return gate(
+                    &state,
+                    Some("Could not start a session. Try again."),
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    render(&LoginTemplate {
-                        error: Some("Could not start a session. Try again."),
-                    }),
                 )
-                    .into_response();
+                .await;
             }
+            // the gate itself was the splash: don't play the welcome as well
+            let _ = session.insert(SESSION_SPLASH_SEEN, true).await;
             Redirect::to("/").into_response()
         }
-        _ => (
-            StatusCode::UNAUTHORIZED,
-            render(&LoginTemplate {
-                error: Some("Wrong handle or password."),
-            }),
-        )
-            .into_response(),
+        _ => {
+            gate(
+                &state,
+                Some("The door does not open. Check the handle and password."),
+                StatusCode::UNAUTHORIZED,
+            )
+            .await
+        }
     }
 }
 
@@ -155,5 +209,15 @@ mod tests {
                 .unwrap(),
             None
         );
+    }
+
+    #[test]
+    fn splash_mode_is_gate_without_session_and_welcome_with_one() {
+        let gig = CurrentUser { id: 1, handle: "lordgig".into(), display_name: "Lord Gig".into() };
+        assert_eq!(splash_mode(None, false), SplashMode::Gate);
+        assert_eq!(splash_mode(None, true), SplashMode::Gate);
+        assert_eq!(splash_mode(Some(&gig), false), SplashMode::Welcome);
+        // once welcomed, the splash stays hidden until [CLOSE] replays it
+        assert_eq!(splash_mode(Some(&gig), true), SplashMode::Hidden);
     }
 }
