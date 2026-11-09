@@ -61,6 +61,10 @@ async fn main() -> anyhow::Result<()> {
             axum::routing::put(stowage::voyage_update).delete(stowage::voyage_delete),
         )
         .route("/voyages/{id}/head", get(stowage::voyage_head))
+        .route(
+            "/voyages/{id}/details",
+            get(stowage::voyage_details_form).put(stowage::voyage_details_update),
+        )
         .route("/voyages/{id}/edit", get(stowage::voyage_edit_form))
         .route("/voyages/{id}/merge", get(stowage::voyage_merge_chooser))
         .route("/voyages/{id}/move", post(stowage::voyage_move))

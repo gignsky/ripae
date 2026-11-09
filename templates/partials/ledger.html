@@ -1,6 +1,6 @@
 <div class="tbl" id="ledger"{% if oob %} hx-swap-oob="true"{% endif %}>
   <table class="cards">
-    <thead><tr><th>Commodity</th><th class="num">SCU sold</th><th>Route</th><th>Sold</th><th class="num">Sell / SCU</th><th class="num">Cost</th><th class="num">Profit</th><th class="num">Margin</th><th>Shares</th><th>By</th></tr></thead>
+    <thead><tr><th>Commodity</th><th class="num">SCU sold</th><th>Route</th><th>Sold</th><th class="num">Sell / SCU</th><th class="num">Cost</th><th class="num">Profit</th><th class="num">Margin</th><th>Shares</th><th>By</th><th>Cmd</th></tr></thead>
     <tbody>
       {% for r in rows %}
       <tr class="ras">
@@ -14,9 +14,10 @@
         <td class="num {% if r.load.profit_neg %}neg{% else %}pos{% endif %}">{{ r.load.margin_fmt }}</td>
         <td class="who">{% for s in r.load.shares %}→ {{ s.to_name }} {{ s.paid_fmt }}{% if s.forfeited %} (to {{ s.paid_to_name }}){% endif %}{% if !loop.last %} · {% endif %}{% else %}—{% endfor %}</td>
         <td class="who">{{ r.load.by_upper }}</td>
+        <td><button class="cmd" type="button" title="Ship, date, notes and who logged it -- works on closed voyages too" hx-get="/voyages/{{ r.voyage_id }}/details" hx-target="#overlay" hx-swap="innerHTML">Voyage {{ r.voyage_id }}</button></td>
       </tr>
       {% else %}
-      <tr class="ras"><td colspan="10"><em>No sales yet.</em></td></tr>
+      <tr class="ras"><td colspan="11"><em>No sales yet.</em></td></tr>
       {% endfor %}
     </tbody>
   </table>

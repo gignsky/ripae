@@ -193,6 +193,15 @@ pub struct ConfirmFrag {
 }
 
 #[derive(Template)]
+#[template(path = "partials/voyage_overlay.html")]
+pub struct VoyageOverlayFrag {
+    pub id: i64,
+    /// `"2 loads · all sold"` and the like.
+    pub summary: String,
+    pub f: crate::stowage::views::VoyageFormView,
+}
+
+#[derive(Template)]
 #[template(path = "partials/confirm_write_off.html")]
 pub struct ConfirmWriteOffFrag {
     pub id: i64,
