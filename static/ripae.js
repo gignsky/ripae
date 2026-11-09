@@ -158,6 +158,8 @@
     if (fields.dataset.wired) return; fields.dataset.wired = "1";
     var mode = fields.querySelector("[data-mode]"), scuL = fields.querySelector(".price-scu"), lotL = fields.querySelector(".price-lot");
     var scu = fields.querySelector("[data-scu]"), p = fields.querySelector("[name=price_scu]"), l = fields.querySelector("[name=price_lot]");
+    var balL = Array.prototype.slice.call(fields.querySelectorAll(".price-bal"));
+    var bb = fields.querySelector("[name=balance_before]"), ba = fields.querySelector("[name=balance_after]");
     var boxes = fields.querySelector("[data-boxes]"), bcalc = fields.querySelector(".boxes-calc");
     if (!mode || !p || !l) return; // the close form has its own wiring
     var scuTouched = !!(scu && scu.value);
@@ -172,13 +174,21 @@
     }
     function recalcPrice() {
       var q = parseFloat(scu && scu.value) || 0;
-      if (scuL) scuL.hidden = mode.value !== "scu"; if (lotL) lotL.hidden = mode.value === "scu";
+      if (scuL) scuL.hidden = mode.value !== "scu"; if (lotL) lotL.hidden = mode.value !== "lot";
+      balL.forEach(function (b) { b.hidden = mode.value !== "balance"; });
       if (mode.value === "scu" && scuL) { var per = parseFloat(p.value) || 0; scuL.querySelector(".calc").innerHTML = q && per ? "lot = <b>" + fmt(per * q) + "</b> · " + q + " SCU" : "lot = —"; }
+      else if (mode.value === "balance" && bb && ba) {
+        var bc = balL[balL.length - 1].querySelector(".calc");
+        if (bb.value === "" || ba.value === "") { bc.textContent = "cost = —"; bc.classList.remove("bad"); return; }
+        var cost = (parseFloat(bb.value) || 0) - (parseFloat(ba.value) || 0);
+        bc.innerHTML = cost < 0 ? "balance went up -- swapped?" : "cost = <b>" + fmt0(cost) + "</b>" + (q ? " · per SCU = <b>" + fmt(cost / q) + "</b>" : "");
+        bc.classList.toggle("bad", cost < 0);
+      }
       else if (lotL) { var tot = parseFloat(l.value) || 0; lotL.querySelector(".calc").innerHTML = q && tot ? "per SCU = <b>" + fmt(tot / q) + "</b> · " + q + " SCU" : "per SCU = —"; }
     }
     if (scu) scu.addEventListener("input", function () { scuTouched = true; recalcBoxes(); recalcPrice(); });
     if (boxes) boxes.addEventListener("input", function () { recalcBoxes(); recalcPrice(); });
-    [mode, p, l].forEach(function (el) { if (el) { el.addEventListener("input", recalcPrice); el.addEventListener("change", recalcPrice); } });
+    [mode, p, l, bb, ba].forEach(function (el) { if (el) { el.addEventListener("input", recalcPrice); el.addEventListener("change", recalcPrice); } });
     var status = fields.querySelector("[data-status]"), storedAt = fields.querySelector("[name=stored_at]");
     if (status && storedAt) {
       var sync = function () { var lab = storedAt.closest("label"); if (lab) lab.hidden = status.value !== "stored"; };
@@ -246,6 +256,7 @@
     var buyScu = parseFloat(String(form.dataset.buyScu || "0").replace(/,/g, "")) || 0;
     var scuSold = form.querySelector("[data-scu-sold]"), mode = form.querySelector("[data-mode]");
     var scuL = form.querySelector(".price-scu"), lotL = form.querySelector(".price-lot");
+    var balL = Array.prototype.slice.call(form.querySelectorAll(".price-bal"));
     var sharesBox = form.querySelector(".shares"), shareTpl = form.querySelector(".share-tpl");
     function crates() { return Array.prototype.slice.call(form.querySelectorAll("label.crate")); }
     function paintCrate(c) {
@@ -260,6 +271,11 @@
     function revenue() {
       var q = syncScu();
       if (mode.value === "scu") { var per = parseFloat(form.querySelector("[name=sell_scu]").value) || 0; return { q: q, rev: per * q, per: per }; }
+      if (mode.value === "balance") {
+        var b = form.querySelector("[name=sell_bal_before]").value, a = form.querySelector("[name=sell_bal_after]").value;
+        var d = b === "" || a === "" ? 0 : (parseFloat(a) || 0) - (parseFloat(b) || 0);
+        return { q: q, rev: d, per: q ? d / q : 0 };
+      }
       var tot = parseFloat(form.querySelector("[name=sell_lot]").value) || 0; return { q: q, rev: tot, per: q ? tot / q : 0 };
     }
     function shares(profit) {
@@ -271,9 +287,15 @@
       return paid;
     }
     function recalc() {
-      if (scuL) scuL.hidden = mode.value !== "scu"; if (lotL) lotL.hidden = mode.value === "scu";
+      if (scuL) scuL.hidden = mode.value !== "scu"; if (lotL) lotL.hidden = mode.value !== "lot";
+      balL.forEach(function (b) { b.hidden = mode.value !== "balance"; });
       var r = revenue();
       if (mode.value === "scu") scuL.querySelector(".calc").innerHTML = r.rev ? "revenue = <b>" + fmt0(r.rev) + "</b> · " + r.q + " SCU" : "revenue = —";
+      else if (mode.value === "balance") {
+        var bc = balL[balL.length - 1].querySelector(".calc");
+        bc.innerHTML = r.rev < 0 ? "balance went down -- swapped?" : r.rev ? "revenue = <b>" + fmt0(r.rev) + "</b>" + (r.q ? " · per SCU = <b>" + fmt(r.per) + "</b>" : "") : "revenue = —";
+        bc.classList.toggle("bad", r.rev < 0);
+      }
       else lotL.querySelector(".calc").innerHTML = r.rev ? "per SCU = <b>" + fmt(r.per) + "</b> · " + r.q + " SCU" : "per SCU = —";
       var profit = r.rev - buyScu * r.q; var paid = shares(profit);
       var pv = form.querySelector(".preview");
