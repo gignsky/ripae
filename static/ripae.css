@@ -262,7 +262,6 @@ td .per-scu{display:block;font-size:.72rem;color:var(--fg-dim)}
 /* ================= additions for the real app ================= */
 [hidden]{display:none!important}
 /* rail: nav links are commands too */
-.rail .meta form{display:inline;margin:0}
 a.cmd{text-decoration:none}
 /* panel bodies hidden by [HIDE] */
 .panel.min>:not(header){display:none}

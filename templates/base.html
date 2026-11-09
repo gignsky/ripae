@@ -48,7 +48,7 @@
             <a class="cmd{% if shell.screen == "ledger" %} on{% endif %}" href="/" data-go="ledger">Ledger</a>
             <a class="cmd{% if shell.screen == "board" %} on{% endif %}" href="/board" data-go="board">Leaderboard</a>
           </nav>
-          <form method="post" action="/logout"><button class="cmd" type="submit">Log out</button></form>
+          <button class="cmd" type="button" id="replay-splash">Close</button>
           {% else %}
           <span>STARDATE <b>{{ shell.stardate }}</b></span>
           <span>IDENTIFY TO PROCEED</span>
@@ -63,7 +63,6 @@
       <footer class="foot">
         <span>Interface ready for inquiry<span class="cursor"></span></span>
         <span class="actions">
-          <button class="cmd" type="button" id="replay-splash">Close</button>
           <a href="/changelog" title="What's new" hx-get="/changelog" hx-target="#changelog-body" hx-swap="innerHTML"
              onclick="document.getElementById('changelog').showModal()">v{{ crate::changelog::VERSION }} · what's new</a>
         </span>

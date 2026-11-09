@@ -3,6 +3,14 @@
 Every notable change to Ripae. Newest first. This file is also what the
 version badge in the corner of the site shows.
 
+## 0.3.1
+
+### Changed
+- **Log out is tucked away.** The top bar's *Log out* is now *Close*,
+  moved up from the bottom of the screen. It brings the splash back up,
+  and the splash is now the only place to log out, so a stray click on
+  the top bar no longer signs you out.
+
 ## 0.3.0
 
 ### Added
