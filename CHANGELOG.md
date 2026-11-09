@@ -3,6 +3,22 @@
 Every notable change to Ripae. Newest first. This file is also what the
 version badge in the corner of the site shows.
 
+## 0.2.1
+
+### Added
+- **Ironclad, Ironclad Assault and Centaurus** in the ships list. They
+  were missing from the sc-cargo.space scrape, so the new-run Ship picker
+  didn't offer them.
+- **Every Stanton trade terminal** in the locations list: all the L-point
+  stations, gateways (Nyx, Pyro, Terra), mining facilities, research
+  outposts, salvage yards and distribution centres UEX lists as live.
+
+### Fixed
+- **Custom locations stick.** Typing a station that isn't on the list and
+  pressing Enter or Tab no longer swaps it for the nearest fuzzy match.
+  The list only pre-highlights a name that actually contains what you
+  typed; arrow down to pick a fuzzy match on purpose.
+
 ## 0.2.0 "Stowage"
 
 ### Added
