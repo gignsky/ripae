@@ -42,9 +42,7 @@
       <span class="crates-h"><span>Edit {{ v.label }}</span><span>Ship and date apply to every load</span></span>
       {% if let Some(error) = f.error %}<p class="neg form-error">{{ error }}</p>{% endif %}
       <div class="fields">
-        <label>Bought on<input type="date" name="bought_at" value="{{ f.bought_at }}" required /></label>
-        <label>Ship<input type="text" name="ship" list="pick-ships" data-pick autocomplete="off" value="{{ f.ship }}" placeholder="no hull yet" /></label>
-        <label>Notes<input type="text" name="notes" value="{{ f.notes }}" /></label>
+        {% include "partials/voyage_fields.html" %}
       </div>
       <span class="actions">
         <button class="cmd boxed" type="submit">Save</button>

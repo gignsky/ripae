@@ -193,6 +193,28 @@ pub struct ConfirmFrag {
 }
 
 #[derive(Template)]
+#[template(path = "partials/voyage_overlay.html")]
+pub struct VoyageOverlayFrag {
+    pub id: i64,
+    /// `"2 loads · all sold"` and the like.
+    pub summary: String,
+    pub f: crate::stowage::views::VoyageFormView,
+}
+
+#[derive(Template)]
+#[template(path = "partials/confirm_write_off.html")]
+pub struct ConfirmWriteOffFrag {
+    pub id: i64,
+    pub voyage_id: i64,
+    pub commodity_upper: String,
+    pub by_upper: String,
+    /// Crates still in play (sound or glitched), their SCU and buy cost.
+    pub crates: usize,
+    pub scu: u32,
+    pub cost_fmt: String,
+}
+
+#[derive(Template)]
 #[template(path = "partials/verdict.html")]
 pub struct VerdictFrag {
     pub r: RecordView,

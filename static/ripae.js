@@ -101,8 +101,12 @@
   if (overlay) {
     document.addEventListener("htmx:afterSwap", function (e) {
       if (e.detail.target !== overlay) return;
+      // a form in an overlay answers a success with nothing: close it
+      if (!overlay.innerHTML.trim()) { if (!overlay.hidden) flick(function () { overlay.hidden = true; }); return; }
       var parts = Array.prototype.slice.call(overlay.querySelectorAll(".ras"));
       parts.forEach(function (p) { p.classList.remove("lit"); });
+      // already up (a form re-rendered with its error): repaint without the blackout
+      if (!overlay.hidden) { raster(parts, true); return; }
       flick(function () { overlay.hidden = false; raster(parts, true); });
     });
     overlay.addEventListener("click", function (e) {
@@ -158,6 +162,8 @@
     if (fields.dataset.wired) return; fields.dataset.wired = "1";
     var mode = fields.querySelector("[data-mode]"), scuL = fields.querySelector(".price-scu"), lotL = fields.querySelector(".price-lot");
     var scu = fields.querySelector("[data-scu]"), p = fields.querySelector("[name=price_scu]"), l = fields.querySelector("[name=price_lot]");
+    var balL = Array.prototype.slice.call(fields.querySelectorAll(".price-bal"));
+    var bb = fields.querySelector("[name=balance_before]"), ba = fields.querySelector("[name=balance_after]");
     var boxes = fields.querySelector("[data-boxes]"), bcalc = fields.querySelector(".boxes-calc");
     if (!mode || !p || !l) return; // the close form has its own wiring
     var scuTouched = !!(scu && scu.value);
@@ -172,13 +178,21 @@
     }
     function recalcPrice() {
       var q = parseFloat(scu && scu.value) || 0;
-      if (scuL) scuL.hidden = mode.value !== "scu"; if (lotL) lotL.hidden = mode.value === "scu";
+      if (scuL) scuL.hidden = mode.value !== "scu"; if (lotL) lotL.hidden = mode.value !== "lot";
+      balL.forEach(function (b) { b.hidden = mode.value !== "balance"; });
       if (mode.value === "scu" && scuL) { var per = parseFloat(p.value) || 0; scuL.querySelector(".calc").innerHTML = q && per ? "lot = <b>" + fmt(per * q) + "</b> · " + q + " SCU" : "lot = —"; }
+      else if (mode.value === "balance" && bb && ba) {
+        var bc = balL[balL.length - 1].querySelector(".calc");
+        if (bb.value === "" || ba.value === "") { bc.textContent = "cost = —"; bc.classList.remove("bad"); return; }
+        var cost = (parseFloat(bb.value) || 0) - (parseFloat(ba.value) || 0);
+        bc.innerHTML = cost < 0 ? "balance went up -- swapped?" : "cost = <b>" + fmt0(cost) + "</b>" + (q ? " · per SCU = <b>" + fmt(cost / q) + "</b>" : "");
+        bc.classList.toggle("bad", cost < 0);
+      }
       else if (lotL) { var tot = parseFloat(l.value) || 0; lotL.querySelector(".calc").innerHTML = q && tot ? "per SCU = <b>" + fmt(tot / q) + "</b> · " + q + " SCU" : "per SCU = —"; }
     }
     if (scu) scu.addEventListener("input", function () { scuTouched = true; recalcBoxes(); recalcPrice(); });
     if (boxes) boxes.addEventListener("input", function () { recalcBoxes(); recalcPrice(); });
-    [mode, p, l].forEach(function (el) { if (el) { el.addEventListener("input", recalcPrice); el.addEventListener("change", recalcPrice); } });
+    [mode, p, l, bb, ba].forEach(function (el) { if (el) { el.addEventListener("input", recalcPrice); el.addEventListener("change", recalcPrice); } });
     var status = fields.querySelector("[data-status]"), storedAt = fields.querySelector("[name=stored_at]");
     if (status && storedAt) {
       var sync = function () { var lab = storedAt.closest("label"); if (lab) lab.hidden = status.value !== "stored"; };
@@ -246,6 +260,7 @@
     var buyScu = parseFloat(String(form.dataset.buyScu || "0").replace(/,/g, "")) || 0;
     var scuSold = form.querySelector("[data-scu-sold]"), mode = form.querySelector("[data-mode]");
     var scuL = form.querySelector(".price-scu"), lotL = form.querySelector(".price-lot");
+    var balL = Array.prototype.slice.call(form.querySelectorAll(".price-bal"));
     var sharesBox = form.querySelector(".shares"), shareTpl = form.querySelector(".share-tpl");
     function crates() { return Array.prototype.slice.call(form.querySelectorAll("label.crate")); }
     function paintCrate(c) {
@@ -260,6 +275,11 @@
     function revenue() {
       var q = syncScu();
       if (mode.value === "scu") { var per = parseFloat(form.querySelector("[name=sell_scu]").value) || 0; return { q: q, rev: per * q, per: per }; }
+      if (mode.value === "balance") {
+        var b = form.querySelector("[name=sell_bal_before]").value, a = form.querySelector("[name=sell_bal_after]").value;
+        var d = b === "" || a === "" ? 0 : (parseFloat(a) || 0) - (parseFloat(b) || 0);
+        return { q: q, rev: d, per: q ? d / q : 0 };
+      }
       var tot = parseFloat(form.querySelector("[name=sell_lot]").value) || 0; return { q: q, rev: tot, per: q ? tot / q : 0 };
     }
     function shares(profit) {
@@ -271,9 +291,15 @@
       return paid;
     }
     function recalc() {
-      if (scuL) scuL.hidden = mode.value !== "scu"; if (lotL) lotL.hidden = mode.value === "scu";
+      if (scuL) scuL.hidden = mode.value !== "scu"; if (lotL) lotL.hidden = mode.value !== "lot";
+      balL.forEach(function (b) { b.hidden = mode.value !== "balance"; });
       var r = revenue();
       if (mode.value === "scu") scuL.querySelector(".calc").innerHTML = r.rev ? "revenue = <b>" + fmt0(r.rev) + "</b> · " + r.q + " SCU" : "revenue = —";
+      else if (mode.value === "balance") {
+        var bc = balL[balL.length - 1].querySelector(".calc");
+        bc.innerHTML = r.rev < 0 ? "balance went down -- swapped?" : r.rev ? "revenue = <b>" + fmt0(r.rev) + "</b>" + (r.q ? " · per SCU = <b>" + fmt(r.per) + "</b>" : "") : "revenue = —";
+        bc.classList.toggle("bad", r.rev < 0);
+      }
       else lotL.querySelector(".calc").innerHTML = r.rev ? "per SCU = <b>" + fmt(r.per) + "</b> · " + r.q + " SCU" : "per SCU = —";
       var profit = r.rev - buyScu * r.q; var paid = shares(profit);
       var pv = form.querySelector(".preview");
@@ -299,6 +325,76 @@
     if (root.matches && root.matches("form.close-form")) wireClose(root);
     root.querySelectorAll("form.close-form").forEach(wireClose);
   });
+
+  /* ---- live updates: another crew member's change refreshes the ledger panels in place ----
+          src/live.rs announces every write on GET /live; this tab tags its own requests so it can
+          skip its own announcements. Rows with an open form or crate manifest are kept as they are;
+          rows whose text didn't change stay lit, so only what changed paints in. ---- */
+  var TAB = Math.random().toString(36).slice(2) + Date.now().toString(36);
+  document.addEventListener("htmx:configRequest", function (e) { e.detail.headers["X-Ripae-Tab"] = TAB; });
+  if (document.getElementById("open-cargo") && window.EventSource) {
+    var inflight = 0, pending = false, fetching = false, last = {};
+    document.addEventListener("htmx:beforeRequest", function () { inflight++; });
+    document.addEventListener("htmx:afterRequest", function () { inflight = Math.max(0, inflight - 1); if (!inflight && pending) refresh(); });
+    var norm = function (el) { return el.textContent.replace(/\s+/g, " ").trim(); };
+    var busy = function (el) { return !!el.querySelector("form, tr.manifest"); };
+    function footNote(msg) {
+      var f = document.querySelector(".foot > span:first-child");
+      if (f) f.innerHTML = '<span class="err">' + msg + "</span>";
+    }
+    function merge(old, neu) {
+      // keep anything being worked on; note what someone else closed or deleted under you
+      Array.prototype.forEach.call(old.querySelectorAll("tbody[id]"), function (o) {
+        if (!busy(o)) return;
+        var n = neu.querySelector("#" + o.id);
+        if (n) n.replaceWith(o);
+        else footNote("A row you had open was changed by another crew member");
+      });
+      // unchanged lines don't repaint
+      var seen = {};
+      Array.prototype.forEach.call(old.querySelectorAll(".ras, .rs"), function (o) { var k = norm(o); seen[k] = (seen[k] || 0) + 1; });
+      Array.prototype.forEach.call(neu.querySelectorAll(".ras, .rs"), function (n) {
+        var k = norm(n); if (seen[k] && !n.classList.contains("lit")) { seen[k]--; n.classList.add("lit"); }
+      });
+      if (old.classList.contains("lit")) neu.classList.add("lit");
+      old.replaceWith(neu);
+      htmx.process(neu);
+      document.dispatchEvent(new CustomEvent("htmx:load", { detail: { elt: neu } }));
+    }
+    function refresh() {
+      var ov = document.getElementById("overlay");
+      // don't pull rows out from under a request in flight or behind an open overlay
+      if (inflight || fetching || (ov && !ov.hidden)) { pending = true; return; }
+      pending = false; fetching = true;
+      fetch("/live/panels", { headers: { "X-Ripae-Tab": TAB }, credentials: "same-origin" })
+        .then(function (r) { if (!r.ok) throw new Error(r.status); return r.text(); })
+        .then(function (text) {
+          var tpl = document.createElement("template"); tpl.innerHTML = text;
+          // compare with the markup the server sent last time: the live DOM carries lit classes,
+          // card labels and the like, and an attribute-only change (a note) has no text to compare
+          Array.prototype.slice.call(tpl.content.children).forEach(function (neu) {
+            var old = neu.id && document.getElementById(neu.id), src = neu.outerHTML;
+            if (old && last[neu.id] !== src) { last[neu.id] = src; merge(old, neu); }
+          });
+        })
+        .catch(function () {})
+        .then(function () { fetching = false; if (pending) setTimeout(refresh, 250); });
+    }
+    // a refresh held back by an overlay runs once it's dismissed (after the flicker)
+    var retry = function () { setTimeout(function () { if (pending) refresh(); }, 1200); };
+    if (overlay) overlay.addEventListener("click", function (e) { if (e.target.closest("[data-dismiss]")) retry(); });
+    document.addEventListener("htmx:afterSwap", function (e) { if (e.detail.target === overlay && !overlay.innerHTML.trim()) retry(); });
+    document.addEventListener("keydown", function (e) { if (e.key === "Escape") retry(); });
+    var timer = null, dropped = false;
+    var es = new EventSource("/live");
+    es.addEventListener("changed", function (e) {
+      if (e.data === TAB) return;
+      clearTimeout(timer); timer = setTimeout(refresh, 200); // coalesce a burst of writes
+    });
+    // after a dropped connection, catch up on whatever was missed
+    es.addEventListener("error", function () { dropped = true; });
+    es.addEventListener("open", function () { if (dropped) { dropped = false; refresh(); } });
+  }
 
   /* ---- splash: boot log, then the gate or the welcome line ---- */
   var splash = document.getElementById("splash");

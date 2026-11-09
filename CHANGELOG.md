@@ -3,6 +3,45 @@
 Every notable change to Ripae. Newest first. This file is also what the
 version badge in the corner of the site shows.
 
+## 0.2.3
+
+### Added
+- **Live ledger.** When a crewmate logs a run, edits a load, moves crates
+  or records a sale, everyone else's ledger screen catches up on its own:
+  totals, Open Cargo, the stowage plan and the ledger refresh in place and
+  only the lines that changed paint in. A row you have open (an edit,
+  close or add-load form, or a crate manifest) is left alone until you're
+  done with it.
+- **Price from your balance.** The trade terminal doesn't always show what
+  you actually paid or got. *Price as → From balance* takes your aUEC
+  balance before and after the trade and books the difference as the lot
+  price, on both the buy and the sale. A purchase that raises the balance
+  (or a sale that lowers it) is refused as probably swapped. The balances
+  aren't kept; the load stores the lot price as usual.
+- **Write off cargo.** *Write off* on an open load marks every crate
+  still in play lost, so glitched or vanished boxes you'll never sell stop
+  sitting in Open Cargo. The load leaves Open Cargo without a sale and
+  without a blank line in the ledger.
+- **Glitched crates are written off at close.** When you close a load
+  with glitched crates you aren't selling, they're marked lost by default
+  instead of staying open on the voyage, so the load closes whole. Untick
+  the box in the close form to keep them open.
+- **Edit closed voyages.** Every ledger row has a *Voyage N* button that
+  opens the voyage's ship, date, notes and *Logged by* in an overlay, so a
+  voyage can be corrected after every load has sold and it's left Open
+  Cargo.
+
+### Fixed
+- **Profit shares count on the leaderboard.** A crew member on a share of
+  a sale's profit now gets the run, the load, its SCU and the route, not
+  just the aUEC. Before, a 50 % partner who never closed a sale showed
+  no runs and no loads. *Shares paid out* still counts only what you paid.
+- **"Logged by" names whoever typed the run in.** Keeping the books for a
+  crewmate used to mark the whole voyage as logged by them. Now the
+  voyage header shows the bookkeeper, and the loads' *By* column still
+  shows whose cargo it is. Voyages logged before this show their owner;
+  pick the right name under *Logged by* in the voyage's Edit form.
+
 ## 0.2.2
 
 ### Fixed

@@ -22,12 +22,12 @@ use tower_sessions::Session;
 use crate::auth::{take_splash_mode, CurrentUser, SplashMode};
 use crate::lookups::{self, Kind};
 use crate::templates::{
-    render_str, BoardTemplate, ConfirmFrag, ConfirmLine, IndexTemplate, LedgerFrag, LoadFrag,
+    render_str, BoardTemplate, ConfirmFrag, ConfirmLine, ConfirmWriteOffFrag, VoyageOverlayFrag, IndexTemplate, LedgerFrag, LoadFrag,
     OpenCargoFrag, PlansFrag, SaleFrag, Shell, TotalsFrag, VerdictFrag, VoyageHeadFrag,
 };
 use crate::AppState;
 use model::{
-    parse_boxes, parse_date, service_record, settle, today, Load, PriceMode, SaleInput, ShareInput,
+    parse_boxes, parse_date, service_record, settle, today, Load, PriceMode, Sale, SaleInput, ShareInput,
     ShareKind, SortKey, Totals, User, Voyage, Whereabouts,
 };
 use repo::{EditLoad, EditVoyage, MoveTarget, NewLoad, NewVoyage};
@@ -185,6 +185,18 @@ fn ledger_frag(l: &Ledger, oob: bool) -> String {
     render_str(&LedgerFrag { rows: ledger_rows(&l.voyages), oob })
 }
 
+/// `GET /live/panels` -- every live panel of the ledger screen, refetched
+/// when another crew member changes something (see `crate::live`).
+pub async fn live_panels(State(state): State<AppState>, _user: CurrentUser) -> Response {
+    match ledger(&state).await {
+        Ok(l) => html(
+            StatusCode::OK,
+            [totals_frag(&l, false), open_cargo_frag(&l, false), plans_frag(&l, false), ledger_frag(&l, false)].concat(),
+        ),
+        Err(r) => r,
+    }
+}
+
 fn head_frag(v: VoyageView, head_oob: bool) -> String {
     render_str(&VoyageHeadFrag { v, head_oob })
 }
@@ -294,6 +306,24 @@ fn parse_money(raw: &str, what: &str) -> Result<f64, String> {
     Ok(v)
 }
 
+/// The game doesn't always show the real price, so a price can be entered as
+/// the wallet balance before and after the trade. A purchase must lower the
+/// balance and a sale raise it; the other way round is almost certainly the
+/// two figures swapped, so it's refused rather than flipped.
+fn balance_delta(before: &str, after: &str, selling: bool) -> Result<f64, String> {
+    let b = parse_money(before, "Balance before")?;
+    let a = parse_money(after, "Balance after")?;
+    let delta = if selling { a - b } else { b - a };
+    if delta < 0.0 {
+        return Err(if selling {
+            "The balance went down on a sale -- are before and after swapped?".into()
+        } else {
+            "The balance went up on a purchase -- are before and after swapped?".into()
+        });
+    }
+    Ok(delta)
+}
+
 /// Everything a load line needs, validated and canonicalised. Shared by New
 /// Run, Add Load and Edit.
 struct LoadParts {
@@ -327,10 +357,13 @@ async fn parse_load_line(state: &AppState, f: &LoadFormView, boxes_editable: boo
     } else {
         (Vec::new(), existing_scu)
     };
-    let price_mode: PriceMode = f.price_mode.parse().unwrap_or(PriceMode::Scu);
-    let price = match price_mode {
-        PriceMode::Scu => parse_money(&f.price_scu, "Buy price per SCU")?,
-        PriceMode::Lot => parse_money(&f.price_lot, "Price paid for the lot")?,
+    // "balance" is a form-only mode: the drop in balance is what the lot cost.
+    let (price_mode, price) = match f.price_mode.as_str() {
+        "balance" => (PriceMode::Lot, balance_delta(&f.balance_before, &f.balance_after, false)?),
+        mode => match mode.parse().unwrap_or(PriceMode::Scu) {
+            PriceMode::Scu => (PriceMode::Scu, parse_money(&f.price_scu, "Buy price per SCU")?),
+            PriceMode::Lot => (PriceMode::Lot, parse_money(&f.price_lot, "Price paid for the lot")?),
+        },
     };
     // Free cargo (price 0) may have no buy terminal; it's stored as "".
     let buy_terminal = match opt(&f.terminal) {
@@ -371,6 +404,8 @@ fn load_form_from(form: &FormData, i: usize) -> LoadFormView {
         price_mode: form.nth("price_mode", i).into(),
         price_scu: form.nth("price_scu", i).into(),
         price_lot: form.nth("price_lot", i).into(),
+        balance_before: form.nth("balance_before", i).into(),
+        balance_after: form.nth("balance_after", i).into(),
         terminal: form.nth("terminal", i).into(),
         stop_no: form.nth("stop_no", i).into(),
         destination: form.nth("destination", i).into(),
@@ -481,7 +516,7 @@ pub async fn create_voyage(State(state): State<AppState>, user: CurrentUser, bod
     };
     match parse_new_run(&state, &view).await {
         Ok((voyage, loads)) => {
-            if let Err(e) = repo::create_voyage(&state.pool, owner, &voyage, &loads).await {
+            if let Err(e) = repo::create_voyage(&state.pool, owner, user.id, &voyage, &loads).await {
                 tracing::error!(error = %e, "failed to create voyage");
                 view.error = Some("Could not save that run.".into());
                 return render_index(&state, &user, SplashMode::Hidden, Some(view)).await;
@@ -553,6 +588,8 @@ pub async fn voyage_edit_form(State(state): State<AppState>, _user: CurrentUser,
                 bought_at: v.bought_at.clone(),
                 ship: v.ship.as_ref().map(|s| s.name.clone()).unwrap_or_default(),
                 notes: v.notes.clone().unwrap_or_default(),
+                entered_by: v.entered_by.to_string(),
+                users: repo::list_users(&state.pool).await.unwrap_or_default(),
                 error: None,
             };
             head_with(&v, VoyageExtra::Edit(form), StatusCode::OK)
@@ -561,42 +598,102 @@ pub async fn voyage_edit_form(State(state): State<AppState>, _user: CurrentUser,
     }
 }
 
-/// `PUT /voyages/:id` -- ship, date, notes. Success re-renders Open Cargo
+/// `PUT /voyages/:id` -- ship, date, notes, who logged it. Success re-renders Open Cargo
 /// (every load's where-now names the hull).
 pub async fn voyage_update(State(state): State<AppState>, _user: CurrentUser, Path(id): Path<i64>, body: String) -> Response {
     let v = match find_voyage(&state, id).await {
         Ok(v) => v,
         Err(r) => return r,
     };
-    let form = FormData::parse(&body);
+    match save_voyage_form(&state, &v, &body).await {
+        Err(view) => head_with(&v, VoyageExtra::Edit(view), StatusCode::UNPROCESSABLE_ENTITY),
+        Ok(()) => match ledger(&state).await {
+            Ok(l) => retarget(open_cargo_response(&l), "#open-cargo", "outerHTML"),
+            Err(r) => r,
+        },
+    }
+}
+
+/// Validates and saves the voyage form (ship, date, notes, who logged it);
+/// on failure hands the form back with its error to re-render.
+async fn save_voyage_form(state: &AppState, v: &Voyage, body: &str) -> Result<(), VoyageFormView> {
+    let form = FormData::parse(body);
     let mut view = VoyageFormView {
         bought_at: form.get("bought_at").into(),
         ship: form.get("ship").into(),
         notes: form.get("notes").into(),
+        entered_by: form.get("entered_by").into(),
+        users: repo::list_users(&state.pool).await.unwrap_or_default(),
         error: None,
     };
     let parsed = async {
         let bought_at = parse_date(&view.bought_at, today()).map_err(|e| format!("Bought on: {e}"))?;
-        let ship_id = pick_ship(&state, &view.ship).await?;
-        Ok::<_, String>(EditVoyage { ship_id, bought_at, notes: opt(&view.notes) })
+        let ship_id = pick_ship(state, &view.ship).await?;
+        let entered_by = pick_member(&view.entered_by, v.entered_by, &view.users, "Logged by")?;
+        Ok::<_, String>(EditVoyage { ship_id, bought_at, notes: opt(&view.notes), entered_by })
     }
     .await;
-    match parsed {
+    let edit = match parsed {
+        Ok(edit) => edit,
         Err(e) => {
             view.error = Some(e);
-            head_with(&v, VoyageExtra::Edit(view), StatusCode::UNPROCESSABLE_ENTITY)
+            return Err(view);
         }
-        Ok(edit) => {
-            if let Err(e) = repo::update_voyage(&state.pool, id, &edit).await {
-                tracing::error!(error = %e, "failed to update voyage");
-                view.error = Some("Could not save those changes.".into());
-                return head_with(&v, VoyageExtra::Edit(view), StatusCode::UNPROCESSABLE_ENTITY);
-            }
-            match ledger(&state).await {
-                Ok(l) => retarget(open_cargo_response(&l), "#open-cargo", "outerHTML"),
-                Err(r) => r,
-            }
+    };
+    if let Err(e) = repo::update_voyage(&state.pool, v.id, &edit).await {
+        tracing::error!(error = %e, "failed to update voyage");
+        view.error = Some("Could not save those changes.".into());
+        return Err(view);
+    }
+    Ok(())
+}
+
+fn voyage_overlay(v: &Voyage, f: VoyageFormView, status: StatusCode) -> Response {
+    let n = v.loads.len();
+    let summary = format!(
+        "{n} load{} · {}",
+        if n == 1 { "" } else { "s" },
+        if v.is_fully_sold() { "closed" } else { "still open" }
+    );
+    html(status, render_str(&VoyageOverlayFrag { id: v.id, summary, f }))
+}
+
+/// `GET /voyages/:id/details` -- the voyage form in an overlay, for any
+/// voyage: the ledger's way in to one that's already closed.
+pub async fn voyage_details_form(State(state): State<AppState>, _user: CurrentUser, Path(id): Path<i64>) -> Response {
+    match find_voyage(&state, id).await {
+        Ok(v) => {
+            let f = VoyageFormView {
+                bought_at: v.bought_at.clone(),
+                ship: v.ship.as_ref().map(|s| s.name.clone()).unwrap_or_default(),
+                notes: v.notes.clone().unwrap_or_default(),
+                entered_by: v.entered_by.to_string(),
+                users: repo::list_users(&state.pool).await.unwrap_or_default(),
+                error: None,
+            };
+            voyage_overlay(&v, f, StatusCode::OK)
         }
+        Err(r) => r,
+    }
+}
+
+/// `PUT /voyages/:id/details` -- saves the overlay form. Success empties
+/// the overlay (which closes it) and refreshes every panel the voyage
+/// shows up in.
+pub async fn voyage_details_update(State(state): State<AppState>, _user: CurrentUser, Path(id): Path<i64>, body: String) -> Response {
+    let v = match find_voyage(&state, id).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    match save_voyage_form(&state, &v, &body).await {
+        Err(view) => voyage_overlay(&v, view, StatusCode::UNPROCESSABLE_ENTITY),
+        Ok(()) => match ledger(&state).await {
+            Ok(l) => html(
+                StatusCode::OK,
+                format!("{}{}{}", open_cargo_frag(&l, true), oob_common(&l), ledger_frag(&l, true)),
+            ),
+            Err(r) => r,
+        },
     }
 }
 
@@ -729,7 +826,7 @@ fn confirm_for(kind: &'static str, id: i64, v: &Voyage, loads: &[&Load]) -> Conf
             _ => loads.first().map(|l| l.commodity.to_uppercase()).unwrap_or_default(),
         },
         ship_name: v.ship.as_ref().map(|s| s.name.clone()).unwrap_or_else(|| "—".into()),
-        logged_by_upper: v.logged_by_name.to_uppercase(),
+        logged_by_upper: v.entered_by_name.to_uppercase(),
         lines: loads
             .iter()
             .map(|l| ConfirmLine {
@@ -799,6 +896,52 @@ pub async fn load_delete(State(state): State<AppState>, _user: CurrentUser, Path
             StatusCode::OK,
             format!("{}{}{}", open_cargo_frag(&l, false), oob_common(&l), ledger_frag(&l, true)),
         ),
+        Err(r) => r,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// write off, with confirmation
+// ---------------------------------------------------------------------------
+
+/// `GET /loads/:id/write-off` -- the confirmation overlay.
+pub async fn load_write_off_confirm(State(state): State<AppState>, _user: CurrentUser, Path(id): Path<i64>) -> Response {
+    let load = match find_load(&state, id).await {
+        Ok(l) => l,
+        Err(r) => return r,
+    };
+    let live: Vec<_> = load.crates.iter().filter(|c| c.is_live()).collect();
+    let scu: u32 = live.iter().map(|c| c.size_scu).sum();
+    html(
+        StatusCode::OK,
+        render_str(&ConfirmWriteOffFrag {
+            id,
+            voyage_id: load.voyage_id,
+            commodity_upper: load.commodity.to_uppercase(),
+            by_upper: load.submitted_by_name.to_uppercase(),
+            crates: live.len(),
+            scu,
+            cost_fmt: crate::templates::fmt_auec(scu as f64 * load.buy_price_scu),
+        }),
+    )
+}
+
+/// `POST /loads/:id/write-off` -- every crate still in play is lost; the
+/// load leaves Open Cargo without a sale.
+pub async fn load_write_off(State(state): State<AppState>, _user: CurrentUser, Path(id): Path<i64>) -> Response {
+    let load = match find_load(&state, id).await {
+        Ok(l) => l,
+        Err(r) => return r,
+    };
+    if !load.is_open() {
+        return (StatusCode::CONFLICT, "That load is already closed.").into_response();
+    }
+    if let Err(e) = repo::write_off_load(&state.pool, id).await {
+        tracing::error!(error = %e, "failed to write off load");
+        return (StatusCode::INTERNAL_SERVER_ERROR, "could not write off load").into_response();
+    }
+    match ledger(&state).await {
+        Ok(l) => html(StatusCode::OK, format!("{}{}", open_cargo_frag(&l, false), oob_common(&l))),
         Err(r) => r,
     }
 }
@@ -985,7 +1128,10 @@ fn blank_close(load: &Load, users: Vec<User>) -> CloseFormView {
         price_mode: "scu".into(),
         sell_scu: String::new(),
         sell_lot: String::new(),
+        balance_before: String::new(),
+        balance_after: String::new(),
         selected: load.crates.iter().filter(|c| c.default_selected()).map(|c| c.id).collect(),
+        write_off_glitched: true,
         shares: Vec::new(),
         users,
         sold_by: load.submitted_by.to_string(),
@@ -1014,7 +1160,10 @@ fn close_form_from(form: &FormData, users: Vec<User>) -> CloseFormView {
         price_mode: form.get("sell_mode").into(),
         sell_scu: form.get("sell_scu").into(),
         sell_lot: form.get("sell_lot").into(),
+        balance_before: form.get("sell_bal_before").into(),
+        balance_after: form.get("sell_bal_after").into(),
         selected: form.all("crate").iter().filter_map(|v| v.parse().ok()).collect(),
+        write_off_glitched: form.get("write_off_glitched") == "1",
         shares: (0..n)
             .map(|i| ShareFormRow {
                 to_user: form.nth("share_to", i).into(),
@@ -1054,10 +1203,12 @@ pub async fn close_load(State(state): State<AppState>, user: CurrentUser, Path(i
         let sold_at = parse_date(&f.sold_at, today()).map_err(|e| format!("Sold on: {e}"))?;
         let terminal = opt(&f.sell_terminal).ok_or("Sell terminal is required.")?;
         let sell_terminal = pick(&state, Kind::Terminal, &terminal).await;
-        let price_mode: PriceMode = f.price_mode.parse().unwrap_or(PriceMode::Scu);
-        let price = match price_mode {
-            PriceMode::Scu => parse_money(&f.sell_scu, "Sell price per SCU")?,
-            PriceMode::Lot => parse_money(&f.sell_lot, "Amount received for the lot")?,
+        let (price_mode, price) = match f.price_mode.as_str() {
+            "balance" => (PriceMode::Lot, balance_delta(&f.balance_before, &f.balance_after, true)?),
+            mode => match mode.parse().unwrap_or(PriceMode::Scu) {
+                PriceMode::Scu => (PriceMode::Scu, parse_money(&f.sell_scu, "Sell price per SCU")?),
+                PriceMode::Lot => (PriceMode::Lot, parse_money(&f.sell_lot, "Amount received for the lot")?),
+            },
         };
         let mut shares = Vec::new();
         for (i, s) in f.shares.iter().enumerate() {
@@ -1096,8 +1247,12 @@ pub async fn close_load(State(state): State<AppState>, user: CurrentUser, Path(i
             return load_response(&state, id, LoadExtra::Close(f), StatusCode::UNPROCESSABLE_ENTITY).await;
         }
     };
+    // unsold glitched crates written off count as lost before settling, so a
+    // close that leaves nothing else behind closes the load whole
+    let mut load = load;
+    let written_off = if f.write_off_glitched { load.write_off_glitched(&input.crate_ids) } else { Vec::new() };
     let sale = match settle(&load, &input) {
-        Ok(s) => s,
+        Ok(s) => Sale { written_off, ..s },
         Err(e) => {
             f.error = Some(e);
             return load_response(&state, id, LoadExtra::Close(f), StatusCode::UNPROCESSABLE_ENTITY).await;
@@ -1206,5 +1361,16 @@ mod tests {
         assert_eq!(parse_money("1,250.5", "x").unwrap(), 1250.5);
         assert!(parse_money("-1", "x").is_err());
         assert!(parse_money("", "x").is_err());
+    }
+
+    #[test]
+    fn balance_delta_is_the_price_and_refuses_the_wrong_direction() {
+        assert_eq!(balance_delta("1,500,000", "1,262,400", false).unwrap(), 237_600.0);
+        assert_eq!(balance_delta("1262400", "1650000", true).unwrap(), 387_600.0);
+        assert_eq!(balance_delta("500", "500", false).unwrap(), 0.0);
+        assert!(balance_delta("1000", "1200", false).unwrap_err().contains("swapped"));
+        assert!(balance_delta("1200", "1000", true).unwrap_err().contains("swapped"));
+        assert!(balance_delta("", "1000", false).unwrap_err().contains("Balance before"));
+        assert!(balance_delta("1000", "", true).unwrap_err().contains("Balance after"));
     }
 }

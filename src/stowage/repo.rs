@@ -48,6 +48,7 @@ pub struct EditVoyage {
     pub ship_id: Option<i64>,
     pub bought_at: String,
     pub notes: Option<String>,
+    pub entered_by: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -95,6 +96,8 @@ fn row_to_voyage(row: &SqliteRow) -> Result<Voyage> {
         id: row.try_get("id")?,
         logged_by: row.try_get("logged_by")?,
         logged_by_name: row.try_get("logged_by_name")?,
+        entered_by: row.try_get("entered_by")?,
+        entered_by_name: row.try_get("entered_by_name")?,
         ship: row_to_ship(row, "ship_")?,
         bought_at: row.try_get("bought_at")?,
         notes: row.try_get("notes")?,
@@ -159,10 +162,12 @@ fn row_to_share(row: &SqliteRow) -> Result<Share> {
 }
 
 const SELECT_VOYAGE: &str = "SELECT v.id, v.logged_by, u.display_name AS logged_by_name,
+    COALESCE(v.entered_by, v.logged_by) AS entered_by, e.display_name AS entered_by_name,
     v.bought_at, v.notes,
     s.id AS ship_id, s.manufacturer AS ship_manufacturer, s.name AS ship_name, s.short AS ship_short,
     s.sc_cargo_slug AS ship_sc_cargo_slug, s.capacity_scu AS ship_capacity_scu, s.concept AS ship_concept
-    FROM voyages v JOIN users u ON u.id = v.logged_by LEFT JOIN ships s ON s.id = v.ship_id";
+    FROM voyages v JOIN users u ON u.id = v.logged_by
+    JOIN users e ON e.id = COALESCE(v.entered_by, v.logged_by) LEFT JOIN ships s ON s.id = v.ship_id";
 
 const SELECT_LOAD: &str = "SELECT l.id, l.voyage_id, l.submitted_by, u.display_name AS submitted_by_name,
     l.commodity, l.buy_terminal, l.price_mode, l.buy_price_scu, l.buy_price_lot, l.stop_no,
@@ -398,14 +403,16 @@ async fn insert_load(
 pub async fn create_voyage(
     pool: &SqlitePool,
     logged_by: i64,
+    entered_by: i64,
     voyage: &NewVoyage,
     loads: &[NewLoad],
 ) -> Result<i64> {
     let mut tx = pool.begin().await?;
     let row = sqlx::query(
-        "INSERT INTO voyages (logged_by, ship_id, bought_at, notes) VALUES (?, ?, ?, ?) RETURNING id",
+        "INSERT INTO voyages (logged_by, entered_by, ship_id, bought_at, notes) VALUES (?, ?, ?, ?, ?) RETURNING id",
     )
     .bind(logged_by)
+    .bind(entered_by)
     .bind(voyage.ship_id)
     .bind(&voyage.bought_at)
     .bind(voyage.notes.as_deref())
@@ -443,11 +450,12 @@ async fn touch_voyage(conn: &mut SqliteConnection, voyage_id: i64) -> Result<()>
 
 pub async fn update_voyage(pool: &SqlitePool, id: i64, edit: &EditVoyage) -> Result<()> {
     sqlx::query(
-        "UPDATE voyages SET ship_id = ?, bought_at = ?, notes = ?, updated_at = datetime('now') WHERE id = ?",
+        "UPDATE voyages SET ship_id = ?, bought_at = ?, notes = ?, entered_by = ?, updated_at = datetime('now') WHERE id = ?",
     )
     .bind(edit.ship_id)
     .bind(&edit.bought_at)
     .bind(edit.notes.as_deref())
+    .bind(edit.entered_by)
     .bind(id)
     .execute(pool)
     .await?;
@@ -524,9 +532,10 @@ pub async fn move_load(
         }
         MoveTarget::New => {
             let row = sqlx::query(
-                "INSERT INTO voyages (logged_by, ship_id, bought_at, notes)
-                 SELECT ?, ship_id, bought_at, NULL FROM voyages WHERE id = ? RETURNING id",
+                "INSERT INTO voyages (logged_by, entered_by, ship_id, bought_at, notes)
+                 SELECT ?, ?, ship_id, bought_at, NULL FROM voyages WHERE id = ? RETURNING id",
             )
+            .bind(actor)
             .bind(actor)
             .bind(from)
             .fetch_one(&mut *tx)
@@ -592,6 +601,18 @@ pub async fn set_load_where(
     Ok(())
 }
 
+/// `[WRITE OFF]`: every crate still in play on the load is lost, so the
+/// load leaves Open Cargo without a sale. Returns how many crates went.
+pub async fn write_off_load(pool: &SqlitePool, load_id: i64) -> Result<u64> {
+    let done = sqlx::query(
+        "UPDATE crates SET condition = 'lost' WHERE load_id = ? AND condition IN ('sound', 'glitched')",
+    )
+    .bind(load_id)
+    .execute(pool)
+    .await?;
+    Ok(done.rows_affected())
+}
+
 /// Records a settled sale. When every sellable crate sold the load itself
 /// closes; otherwise the sold crates move to a new load row on the same
 /// voyage (the "split", RIPAE-0.2.md §4) and the original keeps the rest.
@@ -605,6 +626,12 @@ pub async fn close_load(
     sell_terminal: &str,
 ) -> Result<i64> {
     let mut tx = pool.begin().await?;
+    for id in &sale.written_off {
+        sqlx::query("UPDATE crates SET condition = 'lost' WHERE id = ? AND condition = 'glitched'")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+    }
     let sold_id = if sale.closes_load() {
         sqlx::query(
             "UPDATE loads SET submitted_by = ?, sold_at = ?, sell_terminal = ?, sell_price_scu = ?,
@@ -776,7 +803,7 @@ mod tests {
         free.buy_terminal = String::new();
         free.buy_price_scu = 0.0;
         free.buy_price_lot = 0.0;
-        let id = create_voyage(&pool, gig, &new_voyage(None), &[free]).await.unwrap();
+        let id = create_voyage(&pool, gig, gig, &new_voyage(None), &[free]).await.unwrap();
         let v = find_voyage(&pool, id).await.unwrap().unwrap();
         assert_eq!(v.loads[0].buy_terminal, "");
         assert_eq!(v.loads[0].buy_price_scu, 0.0);
@@ -791,6 +818,7 @@ mod tests {
 
         let id = create_voyage(
             &pool,
+            gig,
             gig,
             &new_voyage(Some(hull.id)),
             &[
@@ -823,7 +851,7 @@ mod tests {
     #[tokio::test]
     async fn derived_status_survives_a_reload() {
         let (pool, gig, _) = test_pool().await;
-        let v = create_voyage(&pool, gig, &new_voyage(None), &[new_load("Laranite", vec![(3, 8)], None)])
+        let v = create_voyage(&pool, gig, gig, &new_voyage(None), &[new_load("Laranite", vec![(3, 8)], None)])
             .await
             .unwrap();
         let load = find_voyage(&pool, v).await.unwrap().unwrap().loads.remove(0);
@@ -854,11 +882,12 @@ mod tests {
     #[tokio::test]
     async fn move_load_between_voyages_and_remove_the_emptied_one() {
         let (pool, gig, jt) = test_pool().await;
-        let a = create_voyage(&pool, gig, &new_voyage(None), &[new_load("Laranite", vec![(1, 32)], None)])
+        let a = create_voyage(&pool, gig, gig, &new_voyage(None), &[new_load("Laranite", vec![(1, 32)], None)])
             .await
             .unwrap();
         let b = create_voyage(
             &pool,
+            jt,
             jt,
             &new_voyage(None),
             &[new_load("Agricium", vec![(1, 32)], None), new_load("Titanium", vec![(2, 8)], None)],
@@ -890,7 +919,7 @@ mod tests {
     #[tokio::test]
     async fn cascade_on_voyage_delete() {
         let (pool, gig, jt) = test_pool().await;
-        let v = create_voyage(&pool, gig, &new_voyage(None), &[new_load("Laranite", vec![(2, 32)], None)])
+        let v = create_voyage(&pool, gig, gig, &new_voyage(None), &[new_load("Laranite", vec![(2, 32)], None)])
             .await
             .unwrap();
         let load = find_voyage(&pool, v).await.unwrap().unwrap().loads.remove(0);
@@ -928,7 +957,7 @@ mod tests {
     #[tokio::test]
     async fn partial_close_splits_and_full_close_closes_in_place() {
         let (pool, gig, jt) = test_pool().await;
-        let v = create_voyage(&pool, gig, &new_voyage(None), &[new_load("Laranite", vec![(2, 32), (1, 8)], None)])
+        let v = create_voyage(&pool, gig, gig, &new_voyage(None), &[new_load("Laranite", vec![(2, 32), (1, 8)], None)])
             .await
             .unwrap();
         let load = find_voyage(&pool, v).await.unwrap().unwrap().loads.remove(0);
@@ -983,11 +1012,13 @@ mod tests {
     async fn a_run_kept_for_a_crewmate_is_theirs_to_buy_and_sell() {
         // Gig does the bookkeeping; the voyage, its load and the sale are JT's.
         let (pool, gig, jt) = test_pool().await;
-        let v = create_voyage(&pool, jt, &new_voyage(None), &[new_load("Laranite", vec![(1, 32)], None)])
+        let v = create_voyage(&pool, jt, gig, &new_voyage(None), &[new_load("Laranite", vec![(1, 32)], None)])
             .await
             .unwrap();
         let voyage = find_voyage(&pool, v).await.unwrap().unwrap();
         assert_eq!(voyage.logged_by, jt);
+        assert_eq!(voyage.entered_by, gig, "Gig typed it in, so Gig logged it");
+        assert_eq!(voyage.entered_by_name, "Lord Gig");
         let load = &voyage.loads[0];
         assert_eq!(load.submitted_by, jt);
         let sale = settle(
@@ -1004,7 +1035,7 @@ mod tests {
     #[tokio::test]
     async fn delete_load_removes_an_emptied_voyage() {
         let (pool, gig, _) = test_pool().await;
-        let v = create_voyage(&pool, gig, &new_voyage(None), &[new_load("Laranite", vec![(1, 8)], None)])
+        let v = create_voyage(&pool, gig, gig, &new_voyage(None), &[new_load("Laranite", vec![(1, 8)], None)])
             .await
             .unwrap();
         let load = find_voyage(&pool, v).await.unwrap().unwrap().loads.remove(0);
@@ -1015,7 +1046,7 @@ mod tests {
     #[tokio::test]
     async fn edit_load_moves_live_crates_when_asked() {
         let (pool, gig, _) = test_pool().await;
-        let v = create_voyage(&pool, gig, &new_voyage(None), &[new_load("Laranite", vec![(2, 8)], None)])
+        let v = create_voyage(&pool, gig, gig, &new_voyage(None), &[new_load("Laranite", vec![(2, 8)], None)])
             .await
             .unwrap();
         let load = find_voyage(&pool, v).await.unwrap().unwrap().loads.remove(0);
@@ -1043,5 +1074,60 @@ mod tests {
         assert_eq!(l.price_mode, PriceMode::Lot);
         assert_eq!(l.status(), LoadStatus::AwaitingPickup);
         assert_eq!(l.notes.as_deref(), Some("freight elevator 2"));
+    }
+
+    #[tokio::test]
+    async fn editing_a_voyage_corrects_who_logged_it() {
+        // A run recorded before entered_by existed shows its owner; the edit fixes it.
+        let (pool, gig, jt) = test_pool().await;
+        let v = create_voyage(&pool, jt, jt, &new_voyage(None), &[new_load("Laranite", vec![(1, 8)], None)])
+            .await
+            .unwrap();
+        let edit = EditVoyage { ship_id: None, bought_at: "2026-11-08".into(), notes: None, entered_by: gig };
+        update_voyage(&pool, v, &edit).await.unwrap();
+        let voyage = find_voyage(&pool, v).await.unwrap().unwrap();
+        assert_eq!((voyage.logged_by, voyage.entered_by), (jt, gig));
+        assert_eq!(voyage.loads[0].submitted_by, jt);
+    }
+
+    #[tokio::test]
+    async fn a_close_that_writes_off_the_glitched_crate_closes_the_load_whole() {
+        let (pool, gig, _) = test_pool().await;
+        let v = create_voyage(&pool, gig, gig, &new_voyage(None), &[new_load("Laranite", vec![(2, 8)], None)])
+            .await
+            .unwrap();
+        let mut load = find_voyage(&pool, v).await.unwrap().unwrap().loads.remove(0);
+        let (good, bad) = (load.crates[0].id, load.crates[1].id);
+        set_crate_condition(&pool, bad, Condition::Glitched).await.unwrap();
+        load.crates[1].condition = Condition::Glitched;
+        let input = SaleInput { crate_ids: vec![good], price_mode: PriceMode::Scu, price: 20.0, shares: vec![] };
+        let written_off = load.write_off_glitched(&input.crate_ids);
+        assert_eq!(written_off, vec![bad]);
+        let sale = Sale { written_off, ..settle(&load, &input).unwrap() };
+        assert!(sale.closes_load());
+        let sold = close_load(&pool, load.id, gig, &sale, "2026-11-09", "Area18 TDD").await.unwrap();
+        assert_eq!(sold, load.id, "nothing left open, so no split");
+        let v = find_voyage(&pool, v).await.unwrap().unwrap();
+        let l = &v.loads[0];
+        assert!(v.is_fully_sold() && l.was_sold());
+        assert!(l.crates.iter().find(|c| c.id == bad).unwrap().is_lost());
+        assert_eq!(l.profit(), Some(80.0), "the lost crate isn't charged to the sale");
+    }
+
+    #[tokio::test]
+    async fn writing_off_a_load_takes_it_out_of_open_cargo_but_not_into_the_ledger() {
+        let (pool, gig, _) = test_pool().await;
+        let v = create_voyage(&pool, gig, gig, &new_voyage(None), &[new_load("Laranite", vec![(1, 8), (1, 4)], None)])
+            .await
+            .unwrap();
+        let load = find_voyage(&pool, v).await.unwrap().unwrap().loads.remove(0);
+        set_crate_condition(&pool, load.crates[0].id, Condition::Glitched).await.unwrap();
+        assert_eq!(write_off_load(&pool, load.id).await.unwrap(), 2);
+        let v = find_voyage(&pool, v).await.unwrap().unwrap();
+        let l = &v.loads[0];
+        assert!(!l.is_open() && !l.was_sold());
+        assert!(l.crates.iter().all(|c| c.is_lost()));
+        assert_eq!(v.open_loads().count(), 0);
+        assert!(crate::stowage::views::ledger_rows(std::slice::from_ref(&v)).is_empty());
     }
 }

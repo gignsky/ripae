@@ -286,7 +286,7 @@ impl VoyageView {
             label: format!("Voyage {}", v.id),
             date_short: short_date(&v.bought_at),
             ship_name: v.ship.as_ref().map(|s| s.name.clone()).unwrap_or_else(|| "—".into()),
-            logged_by_upper: v.logged_by_name.to_uppercase(),
+            logged_by_upper: v.entered_by_name.to_uppercase(),
             load_count: open.len(),
             stop_count: v.stop_count(),
             notes: v.notes.clone().unwrap_or_default(),
@@ -308,6 +308,9 @@ pub struct LoadFormView {
     pub price_mode: String,
     pub price_scu: String,
     pub price_lot: String,
+    /// "balance" price mode only; never stored -- the load keeps the lot price.
+    pub balance_before: String,
+    pub balance_after: String,
     pub terminal: String,
     pub stop_no: String,
     pub destination: String,
@@ -351,6 +354,8 @@ impl LoadFormView {
             // show both to the cent so the inputs hold a sane figure.
             price_scu: trim_num(to_cents(l.buy_price_scu)),
             price_lot: l.buy_price_lot.map(|p| trim_num(to_cents(p))).unwrap_or_default(),
+            balance_before: String::new(),
+            balance_after: String::new(),
             terminal: l.buy_terminal.clone(),
             stop_no: l.stop_no.to_string(),
             destination: l.destination.clone().unwrap_or_default(),
@@ -370,6 +375,9 @@ pub struct VoyageFormView {
     pub bought_at: String,
     pub ship: String,
     pub notes: String,
+    /// Who typed the voyage in (user id), correctable here; the crew list.
+    pub entered_by: String,
+    pub users: Vec<User>,
     pub error: Option<String>,
 }
 
@@ -406,8 +414,14 @@ pub struct CloseFormView {
     pub price_mode: String,
     pub sell_scu: String,
     pub sell_lot: String,
+    /// "balance" price mode only; the sale keeps the lot price.
+    pub balance_before: String,
+    pub balance_after: String,
     /// Which crate ids are ticked.
     pub selected: Vec<i64>,
+    /// Write off (mark lost) the glitched crates left unsold, so they don't
+    /// hold the load open. On by default.
+    pub write_off_glitched: bool,
     pub shares: Vec<ShareFormRow>,
     pub users: Vec<User>,
     /// Who sold it (user id): the load's buyer by default, any crew member
@@ -592,7 +606,7 @@ pub struct LedgerRow {
 pub fn ledger_rows(voyages: &[Voyage]) -> Vec<LedgerRow> {
     let mut sold: Vec<(&Voyage, &Load)> = voyages
         .iter()
-        .flat_map(|v| v.loads.iter().filter(|l| l.is_sold()).map(move |l| (v, l)))
+        .flat_map(|v| v.loads.iter().filter(|l| l.was_sold()).map(move |l| (v, l)))
         .collect();
     sold.sort_by(|a, b| b.1.sold_at.cmp(&a.1.sold_at).then(b.1.id.cmp(&a.1.id)));
     sold.into_iter()

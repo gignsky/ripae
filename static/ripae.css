@@ -260,6 +260,8 @@ label.crate.sound{color:var(--fg)}
 label.crate:has(input:disabled){cursor:not-allowed;opacity:.6}
 .inline-label{display:inline-grid;grid-auto-flow:column;gap:.3rem;align-items:center;font-size:.7rem;letter-spacing:.1em;text-transform:uppercase;color:var(--fg-dim);margin-left:.6rem}
 .inline-label input{width:11rem;padding:.1rem .35rem;font-size:.8rem}
+.inline-label.write-off{display:flex;margin:.5rem 0 0;text-transform:none;letter-spacing:.04em}
+.inline-label.write-off input{width:auto;margin:0}
 /* fuzzy pick-list menu (static/picker.js) */
 .pick{position:relative;min-width:0}
 .pick-menu{position:absolute;left:0;right:0;z-index:30;margin:0;padding:0;list-style:none;max-height:14rem;overflow-y:auto;background:var(--bg);border:1px solid var(--fg-dim);box-shadow:var(--glow)}

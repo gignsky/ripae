@@ -1531,7 +1531,7 @@ dependencies = [
 
 [[package]]
 name = "ripae"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "argon2",
@@ -1539,6 +1539,7 @@ dependencies = [
  "axum",
  "base64 0.23.1",
  "form_urlencoded",
+ "futures-util",
  "proptest",
  "pulldown-cmark",
  "rand 0.10.3",

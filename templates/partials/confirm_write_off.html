@@ -1,0 +1,17 @@
+<div class="splash-in" data-overlay="confirm" role="alertdialog" aria-label="Confirm write-off">
+  <pre class="ascii ras womp" aria-hidden="true">██╗      ██████╗ ███████╗████████╗
+██║     ██╔═══██╗██╔════╝╚══██╔══╝
+██║     ██║   ██║███████╗   ██║
+██║     ██║   ██║╚════██║   ██║
+███████╗╚██████╔╝███████║   ██║
+╚══════╝ ╚═════╝ ╚══════╝   ╚═╝</pre>
+  <p class="ras tag">Write off <b>{{ commodity_upper }}</b>? · voyage {{ voyage_id }} · bought by {{ by_upper }}</p>
+  <div class="ras sale-shares">
+    <div><span>{{ crates }} crate{% if crates != 1 %}s{% endif %} still open · {{ scu }} SCU</span><span><b>{{ cost_fmt }} aUEC written off</b></span></div>
+  </div>
+  <p class="ras tag neg">They're marked lost and the load leaves Open Cargo. Anything already sold stays in the ledger.</p>
+  <p class="ras any"><span class="actions">
+    <button class="cmd boxed danger" type="button" data-dismiss hx-post="/loads/{{ id }}/write-off" hx-target="#open-cargo" hx-swap="outerHTML">Write off</button>
+    <button class="cmd boxed" type="button" data-dismiss>Keep it</button>
+  </span></p>
+</div>
