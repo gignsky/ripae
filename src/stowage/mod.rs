@@ -257,7 +257,7 @@ async fn pick_opt(state: &AppState, kind: Kind, raw: &str) -> Option<String> {
 }
 
 /// Resolves a typed hull name. Blank = no hull; an unknown name is refused
-/// (a hull needs an sc-cargo.space slug, and the 80-ship list is the site's).
+/// (a hull needs an sc-cargo.space slug, so ships come from the seeded list).
 async fn pick_ship(state: &AppState, raw: &str) -> Result<Option<i64>, String> {
     let Some(name) = opt(raw) else { return Ok(None) };
     match repo::find_ship_by_name(&state.pool, &name).await {

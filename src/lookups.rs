@@ -91,8 +91,15 @@ mod tests {
     async fn names_are_seeded_and_sorted() {
         let pool = test_pool().await;
         let ships = names(&pool, Kind::Ship).await.unwrap();
-        assert_eq!(ships.len(), 80);
+        assert_eq!(ships.len(), 83);
         assert!(ships.contains(&"Hull-C".to_string()));
+        assert!(ships.contains(&"Ironclad".to_string()));
+        assert!(ships.contains(&"Centaurus".to_string()));
+        let terminals = names(&pool, Kind::Terminal).await.unwrap();
+        assert!(terminals.contains(&"Terra Gateway".to_string()));
+        assert!(terminals.contains(&"Nyx Gateway".to_string()));
+        assert!(terminals.contains(&"Brio's Breaker Yard".to_string()));
+        assert!(terminals.contains(&"Levski".to_string()));
         let mut sorted = ships.clone();
         sorted.sort_by_key(|s| s.to_lowercase());
         assert_eq!(ships, sorted);

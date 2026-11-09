@@ -134,7 +134,10 @@
       });
       menu.style.top = input.offsetTop + input.offsetHeight + "px";
       menu.hidden = shown.length === 0;
-      setActive(q.trim() && shown.length ? 0 : -1);
+      // Pre-highlight only a real substring hit: a scattered fuzzy hit is a
+      // guess, and Enter must not swap a custom name for it.
+      var hit = q.trim() && shown.length && score(q, shown[0]) >= 1000;
+      setActive(hit ? 0 : -1);
     }
 
     function close() {
@@ -181,9 +184,8 @@
       } else if (e.key === "Escape" && !menu.hidden) {
         e.preventDefault();
         close();
-      } else if (e.key === "Tab" && !menu.hidden && active >= 0 && input.value.trim()) {
-        choose(shown[active]);
       }
+      // Tab just moves on: what was typed is kept (blur snaps exact matches).
     });
 
     validate();
