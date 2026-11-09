@@ -22,12 +22,12 @@ use tower_sessions::Session;
 use crate::auth::{take_splash_mode, CurrentUser, SplashMode};
 use crate::lookups::{self, Kind};
 use crate::templates::{
-    render_str, BoardTemplate, ConfirmFrag, ConfirmLine, ConfirmWriteOffFrag, VoyageOverlayFrag, IndexTemplate, LedgerFrag, LoadFrag,
+    render_str, BoardTemplate, ConfirmFrag, ConfirmLine, ConfirmWriteOffFrag, SaleOverlayFrag, VoyageOverlayFrag, IndexTemplate, LedgerFrag, LoadFrag,
     OpenCargoFrag, PlansFrag, SaleFrag, Shell, TotalsFrag, VerdictFrag, VoyageHeadFrag,
 };
 use crate::AppState;
 use model::{
-    parse_boxes, parse_date, service_record, settle, today, Load, PriceMode, Sale, SaleInput, ShareInput,
+    parse_boxes, parse_date, service_record, resettle, settle, today, Load, PriceMode, Sale, SaleInput, ShareInput,
     ShareKind, SortKey, Totals, User, Voyage, Whereabouts,
 };
 use repo::{EditLoad, EditVoyage, MoveTarget, NewLoad, NewVoyage};
@@ -1179,6 +1179,53 @@ fn close_form_from(form: &FormData, users: Vec<User>) -> CloseFormView {
     }
 }
 
+/// The sale fields every sale form shares -- date, terminal, price (per SCU,
+/// per lot or from the balance) and shares -- validated for `seller`.
+async fn parse_sale(
+    state: &AppState,
+    f: &CloseFormView,
+    users: &[User],
+    seller: i64,
+) -> Result<(String, String, PriceMode, f64, Vec<ShareInput>), String> {
+    let sold_at = parse_date(&f.sold_at, today()).map_err(|e| format!("Sold on: {e}"))?;
+    let terminal = opt(&f.sell_terminal).ok_or("Sell terminal is required.")?;
+    let sell_terminal = pick(state, Kind::Terminal, &terminal).await;
+    let (price_mode, price) = match f.price_mode.as_str() {
+        "balance" => (PriceMode::Lot, balance_delta(&f.balance_before, &f.balance_after, true)?),
+        mode => match mode.parse().unwrap_or(PriceMode::Scu) {
+            PriceMode::Scu => (PriceMode::Scu, parse_money(&f.sell_scu, "Sell price per SCU")?),
+            PriceMode::Lot => (PriceMode::Lot, parse_money(&f.sell_lot, "Amount received for the lot")?),
+        },
+    };
+    let mut shares = Vec::new();
+    for (i, s) in f.shares.iter().enumerate() {
+        let to_user: i64 = s.to_user.trim().parse().map_err(|_| format!("Share {}: pick a crew member.", i + 1))?;
+        if !users.iter().any(|u| u.id == to_user) {
+            return Err(format!("Share {}: that crew member doesn't exist.", i + 1));
+        }
+        if to_user == seller {
+            return Err(format!("Share {}: the seller can't share with themself -- the remainder is already theirs.", i + 1));
+        }
+        let paid_to = match opt(&s.paid_to) {
+            None => None,
+            Some(p) => {
+                let p: i64 = p.parse().map_err(|_| format!("Share {}: forfeit-to must be a crew member.", i + 1))?;
+                if !users.iter().any(|u| u.id == p) {
+                    return Err(format!("Share {}: forfeit-to must be a crew member.", i + 1));
+                }
+                (p != to_user).then_some(p)
+            }
+        };
+        let kind: ShareKind = s.kind.parse().unwrap_or(ShareKind::Pct);
+        let amount = parse_money(&s.amount, &format!("Share {} amount", i + 1))?;
+        if kind == ShareKind::Pct && amount > 100.0 {
+            return Err(format!("Share {}: a percentage can't exceed 100.", i + 1));
+        }
+        shares.push(ShareInput { to_user, paid_to, kind, amount, reason: opt(&s.reason) });
+    }
+    Ok((sold_at, sell_terminal, price_mode, price, shares))
+}
+
 /// `POST /loads/:id/close` -- records the sale; answers with the SALE banner.
 pub async fn close_load(State(state): State<AppState>, user: CurrentUser, Path(id): Path<i64>, body: String) -> Response {
     let load = match find_load(&state, id).await {
@@ -1199,46 +1246,11 @@ pub async fn close_load(State(state): State<AppState>, user: CurrentUser, Path(i
         }
     };
 
-    let parsed: Result<(String, String, SaleInput), String> = async {
-        let sold_at = parse_date(&f.sold_at, today()).map_err(|e| format!("Sold on: {e}"))?;
-        let terminal = opt(&f.sell_terminal).ok_or("Sell terminal is required.")?;
-        let sell_terminal = pick(&state, Kind::Terminal, &terminal).await;
-        let (price_mode, price) = match f.price_mode.as_str() {
-            "balance" => (PriceMode::Lot, balance_delta(&f.balance_before, &f.balance_after, true)?),
-            mode => match mode.parse().unwrap_or(PriceMode::Scu) {
-                PriceMode::Scu => (PriceMode::Scu, parse_money(&f.sell_scu, "Sell price per SCU")?),
-                PriceMode::Lot => (PriceMode::Lot, parse_money(&f.sell_lot, "Amount received for the lot")?),
-            },
-        };
-        let mut shares = Vec::new();
-        for (i, s) in f.shares.iter().enumerate() {
-            let to_user: i64 = s.to_user.trim().parse().map_err(|_| format!("Share {}: pick a crew member.", i + 1))?;
-            if !users.iter().any(|u| u.id == to_user) {
-                return Err(format!("Share {}: that crew member doesn't exist.", i + 1));
-            }
-            if to_user == seller {
-                return Err(format!("Share {}: the seller can't share with themself -- the remainder is already theirs.", i + 1));
-            }
-            let paid_to = match opt(&s.paid_to) {
-                None => None,
-                Some(p) => {
-                    let p: i64 = p.parse().map_err(|_| format!("Share {}: forfeit-to must be a crew member.", i + 1))?;
-                    if !users.iter().any(|u| u.id == p) {
-                        return Err(format!("Share {}: forfeit-to must be a crew member.", i + 1));
-                    }
-                    (p != to_user).then_some(p)
-                }
-            };
-            let kind: ShareKind = s.kind.parse().unwrap_or(ShareKind::Pct);
-            let amount = parse_money(&s.amount, &format!("Share {} amount", i + 1))?;
-            if kind == ShareKind::Pct && amount > 100.0 {
-                return Err(format!("Share {}: a percentage can't exceed 100.", i + 1));
-            }
-            shares.push(ShareInput { to_user, paid_to, kind, amount, reason: opt(&s.reason) });
-        }
-        Ok((sold_at, sell_terminal, SaleInput { crate_ids: f.selected.clone(), price_mode, price, shares }))
-    }
-    .await;
+    let parsed = parse_sale(&state, &f, &users, seller)
+        .await
+        .map(|(sold_at, sell_terminal, price_mode, price, shares)| {
+            (sold_at, sell_terminal, SaleInput { crate_ids: f.selected.clone(), price_mode, price, shares })
+        });
 
     let (sold_at, sell_terminal, input) = match parsed {
         Ok(x) => x,
@@ -1296,6 +1308,105 @@ pub async fn close_load(State(state): State<AppState>, user: CurrentUser, Path(i
         ledger_frag(&l, true)
     );
     retarget(html(StatusCode::OK, body), "#overlay", "innerHTML")
+}
+
+// ---------------------------------------------------------------------------
+// editing a recorded sale
+// ---------------------------------------------------------------------------
+
+/// A sold load and whether it can be edited as a sale.
+async fn find_sale(state: &AppState, id: i64) -> Result<Load, Response> {
+    let load = find_load(state, id).await?;
+    if !load.was_sold() {
+        return Err((StatusCode::CONFLICT, "That load hasn't been sold.").into_response());
+    }
+    Ok(load)
+}
+
+fn sale_overlay(load: &Load, f: CloseFormView, status: StatusCode) -> Response {
+    html(
+        status,
+        render_str(&SaleOverlayFrag {
+            id: load.id,
+            voyage_id: load.voyage_id,
+            commodity_upper: load.commodity.to_uppercase(),
+            scu_sold: load.scu_sold(),
+            buy_price_scu: views::trim_num(load.buy_price_scu),
+            buy_price_scu_fmt: views::fmt_price(load.buy_price_scu),
+            f,
+        }),
+    )
+}
+
+/// `GET /loads/:id/sale` -- the sale editor, filled in as recorded. The
+/// price comes up as the lot total: the figure actually received.
+pub async fn sale_edit_form(State(state): State<AppState>, _user: CurrentUser, Path(id): Path<i64>) -> Response {
+    let load = match find_sale(&state, id).await {
+        Ok(l) => l,
+        Err(r) => return r,
+    };
+    let users = repo::list_users(&state.pool).await.unwrap_or_default();
+    let f = CloseFormView {
+        sold_at: load.sold_at.clone().unwrap_or_default(),
+        sell_terminal: load.sell_terminal.clone().unwrap_or_default(),
+        price_mode: "lot".into(),
+        sell_scu: load.sell_price_scu.map(|p| views::trim_num(views::to_cents(p))).unwrap_or_default(),
+        sell_lot: load.revenue().map(|p| views::trim_num(views::to_cents(p))).unwrap_or_default(),
+        balance_before: String::new(),
+        balance_after: String::new(),
+        selected: Vec::new(),
+        write_off_glitched: false,
+        shares: load
+            .shares
+            .iter()
+            .map(|s| ShareFormRow {
+                to_user: s.to_user.to_string(),
+                paid_to: if s.paid_to == s.to_user { String::new() } else { s.paid_to.to_string() },
+                kind: s.kind.as_str().into(),
+                amount: views::trim_num(s.amount),
+                reason: s.reason.clone().unwrap_or_default(),
+            })
+            .collect(),
+        users,
+        sold_by: load.submitted_by.to_string(),
+        error: None,
+    };
+    sale_overlay(&load, f, StatusCode::OK)
+}
+
+/// `PUT /loads/:id/sale` -- saves the correction: shares are paid again on
+/// the new profit. Success empties the overlay (closing it) and refreshes
+/// the ledger and totals.
+pub async fn sale_update(State(state): State<AppState>, _user: CurrentUser, Path(id): Path<i64>, body: String) -> Response {
+    let load = match find_sale(&state, id).await {
+        Ok(l) => l,
+        Err(r) => return r,
+    };
+    let users = repo::list_users(&state.pool).await.unwrap_or_default();
+    let mut f = close_form_from(&FormData::parse(&body), users.clone());
+    let parsed = async {
+        let seller = pick_member(&f.sold_by, load.submitted_by, &users, "Sold by")?;
+        let (sold_at, sell_terminal, price_mode, price, shares) = parse_sale(&state, &f, &users, seller).await?;
+        let resale = resettle(&load, price_mode, price, &shares)?;
+        Ok::<_, String>((seller, sold_at, sell_terminal, resale))
+    }
+    .await;
+    let (seller, sold_at, sell_terminal, resale) = match parsed {
+        Ok(x) => x,
+        Err(e) => {
+            f.error = Some(e);
+            return sale_overlay(&load, f, StatusCode::UNPROCESSABLE_ENTITY);
+        }
+    };
+    if let Err(e) = repo::update_sale(&state.pool, id, seller, &sold_at, &sell_terminal, &resale).await {
+        tracing::error!(error = %e, "failed to update sale");
+        f.error = Some("Could not save those changes.".into());
+        return sale_overlay(&load, f, StatusCode::UNPROCESSABLE_ENTITY);
+    }
+    match ledger(&state).await {
+        Ok(l) => html(StatusCode::OK, format!("{}{}", oob_common(&l), ledger_frag(&l, true))),
+        Err(r) => r,
+    }
 }
 
 // ---------------------------------------------------------------------------

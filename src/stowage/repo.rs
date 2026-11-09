@@ -12,7 +12,7 @@ use sqlx::{Row, SqliteConnection, SqlitePool};
 use std::collections::HashMap;
 
 use super::model::{
-    expand_boxes, BoxMix, Condition, Crate, Load, PriceMode, Sale, Share, Ship, User, Voyage,
+    expand_boxes, BoxMix, Condition, Crate, Load, PriceMode, Resale, Sale, Share, Ship, User, Voyage,
     Whereabouts,
 };
 
@@ -709,6 +709,53 @@ pub async fn close_load(
     Ok(sold_id)
 }
 
+/// Corrects a recorded sale in place: seller, date, terminal, price, and the
+/// shares (replaced wholesale, paid on the corrected profit). The crates
+/// that sold stay as they are.
+pub async fn update_sale(
+    pool: &SqlitePool,
+    load_id: i64,
+    seller: i64,
+    sold_at: &str,
+    sell_terminal: &str,
+    sale: &Resale,
+) -> Result<()> {
+    let mut tx = pool.begin().await?;
+    let done = sqlx::query(
+        "UPDATE loads SET submitted_by = ?, sold_at = ?, sell_terminal = ?, sell_price_scu = ?,
+            sell_price_lot = ?, updated_at = datetime('now') WHERE id = ? AND sold_at IS NOT NULL",
+    )
+    .bind(seller)
+    .bind(sold_at)
+    .bind(sell_terminal)
+    .bind(sale.sell_price_scu)
+    .bind(sale.sell_price_lot)
+    .bind(load_id)
+    .execute(&mut *tx)
+    .await?;
+    if done.rows_affected() == 0 {
+        return Err(anyhow!("no such sale"));
+    }
+    sqlx::query("DELETE FROM shares WHERE load_id = ?").bind(load_id).execute(&mut *tx).await?;
+    for s in &sale.shares {
+        sqlx::query(
+            "INSERT INTO shares (load_id, to_user, paid_to, kind, amount, reason, paid_auec)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(load_id)
+        .bind(s.to_user)
+        .bind(s.paid_to)
+        .bind(s.kind.as_str())
+        .bind(s.amount)
+        .bind(s.reason.as_deref())
+        .bind(s.paid)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
 /// Deletes a load (crates and shares cascade). A voyage left empty goes too.
 pub async fn delete_load(pool: &SqlitePool, id: i64) -> Result<()> {
     let mut tx = pool.begin().await?;
@@ -1129,5 +1176,35 @@ mod tests {
         assert!(l.crates.iter().all(|c| c.is_lost()));
         assert_eq!(v.open_loads().count(), 0);
         assert!(crate::stowage::views::ledger_rows(std::slice::from_ref(&v)).is_empty());
+    }
+
+    #[tokio::test]
+    async fn update_sale_reprices_in_place_and_replaces_the_shares() {
+        let (pool, gig, jt) = test_pool().await;
+        let v = create_voyage(&pool, gig, gig, &new_voyage(None), &[new_load("Laranite", vec![(2, 8)], None)])
+            .await
+            .unwrap();
+        let load = find_voyage(&pool, v).await.unwrap().unwrap().loads.remove(0);
+        let pct = |amount| ShareInput { to_user: jt, paid_to: None, kind: ShareKind::Pct, amount, reason: None };
+        let input = SaleInput { crate_ids: load.crates.iter().map(|c| c.id).collect(), price_mode: PriceMode::Scu, price: 15.0, shares: vec![pct(25.0)] };
+        close_load(&pool, load.id, gig, &settle(&load, &input).unwrap(), "2026-11-09", "Area18 TDD").await.unwrap();
+        let sold = find_voyage(&pool, v).await.unwrap().unwrap().loads.remove(0);
+        assert_eq!(sold.profit(), Some(80.0));
+
+        // the terminal showed the wrong price: it was 3,000 for the lot, sold by JT, Gig on 50 %
+        let half = ShareInput { to_user: gig, ..pct(50.0) };
+        let resale = crate::stowage::model::resettle(&sold, PriceMode::Lot, 3000.0, &[half]).unwrap();
+        update_sale(&pool, sold.id, jt, "2026-11-10", "Lorville TDD", &resale).await.unwrap();
+        let l = find_voyage(&pool, v).await.unwrap().unwrap().loads.remove(0);
+        assert_eq!(l.id, sold.id);
+        assert_eq!((l.submitted_by, l.sold_at.as_deref(), l.sell_terminal.as_deref()), (jt, Some("2026-11-10"), Some("Lorville TDD")));
+        assert_eq!(l.profit(), Some(2840.0));
+        assert_eq!(l.shares.len(), 1, "the old share is replaced, not added to");
+        assert_eq!((l.shares[0].to_user, l.shares[0].paid_auec), (gig, 1420.0));
+        assert_eq!(l.scu_sold(), 16, "the crates that sold don't change");
+        // an open load isn't a sale to edit
+        let open = create_voyage(&pool, gig, gig, &new_voyage(None), &[new_load("Agricium", vec![(1, 8)], None)]).await.unwrap();
+        let open = find_voyage(&pool, open).await.unwrap().unwrap().loads.remove(0);
+        assert!(update_sale(&pool, open.id, gig, "2026-11-10", "x", &resale).await.is_err());
     }
 }

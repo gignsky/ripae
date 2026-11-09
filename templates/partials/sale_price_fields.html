@@ -1,0 +1,11 @@
+{# How a sale was priced: per SCU, per lot, or from the wallet balance.
+   Expects `f: CloseFormView`. Shared by the close form and the sale editor. #}
+<label>Price as<select name="sell_mode" class="mode" data-mode>
+  <option value="scu"{% if f.price_mode != "lot" && f.price_mode != "balance" %} selected{% endif %}>Per SCU</option>
+  <option value="lot"{% if f.price_mode == "lot" %} selected{% endif %}>Per lot</option>
+  <option value="balance"{% if f.price_mode == "balance" %} selected{% endif %}>From balance</option>
+</select></label>
+<label class="price-scu"{% if f.price_mode == "lot" || f.price_mode == "balance" %} hidden{% endif %}>Sell price / SCU<input name="sell_scu" type="number" step="any" min="0" placeholder="0.00" value="{{ f.sell_scu }}" /><span class="calc">revenue = —</span></label>
+<label class="price-lot"{% if f.price_mode != "lot" %} hidden{% endif %}>Received for the lot<input name="sell_lot" type="number" step="any" min="0" placeholder="0" value="{{ f.sell_lot }}" /><span class="calc">per SCU = —</span></label>
+<label class="price-bal"{% if f.price_mode != "balance" %} hidden{% endif %}>Balance before<input name="sell_bal_before" type="number" step="any" min="0" placeholder="aUEC before selling" value="{{ f.balance_before }}" title="Your wallet before the sale, when the terminal's price can't be trusted" /></label>
+<label class="price-bal"{% if f.price_mode != "balance" %} hidden{% endif %}>Balance after<input name="sell_bal_after" type="number" step="any" min="0" placeholder="aUEC after selling" value="{{ f.balance_after }}" /><span class="calc">revenue = —</span></label>
