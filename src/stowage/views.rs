@@ -673,7 +673,7 @@ pub struct BoardView {
 
 pub fn board_view(users: &[User], voyages: &[Voyage], key: SortKey) -> BoardView {
     let rows = standings(users, voyages, key);
-    let realised: f64 = voyages.iter().flat_map(|v| v.loads.iter()).filter_map(|l| l.profit()).sum();
+    let realised = Totals::from_voyages(voyages).realised;
     let closed_runs = voyages.iter().filter(|v| v.is_fully_sold()).count();
     let scu_hauled: u32 = voyages.iter().flat_map(|v| v.loads.iter()).map(|l| l.scu_sold()).sum();
     let shares_paid: f64 = voyages.iter().flat_map(|v| v.loads.iter()).map(|l| l.shares_paid()).sum();
@@ -789,7 +789,15 @@ pub fn record_view(rec: &ServiceRecord, seed: u64) -> RecordView {
                 .map(|(f, t, _)| format!("{} → {}", short_terminal(f), short_terminal(t)))
                 .unwrap_or_else(dash),
         ),
-        fig("Crates lost", rec.crates_lost.to_string(), &format!("· {} SCU", rec.scu_lost)),
+        fig(
+            "Crates lost",
+            rec.crates_lost.to_string(),
+            &if rec.written_off > 0.0 {
+                format!("· {} SCU · −{} aUEC", rec.scu_lost, fmt_auec(rec.written_off))
+            } else {
+                format!("· {} SCU", rec.scu_lost)
+            },
+        ),
         fig("Shares paid out", fmt_auec(rec.shares_paid_out), "aUEC"),
         fig("Shares received", fmt_auec(rec.shares_received), "aUEC"),
         txt(
