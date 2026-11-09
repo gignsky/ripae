@@ -1,6 +1,6 @@
 [package]
 name = "ripae"
-version = "0.2.1-roll10"
+version = "0.2.2-roll10"
 edition = "2021"
 
 [dependencies]

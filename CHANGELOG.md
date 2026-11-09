@@ -3,7 +3,7 @@
 Every notable change to Ripae. Newest first. This file is also what the
 version badge in the corner of the site shows.
 
-## 0.2.1
+## 0.2.3
 
 ### Added
 - **Price from your balance.** The trade terminal doesn't always show what
@@ -12,6 +12,19 @@ version badge in the corner of the site shows.
   price, on both the buy and the sale. A purchase that raises the balance
   (or a sale that lowers it) is refused as probably swapped. The balances
   aren't kept; the load stores the lot price as usual.
+
+## 0.2.2
+
+### Fixed
+- **Editing a load saves again.** On a load bought per lot whose price
+  doesn't divide evenly into cents per SCU (1,000 aUEC for 3 SCU), *Save*
+  did nothing: the hidden per-SCU field held 333.333… and the browser
+  quietly refused to submit it. Edit now shows prices to the cent and the
+  price fields take any figure.
+
+## 0.2.1
+
+### Added
 - **Ironclad, Ironclad Assault and Centaurus** in the ships list. They
   were missing from the sc-cargo.space scrape, so the new-run Ship picker
   didn't offer them.
