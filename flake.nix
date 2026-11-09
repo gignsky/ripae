@@ -30,14 +30,16 @@
         rustToolchain = pkgs.rust-bin.stable.latest.default;
         craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
 
-        # cleanCargoSource keeps only Rust/Cargo files; askama templates and
-        # sqlx::migrate! migrations are also read at compile time.
+        # cleanCargoSource keeps only Rust/Cargo files; askama templates,
+        # sqlx::migrate! migrations, and CHANGELOG.md (include_str!) are also
+        # read at compile time.
         src = pkgs.lib.fileset.toSource {
           root = ./.;
           fileset = pkgs.lib.fileset.unions [
             (craneLib.fileset.commonCargoSources ./.)
             ./templates
             ./migrations
+            ./CHANGELOG.md
           ];
         };
         commonArgs = {

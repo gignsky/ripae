@@ -121,6 +121,13 @@ pub struct IndexTemplate {
 }
 
 #[derive(Template)]
+#[template(path = "changelog.html")]
+pub struct ChangelogTemplate {
+    /// Rendered from our own CHANGELOG.md, so it's trusted HTML.
+    pub body: &'static str,
+}
+
+#[derive(Template)]
 #[template(path = "partials/run_row.html")]
 pub struct RunRowTemplate {
     pub run: RunView,
