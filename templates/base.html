@@ -25,6 +25,12 @@
         color: var(--pico-primary-inverse);
       }
       .pick-menu mark { padding: 0; background: none; color: inherit; font-weight: bold; }
+      .version-badge {
+        position: fixed; right: 0.75rem; bottom: 0.5rem; z-index: 20;
+        font-size: 0.75rem; color: var(--pico-muted-color);
+        text-decoration: none;
+      }
+      .version-badge:hover { color: var(--pico-primary); text-decoration: underline; }
     </style>
   </head>
   <body>
@@ -32,5 +38,20 @@
       <h1>⚓ Ripae</h1>
       {% block content %}{% endblock %}
     </main>
+
+    {# Works as a plain link without JS; with htmx it opens the dialog. #}
+    <a class="version-badge" href="/changelog" title="What's new"
+       hx-get="/changelog" hx-target="#changelog-body" hx-swap="innerHTML"
+       hx-on::after-request="if (event.detail.successful) document.getElementById('changelog').showModal()"
+       >v{{ crate::changelog::VERSION }}</a>
+    <dialog id="changelog" onclick="if (event.target === this) this.close()">
+      <article>
+        <header>
+          <button aria-label="Close" rel="prev" onclick="this.closest('dialog').close()"></button>
+          <strong>Ripae v{{ crate::changelog::VERSION }}</strong>
+        </header>
+        <div id="changelog-body"></div>
+      </article>
+    </dialog>
   </body>
 </html>
