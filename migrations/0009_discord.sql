@@ -1,4 +1,4 @@
--- migrations/0008_discord.sql
+-- migrations/0009_discord.sql
 -- 0.3: members sign in with Discord (the NISC server is the door). A
 -- member's Discord account is `discord_id` (the snowflake, as text); the
 -- handle, display name and avatar are refreshed from Discord on every
