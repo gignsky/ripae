@@ -88,7 +88,7 @@ async fn render_index(
     (status, body).into_response()
 }
 
-fn validate_new_run(new_run: &NewRun) -> Option<String> {
+fn validate_new_run(new_run: &mut NewRun) -> Option<String> {
     if new_run.commodity.trim().is_empty() {
         return Some("Commodity is required.".to_string());
     }
@@ -101,8 +101,9 @@ fn validate_new_run(new_run: &NewRun) -> Option<String> {
     if new_run.buy_price_scu < 0.0 {
         return Some("Buy price can't be negative.".to_string());
     }
-    if new_run.bought_at.trim().is_empty() {
-        return Some("Bought-at date is required.".to_string());
+    match model::parse_date(&new_run.bought_at, model::today()) {
+        Ok(date) => new_run.bought_at = date,
+        Err(error) => return Some(format!("Bought at: {error}")),
     }
     None
 }
@@ -162,7 +163,7 @@ pub async fn create(
     user: CurrentUser,
     Form(mut new_run): Form<NewRun>,
 ) -> Response {
-    if let Some(error) = validate_new_run(&new_run) {
+    if let Some(error) = validate_new_run(&mut new_run) {
         return render_index(&state, &user, Some(error)).await;
     }
     if let Err(error) = pick_new_run(&state, &mut new_run).await {
@@ -226,7 +227,14 @@ pub async fn update_run(
         )
             .into_response();
     }
-    if let Err(error) = pick_edit(&state, &mut edit).await {
+    let picked = match model::parse_date(&edit.bought_at, model::today()) {
+        Ok(date) => {
+            edit.bought_at = date;
+            pick_edit(&state, &mut edit).await
+        }
+        Err(error) => Err(format!("Bought at: {error}")),
+    };
+    if let Err(error) = picked {
         return (
             StatusCode::UNPROCESSABLE_ENTITY,
             render(&RunFormTemplate {
@@ -303,6 +311,19 @@ pub async fn close_run(
             }),
         )
             .into_response();
+    }
+    match model::parse_date(&close.sold_at, model::today()) {
+        Ok(date) => close.sold_at = date,
+        Err(error) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                render(&CloseFormTemplate {
+                    run: RunView::new(&run),
+                    error: Some(format!("Sold at: {error}")),
+                }),
+            )
+                .into_response();
+        }
     }
     if close.sell_price_scu < 0.0 || close.scu_sold < 0.0 {
         return (

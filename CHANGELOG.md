@@ -3,6 +3,17 @@
 Every notable change to Ripae. Newest first. This file is also what the
 version badge in the corner of the site shows.
 
+## 0.1.2
+
+### Changed
+- **Real-world dates.** Date fields are now date pickers using the real
+  calendar instead of in-game SC dates. "Bought on" and "Sold on" default to
+  today's date.
+- Dates already logged in SC years (e.g. 2956) were converted to the real
+  year (SC year minus 930), so old and new runs sort together.
+- A date far in the future is refused with a reminder to use the real
+  date, which catches an SC date typed by habit.
+
 ## 0.1.1
 
 ### Added
