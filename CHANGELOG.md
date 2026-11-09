@@ -3,6 +3,15 @@
 Every notable change to Ripae. Newest first. This file is also what the
 version badge in the corner of the site shows.
 
+## 0.2.2
+
+### Fixed
+- **Editing a load saves again.** On a load bought per lot whose price
+  doesn't divide evenly into cents per SCU (1,000 aUEC for 3 SCU), *Save*
+  did nothing: the hidden per-SCU field held 333.333… and the browser
+  quietly refused to submit it. Edit now shows prices to the cent and the
+  price fields take any figure.
+
 ## 0.2.1
 
 ### Added
