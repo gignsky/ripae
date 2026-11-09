@@ -481,7 +481,7 @@ pub async fn create_voyage(State(state): State<AppState>, user: CurrentUser, bod
     };
     match parse_new_run(&state, &view).await {
         Ok((voyage, loads)) => {
-            if let Err(e) = repo::create_voyage(&state.pool, owner, &voyage, &loads).await {
+            if let Err(e) = repo::create_voyage(&state.pool, owner, user.id, &voyage, &loads).await {
                 tracing::error!(error = %e, "failed to create voyage");
                 view.error = Some("Could not save that run.".into());
                 return render_index(&state, &user, SplashMode::Hidden, Some(view)).await;
@@ -553,6 +553,8 @@ pub async fn voyage_edit_form(State(state): State<AppState>, _user: CurrentUser,
                 bought_at: v.bought_at.clone(),
                 ship: v.ship.as_ref().map(|s| s.name.clone()).unwrap_or_default(),
                 notes: v.notes.clone().unwrap_or_default(),
+                entered_by: v.entered_by.to_string(),
+                users: repo::list_users(&state.pool).await.unwrap_or_default(),
                 error: None,
             };
             head_with(&v, VoyageExtra::Edit(form), StatusCode::OK)
@@ -561,7 +563,7 @@ pub async fn voyage_edit_form(State(state): State<AppState>, _user: CurrentUser,
     }
 }
 
-/// `PUT /voyages/:id` -- ship, date, notes. Success re-renders Open Cargo
+/// `PUT /voyages/:id` -- ship, date, notes, who logged it. Success re-renders Open Cargo
 /// (every load's where-now names the hull).
 pub async fn voyage_update(State(state): State<AppState>, _user: CurrentUser, Path(id): Path<i64>, body: String) -> Response {
     let v = match find_voyage(&state, id).await {
@@ -573,12 +575,15 @@ pub async fn voyage_update(State(state): State<AppState>, _user: CurrentUser, Pa
         bought_at: form.get("bought_at").into(),
         ship: form.get("ship").into(),
         notes: form.get("notes").into(),
+        entered_by: form.get("entered_by").into(),
+        users: repo::list_users(&state.pool).await.unwrap_or_default(),
         error: None,
     };
     let parsed = async {
         let bought_at = parse_date(&view.bought_at, today()).map_err(|e| format!("Bought on: {e}"))?;
         let ship_id = pick_ship(&state, &view.ship).await?;
-        Ok::<_, String>(EditVoyage { ship_id, bought_at, notes: opt(&view.notes) })
+        let entered_by = pick_member(&view.entered_by, v.entered_by, &view.users, "Logged by")?;
+        Ok::<_, String>(EditVoyage { ship_id, bought_at, notes: opt(&view.notes), entered_by })
     }
     .await;
     match parsed {
@@ -729,7 +734,7 @@ fn confirm_for(kind: &'static str, id: i64, v: &Voyage, loads: &[&Load]) -> Conf
             _ => loads.first().map(|l| l.commodity.to_uppercase()).unwrap_or_default(),
         },
         ship_name: v.ship.as_ref().map(|s| s.name.clone()).unwrap_or_else(|| "—".into()),
-        logged_by_upper: v.logged_by_name.to_uppercase(),
+        logged_by_upper: v.entered_by_name.to_uppercase(),
         lines: loads
             .iter()
             .map(|l| ConfirmLine {

@@ -286,7 +286,7 @@ impl VoyageView {
             label: format!("Voyage {}", v.id),
             date_short: short_date(&v.bought_at),
             ship_name: v.ship.as_ref().map(|s| s.name.clone()).unwrap_or_else(|| "—".into()),
-            logged_by_upper: v.logged_by_name.to_uppercase(),
+            logged_by_upper: v.entered_by_name.to_uppercase(),
             load_count: open.len(),
             stop_count: v.stop_count(),
             notes: v.notes.clone().unwrap_or_default(),
@@ -370,6 +370,9 @@ pub struct VoyageFormView {
     pub bought_at: String,
     pub ship: String,
     pub notes: String,
+    /// Who typed the voyage in (user id), correctable here; the crew list.
+    pub entered_by: String,
+    pub users: Vec<User>,
     pub error: Option<String>,
 }
 
