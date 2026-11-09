@@ -4,11 +4,11 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Ripae</title>
-    <link rel="stylesheet" href="/static/ripae.css" />
+    <link rel="stylesheet" href="/static/ripae.css?v={{ crate::changelog::VERSION }}" />
     {# Fragments mix <tbody> rows with out-of-band <section>s; template
        parsing is the only way the HTML parser keeps both. #}
     <meta name="htmx-config" content='{"useTemplateFragments": true}' />
-    <script src="/static/htmx.min.js"></script>
+    <script src="/static/htmx.min.js?v={{ crate::changelog::VERSION }}"></script>
     <script>
       // Validation failures come back as 422 with the form re-rendered and an
       // error line. htmx 1.9 refuses to swap any 4xx by default, so without
@@ -33,8 +33,8 @@
         });
       });
     </script>
-    <script src="/static/picker.js" defer></script>
-    <script src="/static/ripae.js" defer></script>
+    <script src="/static/picker.js?v={{ crate::changelog::VERSION }}" defer></script>
+    <script src="/static/ripae.js?v={{ crate::changelog::VERSION }}" defer></script>
   </head>
   <body>
     <div class="screen">
