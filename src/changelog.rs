@@ -52,12 +52,14 @@ mod tests {
     fn changelog_renders_and_lists_the_current_version() {
         let html = changelog_html();
         assert!(html.contains("<h1>Changelog</h1>"));
-        // The running version (minus any -rollN dev suffix) must have an
-        // entry, so a release can't ship without its changelog.
-        let release = VERSION.split('-').next().unwrap();
-        assert!(
-            html.contains(&format!("<h2>{release}")),
-            "CHANGELOG.md has no '## {release}' entry"
-        );
+        // A release version must have an entry, so it can't ship without
+        // its changelog. Roll builds (-rollN) are exempt: their entry is
+        // written on rolling just before promotion, not in the roll.
+        if !VERSION.contains('-') {
+            assert!(
+                html.contains(&format!("<h2>{VERSION}")),
+                "CHANGELOG.md has no '## {VERSION}' entry"
+            );
+        }
     }
 }

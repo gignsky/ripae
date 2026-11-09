@@ -151,6 +151,12 @@ still hold come first.
   `rolling_branch = "rolling"`; gates `cargo test` + `cargo build --release`,
   plus `scripts/check-changelog.sh` on the way to `master`). `roll/` branches
   land on `rolling` → `master`; promotion tags.
+- **The changelog is written on `rolling`, not in a roll.** Rolls leave
+  `CHANGELOG.md` alone; the entry for a release is written on `rolling`
+  just before promotion, covering every roll graduated since the last one.
+  Only release versions must have an entry (`check-changelog.sh` on the
+  way to `master`, and the changelog test for a build without a `-rollN`
+  suffix).
 - **sqlx: runtime queries, not compile-time `query!`/`query_as!` macros.**
   The compile-time macros need a live `DATABASE_URL` (or a committed
   `.sqlx` offline cache) at build time; plain `sqlx::query` with
@@ -220,6 +226,12 @@ still hold come first.
   exceed the profit (the seller agreed to it). On a loss every share pays 0
   (ruled). "Runs closed" on the board counts voyages with every load sold in
   which the member sold at least one load.
+- **Lost cargo is a loss.** What a lost or written-off crate cost
+  (`written_off`) comes off realised (Open Cargo's totals and the board's
+  *Org realised*) and off the lifetime profit and cash of whoever holds
+  the load (`submitted_by`), whether the load is open, sold or written off
+  whole. A sale's own profit, and the shares settled on it, still count
+  only the crates that sold.
 - **`users.created_at` is the service record's "aboard since."** Keep it
   across the 0.2 wipe with the steps under Deploying.
 - **Bookkeeping for a crewmate.** Whose run it is (`voyages.logged_by`,

@@ -693,7 +693,10 @@ pub struct Totals {
     pub written_off: f64,
     /// `committed = Σ cost over open loads − written_off`.
     pub committed: f64,
-    /// `realised = Σ profit over sold loads`.
+    /// Σ written_off over every load, open, sold or written off whole.
+    pub losses: f64,
+    /// `realised = Σ profit over sold loads − losses`: lost cargo was paid
+    /// for, so it comes off the overall profit.
     pub realised: f64,
     pub open_voyages: usize,
     pub open_loads: usize,
@@ -706,6 +709,7 @@ impl Totals {
         for v in voyages {
             let mut any_open = false;
             for l in &v.loads {
+                t.losses += l.written_off();
                 if l.is_open() {
                     any_open = true;
                     t.open_loads += 1;
@@ -721,6 +725,7 @@ impl Totals {
             }
         }
         t.committed = t.committed_gross - t.written_off;
+        t.realised -= t.losses;
         t
     }
 }
@@ -775,25 +780,41 @@ impl SortKey {
     }
 }
 
-/// `board_credit(u) = Σ seller_keeps where u sold + Σ share.paid where share.to_user = u`.
+/// `board_credit(u) = Σ seller_keeps where u sold + Σ share.paid where
+/// share.to_user = u − losses(u)`.
 pub fn board_credit(user_id: i64, voyages: &[Voyage]) -> f64 {
-    sold_loads(voyages)
+    let sales: f64 = sold_loads(voyages)
         .map(|l| {
             let kept = if l.submitted_by == user_id { l.seller_keeps().unwrap_or(0.0) } else { 0.0 };
             let earned: f64 = l.shares.iter().filter(|s| s.to_user == user_id).map(|s| s.paid_auec).sum();
             kept + earned
         })
-        .sum()
+        .sum();
+    sales - losses(user_id, voyages)
 }
 
-/// `cash(u) = Σ seller_keeps where u sold + Σ share.paid where share.paid_to = u`.
+/// `cash(u) = Σ seller_keeps where u sold + Σ share.paid where share.paid_to
+/// = u − losses(u)`.
 pub fn cash(user_id: i64, voyages: &[Voyage]) -> f64 {
-    sold_loads(voyages)
+    let sales: f64 = sold_loads(voyages)
         .map(|l| {
             let kept = if l.submitted_by == user_id { l.seller_keeps().unwrap_or(0.0) } else { 0.0 };
             let received: f64 = l.shares.iter().filter(|s| s.paid_to == user_id).map(|s| s.paid_auec).sum();
             kept + received
         })
+        .sum();
+    sales - losses(user_id, voyages)
+}
+
+/// `losses(u) = Σ written_off over every load u holds` (open, sold or
+/// written off whole): whoever's cargo it was paid for the crates that were
+/// lost. Shares aren't touched -- they're settled on the sale.
+pub fn losses(user_id: i64, voyages: &[Voyage]) -> f64 {
+    voyages
+        .iter()
+        .flat_map(|v| v.loads.iter())
+        .filter(|l| l.submitted_by == user_id)
+        .map(|l| l.written_off())
         .sum()
 }
 
@@ -884,6 +905,8 @@ pub struct ServiceRecord {
     pub favourite_route: Option<(String, String, usize)>,
     pub crates_lost: usize,
     pub scu_lost: u32,
+    /// What those lost crates cost; already off `board_credit` and `cash`.
+    pub written_off: f64,
     pub shares_paid_out: f64,
     pub shares_received: f64,
     pub ships_flown: Vec<String>,
@@ -960,6 +983,7 @@ pub fn service_record(user: &User, users: &[User], voyages: &[Voyage]) -> Servic
         favourite_route,
         crates_lost: lost.len(),
         scu_lost: lost.iter().map(|c| c.size_scu).sum(),
+        written_off: losses(user.id, voyages),
         // only the seller pays shares out
         shares_paid_out: mine.iter().filter(|l| l.submitted_by == user.id).map(|l| l.shares_paid()).sum(),
         shares_received: sold_loads(voyages)
@@ -1763,6 +1787,39 @@ mod tests {
         assert_eq!(t.committed, 320.0);
     }
 
+    #[test]
+    fn realised_is_net_of_every_write_off() {
+        // open: 8 SCU lost at 10 → 80
+        let open = load(1, 10.0, vec![sound(1, 32), crate_(2, 8, Condition::Lost, Whereabouts::Aboard)]);
+        // sold: profit (15-10)×16 = 80, plus a lost 8 SCU crate at 10 → 80
+        let mut sold = sold_load(2, GIG, 10.0, 15.0, &[8, 8], vec![]);
+        sold.crates.push(crate_(3, 8, Condition::Lost, Whereabouts::Aboard));
+        // written off whole, never sold: 4 SCU at 25 → 100
+        let gone = load(3, 25.0, vec![crate_(4, 4, Condition::Lost, Whereabouts::Aboard)]);
+        let vs = vec![voyage(1, GIG, None, vec![open, sold, gone])];
+        let t = Totals::from_voyages(&vs);
+        assert_eq!(t.losses, 260.0);
+        assert_eq!(t.realised, 80.0 - 260.0);
+        // committed is still what's afloat, write-offs already off it
+        assert_eq!(t.written_off, 80.0);
+        assert_eq!(t.committed, 320.0);
+    }
+
+    #[test]
+    fn write_offs_come_off_the_owner_not_the_share_holders() {
+        // JT on 50 % of a +160 sale; Gig also lost 8 SCU at 10 on an open load
+        let sold = sold_load(1, GIG, 10.0, 20.0, &[16], vec![(JT, None, ShareKind::Pct, 50.0)]);
+        let open = load(2, 10.0, vec![sound(1, 8), crate_(2, 8, Condition::Lost, Whereabouts::Aboard)]);
+        let vs = vec![voyage(1, GIG, None, vec![sold, open])];
+        assert_eq!(losses(GIG, &vs), 80.0);
+        assert_eq!(board_credit(GIG, &vs), 80.0 - 80.0);
+        assert_eq!(cash(GIG, &vs), 80.0 - 80.0);
+        assert_eq!(board_credit(JT, &vs), 80.0);
+        let rec = service_record(&users()[0], &users(), &vs);
+        assert_eq!(rec.written_off, 80.0);
+        assert_eq!(rec.board_credit, 0.0);
+    }
+
     // -- standings -----------------------------------------------------------
 
     #[test]
@@ -2141,7 +2198,8 @@ mod properties {
             prop_assert_eq!(sale.sold.len() + sale.kept.len(), l.crates.len());
         }
 
-        /// 3. Σ board_credit == Σ cash over the org.
+        /// 3. Σ board_credit == Σ cash == realised over the org, write-offs
+        /// included.
         #[test]
         fn credit_and_cash_agree_across_the_org(cases in prop::collection::vec(sale_case(), 1..=4)) {
             let mut voyages = Vec::new();
@@ -2149,13 +2207,17 @@ mod properties {
                 let sale = settle(&l, &input).unwrap();
                 let id = i as i64 + 1;
                 let seller = if i % 2 == 0 { GIG } else { JT };
-                let sold = sold_load(id, seller, l.buy_price_scu, sale.sell_price_scu, &sale.sold.iter().map(|c| c.size_scu).collect::<Vec<_>>(),
+                let mut sold = sold_load(id, seller, l.buy_price_scu, sale.sell_price_scu, &sale.sold.iter().map(|c| c.size_scu).collect::<Vec<_>>(),
                     input.shares.iter().map(|s| (s.to_user, s.paid_to, s.kind, s.amount)).collect());
+                // the load's lost crates ride along as write-offs
+                sold.crates.extend(sale.kept.iter().filter(|c| c.is_lost()).cloned());
                 voyages.push(voyage(id, seller, None, vec![sold]));
             }
             let credit: f64 = [GIG, JT, THIRD].iter().map(|&u| board_credit(u, &voyages)).sum();
             let money: f64 = [GIG, JT, THIRD].iter().map(|&u| cash(u, &voyages)).sum();
             prop_assert!(approx(credit, money), "{} vs {}", credit, money);
+            let realised = Totals::from_voyages(&voyages).realised;
+            prop_assert!(approx(credit, realised), "{} vs {}", credit, realised);
         }
 
         /// 4. committed − written_off >= 0 (the net figure is never negative).
