@@ -6,6 +6,12 @@ version badge in the corner of the site shows.
 ## 0.2.3
 
 ### Added
+- **Live ledger.** When a crewmate logs a run, edits a load, moves crates
+  or records a sale, everyone else's ledger screen catches up on its own:
+  totals, Open Cargo, the stowage plan and the ledger refresh in place and
+  only the lines that changed paint in. A row you have open (an edit,
+  close or add-load form, or a crate manifest) is left alone until you're
+  done with it.
 - **Price from your balance.** The trade terminal doesn't always show what
   you actually paid or got. *Price as → From balance* takes your aUEC
   balance before and after the trade and books the difference as the lot

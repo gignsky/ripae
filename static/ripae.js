@@ -322,6 +322,75 @@
     root.querySelectorAll("form.close-form").forEach(wireClose);
   });
 
+  /* ---- live updates: another crew member's change refreshes the ledger panels in place ----
+          src/live.rs announces every write on GET /live; this tab tags its own requests so it can
+          skip its own announcements. Rows with an open form or crate manifest are kept as they are;
+          rows whose text didn't change stay lit, so only what changed paints in. ---- */
+  var TAB = Math.random().toString(36).slice(2) + Date.now().toString(36);
+  document.addEventListener("htmx:configRequest", function (e) { e.detail.headers["X-Ripae-Tab"] = TAB; });
+  if (document.getElementById("open-cargo") && window.EventSource) {
+    var inflight = 0, pending = false, fetching = false, last = {};
+    document.addEventListener("htmx:beforeRequest", function () { inflight++; });
+    document.addEventListener("htmx:afterRequest", function () { inflight = Math.max(0, inflight - 1); if (!inflight && pending) refresh(); });
+    var norm = function (el) { return el.textContent.replace(/\s+/g, " ").trim(); };
+    var busy = function (el) { return !!el.querySelector("form, tr.manifest"); };
+    function footNote(msg) {
+      var f = document.querySelector(".foot > span:first-child");
+      if (f) f.innerHTML = '<span class="err">' + msg + "</span>";
+    }
+    function merge(old, neu) {
+      // keep anything being worked on; note what someone else closed or deleted under you
+      Array.prototype.forEach.call(old.querySelectorAll("tbody[id]"), function (o) {
+        if (!busy(o)) return;
+        var n = neu.querySelector("#" + o.id);
+        if (n) n.replaceWith(o);
+        else footNote("A row you had open was changed by another crew member");
+      });
+      // unchanged lines don't repaint
+      var seen = {};
+      Array.prototype.forEach.call(old.querySelectorAll(".ras, .rs"), function (o) { var k = norm(o); seen[k] = (seen[k] || 0) + 1; });
+      Array.prototype.forEach.call(neu.querySelectorAll(".ras, .rs"), function (n) {
+        var k = norm(n); if (seen[k] && !n.classList.contains("lit")) { seen[k]--; n.classList.add("lit"); }
+      });
+      if (old.classList.contains("lit")) neu.classList.add("lit");
+      old.replaceWith(neu);
+      htmx.process(neu);
+      document.dispatchEvent(new CustomEvent("htmx:load", { detail: { elt: neu } }));
+    }
+    function refresh() {
+      var ov = document.getElementById("overlay");
+      // don't pull rows out from under a request in flight or behind an open overlay
+      if (inflight || fetching || (ov && !ov.hidden)) { pending = true; return; }
+      pending = false; fetching = true;
+      fetch("/live/panels", { headers: { "X-Ripae-Tab": TAB }, credentials: "same-origin" })
+        .then(function (r) { if (!r.ok) throw new Error(r.status); return r.text(); })
+        .then(function (text) {
+          var tpl = document.createElement("template"); tpl.innerHTML = text;
+          // compare with the markup the server sent last time: the live DOM carries lit classes,
+          // card labels and the like, and an attribute-only change (a note) has no text to compare
+          Array.prototype.slice.call(tpl.content.children).forEach(function (neu) {
+            var old = neu.id && document.getElementById(neu.id), src = neu.outerHTML;
+            if (old && last[neu.id] !== src) { last[neu.id] = src; merge(old, neu); }
+          });
+        })
+        .catch(function () {})
+        .then(function () { fetching = false; if (pending) setTimeout(refresh, 250); });
+    }
+    // a refresh held back by an overlay runs once it's dismissed (after the flicker)
+    var retry = function () { setTimeout(function () { if (pending) refresh(); }, 1200); };
+    if (overlay) overlay.addEventListener("click", function (e) { if (e.target.closest("[data-dismiss]")) retry(); });
+    document.addEventListener("keydown", function (e) { if (e.key === "Escape") retry(); });
+    var timer = null, dropped = false;
+    var es = new EventSource("/live");
+    es.addEventListener("changed", function (e) {
+      if (e.data === TAB) return;
+      clearTimeout(timer); timer = setTimeout(refresh, 200); // coalesce a burst of writes
+    });
+    // after a dropped connection, catch up on whatever was missed
+    es.addEventListener("error", function () { dropped = true; });
+    es.addEventListener("open", function () { if (dropped) { dropped = false; refresh(); } });
+  }
+
   /* ---- splash: boot log, then the gate or the welcome line ---- */
   var splash = document.getElementById("splash");
   if (splash) {
