@@ -601,6 +601,18 @@ pub async fn set_load_where(
     Ok(())
 }
 
+/// `[WRITE OFF]`: every crate still in play on the load is lost, so the
+/// load leaves Open Cargo without a sale. Returns how many crates went.
+pub async fn write_off_load(pool: &SqlitePool, load_id: i64) -> Result<u64> {
+    let done = sqlx::query(
+        "UPDATE crates SET condition = 'lost' WHERE load_id = ? AND condition IN ('sound', 'glitched')",
+    )
+    .bind(load_id)
+    .execute(pool)
+    .await?;
+    Ok(done.rows_affected())
+}
+
 /// Records a settled sale. When every sellable crate sold the load itself
 /// closes; otherwise the sold crates move to a new load row on the same
 /// voyage (the "split", RIPAE-0.2.md §4) and the original keeps the rest.
@@ -614,6 +626,12 @@ pub async fn close_load(
     sell_terminal: &str,
 ) -> Result<i64> {
     let mut tx = pool.begin().await?;
+    for id in &sale.written_off {
+        sqlx::query("UPDATE crates SET condition = 'lost' WHERE id = ? AND condition = 'glitched'")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+    }
     let sold_id = if sale.closes_load() {
         sqlx::query(
             "UPDATE loads SET submitted_by = ?, sold_at = ?, sell_terminal = ?, sell_price_scu = ?,
@@ -1070,5 +1088,46 @@ mod tests {
         let voyage = find_voyage(&pool, v).await.unwrap().unwrap();
         assert_eq!((voyage.logged_by, voyage.entered_by), (jt, gig));
         assert_eq!(voyage.loads[0].submitted_by, jt);
+    }
+
+    #[tokio::test]
+    async fn a_close_that_writes_off_the_glitched_crate_closes_the_load_whole() {
+        let (pool, gig, _) = test_pool().await;
+        let v = create_voyage(&pool, gig, gig, &new_voyage(None), &[new_load("Laranite", vec![(2, 8)], None)])
+            .await
+            .unwrap();
+        let mut load = find_voyage(&pool, v).await.unwrap().unwrap().loads.remove(0);
+        let (good, bad) = (load.crates[0].id, load.crates[1].id);
+        set_crate_condition(&pool, bad, Condition::Glitched).await.unwrap();
+        load.crates[1].condition = Condition::Glitched;
+        let input = SaleInput { crate_ids: vec![good], price_mode: PriceMode::Scu, price: 20.0, shares: vec![] };
+        let written_off = load.write_off_glitched(&input.crate_ids);
+        assert_eq!(written_off, vec![bad]);
+        let sale = Sale { written_off, ..settle(&load, &input).unwrap() };
+        assert!(sale.closes_load());
+        let sold = close_load(&pool, load.id, gig, &sale, "2026-11-09", "Area18 TDD").await.unwrap();
+        assert_eq!(sold, load.id, "nothing left open, so no split");
+        let v = find_voyage(&pool, v).await.unwrap().unwrap();
+        let l = &v.loads[0];
+        assert!(v.is_fully_sold() && l.was_sold());
+        assert!(l.crates.iter().find(|c| c.id == bad).unwrap().is_lost());
+        assert_eq!(l.profit(), Some(80.0), "the lost crate isn't charged to the sale");
+    }
+
+    #[tokio::test]
+    async fn writing_off_a_load_takes_it_out_of_open_cargo_but_not_into_the_ledger() {
+        let (pool, gig, _) = test_pool().await;
+        let v = create_voyage(&pool, gig, gig, &new_voyage(None), &[new_load("Laranite", vec![(1, 8), (1, 4)], None)])
+            .await
+            .unwrap();
+        let load = find_voyage(&pool, v).await.unwrap().unwrap().loads.remove(0);
+        set_crate_condition(&pool, load.crates[0].id, Condition::Glitched).await.unwrap();
+        assert_eq!(write_off_load(&pool, load.id).await.unwrap(), 2);
+        let v = find_voyage(&pool, v).await.unwrap().unwrap();
+        let l = &v.loads[0];
+        assert!(!l.is_open() && !l.was_sold());
+        assert!(l.crates.iter().all(|c| c.is_lost()));
+        assert_eq!(v.open_loads().count(), 0);
+        assert!(crate::stowage::views::ledger_rows(std::slice::from_ref(&v)).is_empty());
     }
 }

@@ -22,12 +22,12 @@ use tower_sessions::Session;
 use crate::auth::{take_splash_mode, CurrentUser, SplashMode};
 use crate::lookups::{self, Kind};
 use crate::templates::{
-    render_str, BoardTemplate, ConfirmFrag, ConfirmLine, IndexTemplate, LedgerFrag, LoadFrag,
+    render_str, BoardTemplate, ConfirmFrag, ConfirmLine, ConfirmWriteOffFrag, IndexTemplate, LedgerFrag, LoadFrag,
     OpenCargoFrag, PlansFrag, SaleFrag, Shell, TotalsFrag, VerdictFrag, VoyageHeadFrag,
 };
 use crate::AppState;
 use model::{
-    parse_boxes, parse_date, service_record, settle, today, Load, PriceMode, SaleInput, ShareInput,
+    parse_boxes, parse_date, service_record, settle, today, Load, PriceMode, Sale, SaleInput, ShareInput,
     ShareKind, SortKey, Totals, User, Voyage, Whereabouts,
 };
 use repo::{EditLoad, EditVoyage, MoveTarget, NewLoad, NewVoyage};
@@ -844,6 +844,52 @@ pub async fn load_delete(State(state): State<AppState>, _user: CurrentUser, Path
 }
 
 // ---------------------------------------------------------------------------
+// write off, with confirmation
+// ---------------------------------------------------------------------------
+
+/// `GET /loads/:id/write-off` -- the confirmation overlay.
+pub async fn load_write_off_confirm(State(state): State<AppState>, _user: CurrentUser, Path(id): Path<i64>) -> Response {
+    let load = match find_load(&state, id).await {
+        Ok(l) => l,
+        Err(r) => return r,
+    };
+    let live: Vec<_> = load.crates.iter().filter(|c| c.is_live()).collect();
+    let scu: u32 = live.iter().map(|c| c.size_scu).sum();
+    html(
+        StatusCode::OK,
+        render_str(&ConfirmWriteOffFrag {
+            id,
+            voyage_id: load.voyage_id,
+            commodity_upper: load.commodity.to_uppercase(),
+            by_upper: load.submitted_by_name.to_uppercase(),
+            crates: live.len(),
+            scu,
+            cost_fmt: crate::templates::fmt_auec(scu as f64 * load.buy_price_scu),
+        }),
+    )
+}
+
+/// `POST /loads/:id/write-off` -- every crate still in play is lost; the
+/// load leaves Open Cargo without a sale.
+pub async fn load_write_off(State(state): State<AppState>, _user: CurrentUser, Path(id): Path<i64>) -> Response {
+    let load = match find_load(&state, id).await {
+        Ok(l) => l,
+        Err(r) => return r,
+    };
+    if !load.is_open() {
+        return (StatusCode::CONFLICT, "That load is already closed.").into_response();
+    }
+    if let Err(e) = repo::write_off_load(&state.pool, id).await {
+        tracing::error!(error = %e, "failed to write off load");
+        return (StatusCode::INTERNAL_SERVER_ERROR, "could not write off load").into_response();
+    }
+    match ledger(&state).await {
+        Ok(l) => html(StatusCode::OK, format!("{}{}", open_cargo_frag(&l, false), oob_common(&l))),
+        Err(r) => r,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // load row: plain, edit, crates, move
 // ---------------------------------------------------------------------------
 
@@ -1028,6 +1074,7 @@ fn blank_close(load: &Load, users: Vec<User>) -> CloseFormView {
         balance_before: String::new(),
         balance_after: String::new(),
         selected: load.crates.iter().filter(|c| c.default_selected()).map(|c| c.id).collect(),
+        write_off_glitched: true,
         shares: Vec::new(),
         users,
         sold_by: load.submitted_by.to_string(),
@@ -1059,6 +1106,7 @@ fn close_form_from(form: &FormData, users: Vec<User>) -> CloseFormView {
         balance_before: form.get("sell_bal_before").into(),
         balance_after: form.get("sell_bal_after").into(),
         selected: form.all("crate").iter().filter_map(|v| v.parse().ok()).collect(),
+        write_off_glitched: form.get("write_off_glitched") == "1",
         shares: (0..n)
             .map(|i| ShareFormRow {
                 to_user: form.nth("share_to", i).into(),
@@ -1142,8 +1190,12 @@ pub async fn close_load(State(state): State<AppState>, user: CurrentUser, Path(i
             return load_response(&state, id, LoadExtra::Close(f), StatusCode::UNPROCESSABLE_ENTITY).await;
         }
     };
+    // unsold glitched crates written off count as lost before settling, so a
+    // close that leaves nothing else behind closes the load whole
+    let mut load = load;
+    let written_off = if f.write_off_glitched { load.write_off_glitched(&input.crate_ids) } else { Vec::new() };
     let sale = match settle(&load, &input) {
-        Ok(s) => s,
+        Ok(s) => Sale { written_off, ..s },
         Err(e) => {
             f.error = Some(e);
             return load_response(&state, id, LoadExtra::Close(f), StatusCode::UNPROCESSABLE_ENTITY).await;
