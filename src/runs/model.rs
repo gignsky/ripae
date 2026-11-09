@@ -163,6 +163,34 @@ pub struct EditRun {
     pub notes: Option<String>,
 }
 
+/// Today's (UTC) date, the server-side default for date
+/// fields; the page swaps in the viewer's local date.
+pub fn today() -> time::Date {
+    time::OffsetDateTime::now_utc().date()
+}
+
+/// Accepts a real calendar date as `YYYY-MM-DD` (what `<input type="date">`
+/// submits) and returns it normalised. Years past next year are refused --
+/// those are almost always in-game SC dates (real year + 930).
+pub fn parse_date(raw: &str, today: time::Date) -> Result<String, String> {
+    let bad = || format!("\"{}\" isn't a date -- use YYYY-MM-DD.", raw.trim());
+    let mut parts = raw.trim().splitn(3, '-');
+    let (Some(y), Some(m), Some(d)) = (parts.next(), parts.next(), parts.next()) else {
+        return Err(bad());
+    };
+    let year: i32 = y.parse().map_err(|_| bad())?;
+    let month: u8 = m.parse().map_err(|_| bad())?;
+    let day: u8 = d.parse().map_err(|_| bad())?;
+    let month = time::Month::try_from(month).map_err(|_| bad())?;
+    let date = time::Date::from_calendar_date(year, month, day).map_err(|_| bad())?;
+    if date.year() > today.year() + 1 {
+        return Err(format!(
+            "{date} looks like an in-game date -- enter the real-world date instead."
+        ));
+    }
+    Ok(date.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -252,5 +280,23 @@ mod tests {
             let s = status.to_string();
             assert_eq!(s.parse::<Status>().unwrap(), status);
         }
+    }
+
+    #[test]
+    fn parse_date_accepts_real_dates_and_normalises() {
+        let today = time::Date::from_calendar_date(2026, time::Month::November, 8).unwrap();
+        assert_eq!(parse_date(" 2026-11-08 ", today), Ok("2026-11-08".to_string()));
+        assert_eq!(parse_date("2026-1-5", today), Ok("2026-01-05".to_string()));
+        assert_eq!(parse_date("2027-12-31", today), Ok("2027-12-31".to_string()));
+    }
+
+    #[test]
+    fn parse_date_rejects_garbage_impossible_and_sc_dates() {
+        let today = time::Date::from_calendar_date(2026, time::Month::November, 8).unwrap();
+        assert!(parse_date("", today).is_err());
+        assert!(parse_date("yesterday", today).is_err());
+        assert!(parse_date("2026-02-30", today).is_err());
+        let sc = parse_date("2956-11-08", today).unwrap_err();
+        assert!(sc.contains("in-game"), "{sc}");
     }
 }
