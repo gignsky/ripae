@@ -1,0 +1,22 @@
+{# Correct a recorded sale from the ledger: who sold it, when, where, the
+   price and the shares. The crates that sold don't change. A successful
+   save answers with an empty overlay (static/ripae.js closes it) plus the
+   ledger and totals oob. `close-form` gets it the close form's live preview;
+   data-scu stands in for the crate picker. #}
+<div class="splash-in" data-overlay="sale-edit" role="dialog" aria-label="Edit sale">
+  <form class="run close-form sale-edit" hx-put="/loads/{{ id }}/sale" hx-target="#overlay" hx-swap="innerHTML" data-buy-scu="{{ buy_price_scu }}" data-scu="{{ scu_sold }}">
+    <p class="ras tag">Edit sale · <b>{{ commodity_upper }}</b> · {{ scu_sold }} SCU from voyage {{ voyage_id }} · bought at {{ buy_price_scu_fmt }} / SCU</p>
+    {% if let Some(error) = f.error %}<p class="ras neg form-error">{{ error }}</p>{% endif %}
+    <div class="ras fields">
+      <label>Sold by<select name="sold_by" title="Who made the sale: credit and the remainder are theirs">{% for u in f.users %}<option value="{{ u.id }}"{% if f.sold_by == u.id.to_string() %} selected{% endif %}>{{ u.display_name|upper }}</option>{% endfor %}</select></label>
+      <label>Sold on<input name="sold_at" type="date" value="{{ f.sold_at }}" required /></label>
+      <label>Sell terminal<input name="sell_terminal" type="text" list="pick-terminals" data-pick autocomplete="off" value="{{ f.sell_terminal }}" required /></label>
+      {% include "partials/sale_price_fields.html" %}
+    </div>
+    {% include "partials/sale_shares.html" %}
+    <div class="ras formfoot">
+      <span class="actions"><button class="cmd boxed" type="submit">Save sale</button><button class="cmd boxed" type="button" data-dismiss>Cancel</button></span>
+      <span class="note preview">profit = — · seller keeps —</span>
+    </div>
+  </form>
+</div>
