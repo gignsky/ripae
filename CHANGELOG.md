@@ -3,6 +3,17 @@
 Every notable change to Ripae. Newest first. This file is also what the
 version badge in the corner of the site shows.
 
+## 0.2.6
+
+### Changed
+- **Lost cargo counts as a loss.** What a lost or written-off crate cost
+  now comes off the overall profit: *Realised* on Open Cargo and *Org
+  realised* on the board, whether the load is still open, sold, or
+  written off whole. The same amount comes off the lifetime profit and
+  cash of whoever's cargo it was, and their service record shows it next
+  to *Crates lost*. A sale's own profit, and the shares paid on it, still
+  count only the crates that sold.
+
 ## 0.2.5
 
 ### Changed
