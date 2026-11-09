@@ -48,6 +48,35 @@ async fn main() -> anyhow::Result<()> {
         .route("/login", get(auth::login_form).post(auth::login))
         .route("/logout", post(auth::logout))
         .route("/", get(stowage::index))
+        .route("/board", get(stowage::board))
+        .route("/crew/{id}", get(stowage::crew))
+        .route("/voyages", post(stowage::create_voyage))
+        .route(
+            "/voyages/{id}",
+            axum::routing::put(stowage::voyage_update).delete(stowage::voyage_delete),
+        )
+        .route("/voyages/{id}/head", get(stowage::voyage_head))
+        .route("/voyages/{id}/edit", get(stowage::voyage_edit_form))
+        .route("/voyages/{id}/merge", get(stowage::voyage_merge_chooser))
+        .route("/voyages/{id}/move", post(stowage::voyage_move))
+        .route("/voyages/{id}/delete", get(stowage::voyage_delete_confirm))
+        .route("/voyages/{id}/loads", post(stowage::add_load))
+        .route("/voyages/{id}/loads/new", get(stowage::add_load_form))
+        .route("/loads/{id}", get(stowage::load_row).delete(stowage::load_delete))
+        .route(
+            "/loads/{id}/edit",
+            get(stowage::load_edit_form).put(stowage::load_update),
+        )
+        .route("/loads/{id}/move", post(stowage::load_move))
+        .route("/loads/{id}/crates", get(stowage::crate_manifest))
+        .route("/loads/{id}/where", post(stowage::load_where))
+        .route(
+            "/loads/{id}/close",
+            get(stowage::close_form).post(stowage::close_load),
+        )
+        .route("/loads/{id}/delete", get(stowage::load_delete_confirm))
+        .route("/crates/{id}/condition", post(stowage::crate_condition))
+        .route("/crates/{id}/where", post(stowage::crate_where))
         .nest_service("/static", ServeDir::new("static"))
         .layer(session_layer)
         .with_state(state);

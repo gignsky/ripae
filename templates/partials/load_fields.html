@@ -1,0 +1,30 @@
+{# One load's fields. Expects `f: LoadFormView`. Names repeat per load line
+   in the New Run form and are read back by position. #}
+<label>Commodity<input name="commodity" type="text" list="pick-commodities" data-pick autocomplete="off" placeholder="LARANITE" value="{{ f.commodity }}" required /></label>
+{% if f.show_status && f.boxes != "" && f.status != "" || f.show_status && f.boxes != "" && f.status == "" %}
+<label>Boxes<input name="boxes" type="text" value="{{ f.boxes }}" readonly title="Change crates from the manifest" /><span class="calc boxes-calc">crates set from the manifest</span></label>
+{% else %}
+<label>Boxes<input name="boxes" type="text" placeholder="2×32, 4×8" value="{{ f.boxes }}" data-boxes required /><span class="calc boxes-calc">= —</span></label>
+{% endif %}
+<label>SCU<input name="scu" type="number" placeholder="0" value="{{ f.scu }}" data-scu /></label>
+<label>Price as<select name="price_mode" class="mode" data-mode>
+  <option value="scu"{% if f.price_mode != "lot" %} selected{% endif %}>Per SCU</option>
+  <option value="lot"{% if f.price_mode == "lot" %} selected{% endif %}>Per lot</option>
+</select></label>
+<label class="price-scu"{% if f.price_mode == "lot" %} hidden{% endif %}>Buy price / SCU<input name="price_scu" type="number" step="0.01" min="0" placeholder="0.00" value="{{ f.price_scu }}" /><span class="calc">lot = —</span></label>
+<label class="price-lot"{% if f.price_mode != "lot" %} hidden{% endif %}>Paid for the lot<input name="price_lot" type="number" step="0.01" min="0" placeholder="0" value="{{ f.price_lot }}" /><span class="calc">per SCU = —</span></label>
+<label>Buy terminal<input name="terminal" type="text" list="pick-terminals" data-pick autocomplete="off" value="{{ f.terminal }}" placeholder="Shubin Mining Facility SCD-1" required /></label>
+<label>Stop №<input name="stop_no" type="number" value="{{ f.stop_no }}" min="1" /></label>
+<label>Bound for<input name="destination" type="text" list="pick-terminals" data-pick autocomplete="off" placeholder="undecided" value="{{ f.destination }}" /></label>
+{% if f.show_status %}
+<label>Status<select name="status" data-status>
+  <option value=""{% if f.status == "" %} selected{% endif %}>— leave crates as they are</option>
+  <option value="awaiting_pickup"{% if f.status == "awaiting_pickup" %} selected{% endif %}>Awaiting pickup</option>
+  <option value="aboard"{% if f.status == "aboard" %} selected{% endif %}>In transit</option>
+  <option value="stored"{% if f.status == "stored" %} selected{% endif %}>Stored</option>
+</select></label>
+<label>Stored at<input name="stored_at" type="text" list="pick-terminals" data-pick autocomplete="off" placeholder="—" value="{{ f.stored_at }}" /></label>
+<label>Notes<input name="notes" type="text" value="{{ f.notes }}" /></label>
+{% else %}
+<input type="hidden" name="status" value="" /><input type="hidden" name="stored_at" value="" /><input type="hidden" name="notes" value="{{ f.notes }}" />
+{% endif %}

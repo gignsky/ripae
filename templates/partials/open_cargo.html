@@ -1,0 +1,13 @@
+<div class="tbl" id="open-cargo"{% if oob %} hx-swap-oob="true"{% endif %}>
+  <table class="cards" id="open-cargo-table">
+    <thead><tr><th>Voyage / commodity</th><th class="num">SCU</th><th>Boxes</th><th>Bought at</th><th>Status</th><th>Stop · bound for</th><th>Where now</th><th class="num">Cost</th><th>By</th><th>Cmd</th></tr></thead>
+    {% for v in voyages %}
+    {% include "partials/voyage_head.html" %}
+    {% for l in v.loads %}
+    {% include "partials/load.html" %}
+    {% endfor %}
+    {% else %}
+    <tbody class="ras"><tr><td colspan="10"><em>No open cargo. Fly safe.</em></td></tr></tbody>
+    {% endfor %}
+  </table>
+</div>

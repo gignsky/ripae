@@ -57,12 +57,26 @@
         text-decoration: none;
       }
       .version-badge:hover { color: var(--pico-primary); text-decoration: underline; }
+      [hidden] { display: none !important; }
+      .cmd { background: none; border: 0; padding: 0; margin: 0 .3rem 0 0; font: inherit; color: var(--pico-primary); cursor: pointer; text-decoration: underline; width: auto; display: inline; }
+      .cmd.danger { color: var(--pico-del-color); }
+      .cmd::before { content: "["; } .cmd::after { content: "]"; }
+      .status { border: 1px solid currentColor; padding: 0 .3rem; font-size: .75rem; text-transform: uppercase; }
+      .crate { display: inline-grid; border: 1px solid currentColor; padding: .2rem .4rem; margin: .2rem; width: auto; font: inherit; }
+      .crate.lost { text-decoration: line-through; color: var(--pico-del-color); }
+      .crate.glitched { border-style: dashed; }
+      .crate-tile { display: inline-grid; margin: .2rem; }
+      .neg { color: var(--pico-del-color); }
     </style>
   </head>
   <body>
     <main class="container">
-      <h1>⚓ Ripae</h1>
+      <header>
+        <h1>⚓ Ripae <small>LEDGER TERMINAL · NISC CARGO</small></h1>
+        {% block rail %}{% endblock %}
+      </header>
       {% block content %}{% endblock %}
+      <div id="overlay"></div>
     </main>
 
     {# Works as a plain link without JS; with htmx it opens the dialog. #}

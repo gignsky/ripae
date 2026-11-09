@@ -1,0 +1,8 @@
+<nav class="rail-meta">
+  <span>CREW MEMBER: <b>{{ display_name|upper }}</b></span>
+  <span class="views">
+    <a class="cmd{% if screen == "ledger" %} on{% endif %}" href="/" data-go="ledger">Ledger</a>
+    <a class="cmd{% if screen == "board" %} on{% endif %}" href="/board" data-go="board">Leaderboard</a>
+  </span>
+  <form method="post" action="/logout" class="inline-form"><button class="cmd" type="submit">Log out</button></form>
+</nav>

@@ -315,6 +315,8 @@ pub struct User {
     pub id: i64,
     pub handle: String,
     pub display_name: String,
+    /// `users.created_at` -- the "aboard since" date on the service record.
+    pub created_at: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -1229,9 +1231,9 @@ pub(crate) mod fixtures {
 
     pub fn users() -> Vec<User> {
         vec![
-            User { id: GIG, handle: "lordgig".into(), display_name: "Lord Gig".into() },
-            User { id: JT, handle: "firstofficer".into(), display_name: "JT".into() },
-            User { id: THIRD, handle: "crew03".into(), display_name: "Crew-03".into() },
+            User { id: GIG, handle: "lordgig".into(), display_name: "Lord Gig".into(), created_at: "2026-10-21 18:00:00".into() },
+            User { id: JT, handle: "firstofficer".into(), display_name: "JT".into(), created_at: "2026-10-21 18:00:00".into() },
+            User { id: THIRD, handle: "crew03".into(), display_name: "Crew-03".into(), created_at: "2026-11-01 09:00:00".into() },
         ]
     }
 

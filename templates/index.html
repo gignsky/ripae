@@ -1,15 +1,40 @@
 {% extends "base.html" %}
+{% block rail %}{% let screen = "ledger" %}{% include "partials/rail.html" %}{% endblock %}
 {% block content %}
-<p>
-  Logged in as <strong>{{ display_name }}</strong>.
-  <form method="post" action="/logout" style="display: inline;">
-    <button type="submit" class="secondary outline">Log out</button>
-  </form>
-</p>
-<div class="grid">
-  <article><strong>Committed (afloat)</strong><br />{{ committed_fmt }} aUEC</article>
-  <article><strong>Realised (sold)</strong><br />{{ realised_fmt }} aUEC</article>
-  <article><strong>Open cargo</strong><br />{{ open_loads }} loads · {{ open_scu }} SCU</article>
-</div>
-<p><em>0.2 "Stowage" schema is in; the ledger screens follow in roll 7 step 7.4.</em></p>
+{{ totals_html|safe }}
+
+<section class="panel" id="open-cargo-panel">
+  <header><h2>Open Cargo</h2><span class="hint">Bought, not yet sold, grouped by voyage. Oldest first. Stop № is the order you mean to sell. Loads move between voyages with Merge and Detach.</span></header>
+  {{ open_cargo_html|safe }}
+</section>
+
+<section class="panel" id="plans-panel">
+  <header><h2>Stowage Plan</h2><span class="hint">Live, from Open Cargo. Last stop loads first, deepest in the hold. Unassigned voyages bound the same way are offered as one.</span></header>
+  {{ plans_html|safe }}
+</section>
+
+<section class="panel{% if !new_run.open %} collapsed{% endif %}" id="newrun">
+  <header><h2>New Run</h2><button class="cmd" type="button" id="newrun-toggle" aria-expanded="{% if new_run.open %}true{% else %}false{% endif %}" aria-controls="newrun-body">{% if new_run.open %}Close{% else %}New run{% endif %}</button></header>
+  <div class="body" id="newrun-body"{% if !new_run.open %} hidden{% endif %}>
+    {% include "partials/new_run_form.html" %}
+  </div>
+</section>
+
+<section class="panel" id="ledger-panel">
+  <header><h2>Ledger</h2><span class="hint">Sold loads, newest first. Route is buy terminal → sell terminal. aUEC throughout.</span></header>
+  {{ ledger_html|safe }}
+</section>
+
+{# Pick-lists for every data-pick input on the page, including htmx-swapped
+   fragments. Native suggestions without JS; static/picker.js upgrades them
+   to a fuzzy-search dropdown. Names are suggestions, not gates. #}
+<datalist id="pick-commodities">
+  {% for name in commodities %}<option value="{{ name }}"></option>{% endfor %}
+</datalist>
+<datalist id="pick-terminals">
+  {% for name in terminals %}<option value="{{ name }}"></option>{% endfor %}
+</datalist>
+<datalist id="pick-ships">
+  {% for name in ships %}<option value="{{ name }}"></option>{% endfor %}
+</datalist>
 {% endblock %}

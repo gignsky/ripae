@@ -1538,6 +1538,7 @@ dependencies = [
  "askama",
  "axum",
  "base64 0.23.1",
+ "form_urlencoded",
  "proptest",
  "pulldown-cmark",
  "rand 0.10.3",
