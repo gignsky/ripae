@@ -321,3 +321,5 @@ body::before{content:"";position:fixed;left:0;right:0;top:0;height:22vh;pointer-
 .screen{animation:vsync 11s steps(1,end) infinite}
 @keyframes vsync{0%{transform:none}63%{transform:translateX(1px) skewX(-.4deg)}63.6%{transform:translateX(-2px)}64.2%{transform:none}91%{transform:translateY(1px)}91.4%{transform:none}}
 @media (prefers-reduced-motion:reduce){.scan,pre.scan{animation:none}body::after,.screen{animation:none}body::before{display:none}}
+/* ledger: eleven columns leave no room for side-by-side commands -- stack them so the Cmd column stays inside the panel */
+#ledger .actions{flex-direction:column;align-items:flex-start;gap:.2rem}
