@@ -49,15 +49,15 @@ async fn main() -> anyhow::Result<()> {
         .route("/logout", post(auth::logout))
         .route("/", get(runs::index))
         .route("/runs", post(runs::create))
-        .route(
-            "/runs/{id}/edit",
-            get(runs::edit_form).put(runs::update_run),
-        )
+        .route("/runs/{id}/edit", get(runs::edit_form))
         .route(
             "/runs/{id}/close",
             get(runs::close_form).post(runs::close_run),
         )
-        .route("/runs/{id}", axum::routing::delete(runs::delete_run))
+        .route(
+            "/runs/{id}",
+            axum::routing::put(runs::update_run).delete(runs::delete_run),
+        )
         .nest_service("/static", ServeDir::new("static"))
         .layer(session_layer)
         .with_state(state);
