@@ -1,0 +1,19 @@
+<div class="splash-in" data-overlay="sale" aria-label="Sale recorded">
+  <pre class="ascii ras" aria-hidden="true">███████╗ █████╗ ██╗     ███████╗
+██╔════╝██╔══██╗██║     ██╔════╝
+███████╗███████║██║     █████╗
+╚════██║██╔══██║██║     ██╔══╝
+███████║██║  ██║███████╗███████╗
+╚══════╝╚═╝  ╚═╝╚══════╝╚══════╝</pre>
+  <p class="ras tag">CONGRATULATIONS ON YOUR SALE, <b>{{ who_upper }}</b>{% if let Some(keeper) = kept_by_upper %} · BOOKED BY {{ keeper }}{% endif %}</p>
+  <div class="ras sale-fig"><span class="lbl">Profit</span><span class="val {% if profit_neg %}neg{% else %}pos{% endif %}" id="sale-profit">{{ profit_fmt }}</span><small>aUEC</small></div>
+  <div class="ras sale-line">{{ commodity_upper }} · {{ scu_sold }} SCU · {{ from_short }} <span class="arr">→</span> {{ to_short }}</div>
+  <div class="ras sale-shares">
+    {% for s in shares %}
+    <div><span>→ {{ s.to_name }} <span class="who">{{ s.terms }}{% if s.reason != "" %} · {{ s.reason }}{% endif %}{% if s.forfeited %} · forfeited to {{ s.paid_to_name }}{% endif %}</span></span><span>{{ s.paid_fmt }} aUEC</span></div>
+    {% endfor %}
+    <div><span>{{ who_upper }} keeps</span><span><b>{{ keeps_fmt }} aUEC</b></span></div>
+    {% if kept_scu > 0 %}<div><span class="who">Still open on the voyage</span><span>{{ kept_scu }} SCU</span></div>{% endif %}
+  </div>
+  <p class="ras any"><button class="cmd boxed" type="button" data-dismiss>Continue</button></p>
+</div>

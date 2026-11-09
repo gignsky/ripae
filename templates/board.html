@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel rs">
+  <header><h2>Crew Standings</h2><span class="hint">Closed sales only. Credit is net of shares; a forfeited share still counts for whoever earned it.</span>
+    <span class="actions sortby">
+      <a class="cmd{% if board.sort == "profit" %} on{% endif %}" href="/board?sort=profit" data-go="board">By profit</a>
+      <a class="cmd{% if board.sort == "runs" %} on{% endif %}" href="/board?sort=runs" data-go="board">By runs</a>
+      <a class="cmd{% if board.sort == "scu" %} on{% endif %}" href="/board?sort=scu" data-go="board">By SCU</a>
+    </span></header>
+  <div class="tbl"><table id="board" class="cards">
+    <thead><tr><th>#</th><th>Crew</th><th class="num">Profit</th><th class="num">Runs</th><th class="num">Loads</th><th class="num">SCU hauled</th><th>Best route</th><th class="bar">Share of org profit</th></tr></thead>
+    <tbody>
+      {% for s in board.rows %}
+      <tr{% if s.dim %} class="dim"{% endif %}>
+        <td class="rank">{{ s.rank }}</td>
+        <td><button class="cmd crew" type="button" hx-get="/crew/{{ s.user_id }}" hx-target="#overlay" hx-swap="innerHTML">{{ s.display_name }}</button> <span class="who">{{ s.handle }}</span></td>
+        <td class="num {% if s.profit_neg %}neg{% else %}pos{% endif %}">{{ s.profit_fmt }}</td>
+        <td class="num">{{ s.runs }}</td>
+        <td class="num">{{ s.loads }}</td>
+        <td class="num">{{ s.scu_fmt }}</td>
+        <td class="route">{% if s.has_route %}{{ s.route_from }}<span class="arr">→</span>{{ s.route_to }}{% else %}<span class="who">—</span>{% endif %}</td>
+        <td class="bar"><span class="meter" data-pct="{{ s.pct }}" style="--p: {{ s.pct }}"></span></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table></div>
+</section>
+<section class="totals rs" aria-label="Org totals">
+  <div class="tile"><div class="lbl">Org realised</div><div class="val">{{ board.org_realised_fmt }}<small>aUEC</small></div></div>
+  <div class="tile sub"><div class="lbl">Closed runs</div><div class="val">{{ board.closed_runs }}</div></div>
+  <div class="tile sub"><div class="lbl">SCU hauled</div><div class="val">{{ board.scu_hauled_fmt }}</div></div>
+  <div class="tile sub"><div class="lbl">Shares paid out</div><div class="val">{{ board.shares_paid_fmt }}<small>aUEC</small></div></div>
+</section>
+<section class="panel rs">
+  <header><h2>Recent Shares</h2><span class="hint">Profit split on close, by percentage or flat fee. A forfeited share shows earner → receiver.</span></header>
+  <div class="tbl"><table class="cards">
+    <thead><tr><th>Sold</th><th>Load</th><th>From</th><th>To</th><th>Terms</th><th class="num">Paid</th></tr></thead>
+    <tbody>
+      {% for s in board.recent_shares %}
+      <tr><td>{{ s.sold_short }}</td><td>{{ s.load }}</td><td class="who">{{ s.from_upper }}</td><td>{{ s.to_upper }}</td><td>{{ s.terms }}</td><td class="num">{{ s.paid_fmt }}</td></tr>
+      {% else %}
+      <tr><td colspan="6"><em>No shares yet.</em></td></tr>
+      {% endfor %}
+    </tbody>
+  </table></div>
+</section>
+{% endblock %}

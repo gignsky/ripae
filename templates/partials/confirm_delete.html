@@ -1,0 +1,24 @@
+<div class="splash-in" data-overlay="confirm" role="alertdialog" aria-label="Confirm deletion">
+  <pre class="ascii ras womp" aria-hidden="true">██████╗ ███████╗██╗     ███████╗████████╗███████╗
+██╔══██╗██╔════╝██║     ██╔════╝╚══██╔══╝██╔════╝
+██║  ██║█████╗  ██║     █████╗     ██║   █████╗
+██║  ██║██╔══╝  ██║     ██╔══╝     ██║   ██╔══╝
+██████╔╝███████╗███████╗███████╗   ██║   ███████╗
+╚═════╝ ╚══════╝╚══════╝╚══════╝   ╚═╝   ╚══════╝</pre>
+  <p class="ras tag">Delete <b>{{ label }}</b>? · ship {{ ship_name }} · logged by {{ logged_by_upper }}</p>
+  <div class="ras sale-shares">
+    {% for line in lines %}
+    <div><span>{{ line.commodity_upper }} · {{ line.scu }} SCU</span><span>{{ line.cost_fmt }} aUEC</span></div>
+    {% endfor %}
+    <div><span>{{ load_count }} load{% if load_count != 1 %}s{% endif %} · {{ scu }} SCU</span><span><b>{{ committed_fmt }} aUEC committed</b></span></div>
+  </div>
+  <p class="ras tag neg">This cannot be undone. {% if kind == "voyage" %}The loads and their crates go with it.{% else %}Its crates go with it.{% endif %}</p>
+  <p class="ras any"><span class="actions">
+    {% if kind == "voyage" %}
+    <button class="cmd boxed danger" type="button" data-dismiss hx-delete="/voyages/{{ id }}" hx-target="#open-cargo" hx-swap="outerHTML">Delete voyage</button>
+    {% else %}
+    <button class="cmd boxed danger" type="button" data-dismiss hx-delete="/loads/{{ id }}" hx-target="#open-cargo" hx-swap="outerHTML">Delete load</button>
+    {% endif %}
+    <button class="cmd boxed" type="button" data-dismiss>Keep it</button>
+  </span></p>
+</div>

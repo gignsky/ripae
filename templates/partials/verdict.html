@@ -1,0 +1,34 @@
+<div class="splash-in" data-overlay="verdict" aria-label="Verdict">
+  {% if r.win %}
+  <pre class="ascii ras" aria-hidden="true">██╗  ██╗ ██████╗  ██████╗ ██████╗  █████╗ ██╗   ██╗
+██║  ██║██╔═══██╗██╔═══██╗██╔══██╗██╔══██╗╚██╗ ██╔╝
+███████║██║   ██║██║   ██║██████╔╝███████║ ╚████╔╝
+██╔══██║██║   ██║██║   ██║██╔══██╗██╔══██║  ╚██╔╝
+██║  ██║╚██████╔╝╚██████╔╝██║  ██║██║  ██║   ██║
+╚═╝  ╚═╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝</pre>
+  {% else %}
+  <pre class="ascii ras womp" aria-hidden="true">██╗    ██╗ ██████╗ ███╗   ███╗██████╗
+██║    ██║██╔═══██╗████╗ ████║██╔══██╗
+██║ █╗ ██║██║   ██║██╔████╔██║██████╔╝
+██║███╗██║██║   ██║██║╚██╔╝██║██╔═══╝
+╚███╔███╔╝╚██████╔╝██║ ╚═╝ ██║██║
+ ╚══╝╚══╝  ╚═════╝ ╚═╝     ╚═╝╚═╝
+
+██╗    ██╗ ██████╗ ███╗   ███╗██████╗
+██║    ██║██╔═══██╗████╗ ████║██╔══██╗
+██║ █╗ ██║██║   ██║██╔████╔██║██████╔╝
+██║███╗██║██║   ██║██║╚██╔╝██║██╔═══╝
+╚███╔███╔╝╚██████╔╝██║ ╚═╝ ██║██║
+ ╚══╝╚══╝  ╚═════╝ ╚═╝     ╚═╝╚═╝</pre>
+  {% endif %}
+  <p class="ras tag">{{ r.line }}</p>
+  <section class="panel record ras">
+    <header><h2>Service record · {{ r.name_upper }}</h2><span class="hint">{{ r.handle_line }}</span></header>
+    <dl class="stats">
+      {% for s in r.stats %}
+      <div><dt>{{ s.label }}</dt><dd{% if s.txt %} class="txt"{% endif %}>{{ s.value }}{% if s.unit != "" %}<small>{{ s.unit }}</small>{% endif %}</dd></div>
+      {% endfor %}
+    </dl>
+  </section>
+  <p class="ras any"><button class="cmd boxed" type="button" data-dismiss>Continue</button></p>
+</div>

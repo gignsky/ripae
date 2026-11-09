@@ -1,0 +1,56 @@
+<tbody class="vhead ras" id="vhead-{{ v.id }}"{% if head_oob %} hx-swap-oob="true"{% endif %}>
+  <tr class="voyage"><td colspan="10">
+    <span class="vmeta"><span{% if v.notes != "" %} title="{{ v.notes }}"{% endif %}><b>{{ v.label }}</b> · {{ v.date_short }}</span><span>Ship <b>{{ v.ship_name }}</b></span><span>Loads <b>{{ v.load_count }}</b></span><span>Stops <b>{{ v.stop_count }}</b></span><span>Logged by <b class="who">{{ v.logged_by_upper }}</b></span>
+    <span class="actions">
+      <button class="cmd" type="button" hx-get="/voyages/{{ v.id }}/edit" hx-target="#vhead-{{ v.id }}" hx-swap="outerHTML">Edit</button>
+      <button class="cmd" type="button" title="Buy another commodity into this voyage" hx-get="/voyages/{{ v.id }}/loads/new" hx-target="#vhead-{{ v.id }}" hx-swap="outerHTML">Add load</button>
+      <button class="cmd" type="button" hx-get="/voyages/{{ v.id }}/merge" hx-target="#vhead-{{ v.id }}" hx-swap="outerHTML">Merge into…</button>
+      <button class="cmd danger" type="button" hx-get="/voyages/{{ v.id }}/delete" hx-target="#overlay" hx-swap="innerHTML">Del</button>
+    </span></span>
+  </td></tr>
+  {% if let crate::stowage::views::VoyageExtra::Merge(choices) = v.extra %}
+  <tr class="chooser"><td colspan="10">
+    <span class="crates-h"><span>Merge {{ v.label }} into…</span><span>Every open load moves; this voyage goes away.</span></span>
+    <span class="actions">
+      {% for c in choices %}
+      <button class="cmd" type="button" hx-post="/voyages/{{ v.id }}/move" hx-vals='{"voyage_id": "{{ c.id }}"}' hx-target="#open-cargo" hx-swap="outerHTML">{{ c.label }}</button>
+      {% else %}
+      <span class="hint">No other open voyage to merge into.</span>
+      {% endfor %}
+      <button class="cmd danger" type="button" hx-get="/voyages/{{ v.id }}/head" hx-target="#vhead-{{ v.id }}" hx-swap="outerHTML">Cancel</button>
+    </span>
+  </td></tr>
+  {% endif %}
+  {% if let crate::stowage::views::VoyageExtra::AddLoad(f) = v.extra %}
+  <tr class="chooser addload"><td colspan="10">
+    <form class="run" hx-post="/voyages/{{ v.id }}/loads" hx-target="#vhead-{{ v.id }}" hx-swap="outerHTML">
+      <span class="crates-h"><span>Add a load to {{ v.label }}</span><span>Same ship and date; its own commodity, crates, price and stop</span></span>
+      {% if let Some(error) = f.error %}<p class="neg form-error">{{ error }}</p>{% endif %}
+      <div class="cargo-line"><div class="fields">
+        {% include "partials/load_fields.html" %}
+      </div></div>
+      <span class="actions">
+        <button class="cmd boxed" type="submit">Add load</button>
+        <button class="cmd" type="button" hx-get="/voyages/{{ v.id }}/head" hx-target="#vhead-{{ v.id }}" hx-swap="outerHTML">Cancel</button>
+      </span>
+    </form>
+  </td></tr>
+  {% endif %}
+  {% if let crate::stowage::views::VoyageExtra::Edit(f) = v.extra %}
+  <tr class="chooser"><td colspan="10">
+    <form class="run" hx-put="/voyages/{{ v.id }}" hx-target="#vhead-{{ v.id }}" hx-swap="outerHTML">
+      <span class="crates-h"><span>Edit {{ v.label }}</span><span>Ship and date apply to every load</span></span>
+      {% if let Some(error) = f.error %}<p class="neg form-error">{{ error }}</p>{% endif %}
+      <div class="fields">
+        <label>Bought on<input type="date" name="bought_at" value="{{ f.bought_at }}" required /></label>
+        <label>Ship<input type="text" name="ship" list="pick-ships" data-pick autocomplete="off" value="{{ f.ship }}" placeholder="no hull yet" /></label>
+        <label>Notes<input type="text" name="notes" value="{{ f.notes }}" /></label>
+      </div>
+      <span class="actions">
+        <button class="cmd boxed" type="submit">Save</button>
+        <button class="cmd" type="button" hx-get="/voyages/{{ v.id }}/head" hx-target="#vhead-{{ v.id }}" hx-swap="outerHTML">Cancel</button>
+      </span>
+    </form>
+  </td></tr>
+  {% endif %}
+</tbody>

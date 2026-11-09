@@ -3,6 +3,63 @@
 Every notable change to Ripae. Newest first. This file is also what the
 version badge in the corner of the site shows.
 
+## 0.2.0 "Stowage"
+
+### Added
+- **The CRT terminal.** Every screen now wears the ship's-computer look:
+  green phosphor on black glass, scanlines, bracketed `[COMMANDS]`, and
+  everything that appears or disappears paints in line by line. The splash
+  screen is the login: boot log, then *Speak, friend, and enter*. With a
+  valid session it welcomes you back instead. `[CLOSE]` in the footer
+  replays it; `[LOG OUT]` lives on the rail and on the splash.
+- **Voyages, loads and crates.** A run is now a *voyage* (ship, date)
+  carrying one or more *cargo loads*, and every load is made of *crates*
+  (`2×32, 4×8`). Log several commodities in one run; add a load to a voyage
+  later; merge a load into another voyage or detach it into one of its own.
+- **Buy per SCU or per lot.** Enter whichever figure you have; the other is
+  worked out and both are kept.
+- **Where a crate is lives on the crate.** Open the crate manifest to mark
+  crates aboard or stored (one at a time, or `[ALL ABOARD]` /
+  `[ALL STORED]`), glitched, or lost. A load's status follows its crates:
+  `IN TRANSIT`, `STORED`, `AWAITING PICKUP`, or `SPLIT` when they're in
+  more than one place. Lost SCU is written off and shown.
+- **Close per crate.** Pick which crates sold (`[ALL SOUND CRATES]` /
+  `[NONE]`; glitched crates by hand, lost ones never), price per SCU or
+  per lot, and split the profit with crew by percentage or flat fee. Kept
+  crates stay open on the voyage. Nothing is owed on a losing sale. A share
+  can be *forfeited* to another member: the earner keeps the leaderboard
+  credit, the aUEC goes to whoever was named.
+- **SALE banner.** Recording a sale flickers the screen to black and shows
+  the profit, route, shares, and what the seller keeps.
+- **Stowage plan** with a working **sc-cargo.space** link for each hulled
+  voyage: last stop loads first (deepest), larger crates first within a
+  stop. Hull-less voyages bound the same way are offered as one with a
+  `[MERGE]` command.
+- **Leaderboard** (`/board`): crew standings by profit, runs or SCU, org
+  totals, recent shares. Click a crew name for `HOORAY` (first by profit)
+  or `WOMP WOMP` and that member's service record.
+- **Deleting a voyage** asks first, on its own screen, with the loads and
+  committed aUEC it would take with it. No browser confirm dialogs anywhere.
+- **Ships list** of 80 hulls from sc-cargo.space, with cargo capacity.
+- **Keep the books for a crewmate.** New Run has a *Crew member* picker,
+  Add Load a *Bought by* one, and the close form a *Sold by* one (defaulting
+  to whoever bought the load). Log a run as JT's and JT is the buyer, the
+  seller and the one credited on the board; the SALE banner notes who did
+  the booking.
+
+### Changed
+- **Pick-lists are suggestions, not gates.** Any commodity or terminal name
+  is accepted as typed; a name on the list is stored with the list's
+  spelling. A ship, though, must be one of the 80 known hulls (or blank).
+- Tables never scroll sideways; below ~980 px each row becomes a labelled
+  card.
+
+### Removed
+- **The 0.1 database.** Nothing in it was worth keeping, so the schema
+  starts over: the deploy wipes `ripae.db` and reseeds the two accounts
+  from `RIPAE_SEED_USERS`. See the README for the steps (and how to keep
+  the accounts' "aboard since" dates).
+
 ## 0.1.4
 
 ### Fixed
