@@ -13,5 +13,11 @@ roll_to_rolling_gates = ["cargo test", "cargo build --release"]
 rolling_to_main_gates = ["cargo test", "cargo build --release"]
 host_gates = []
 clean_protect = []
+tag_on_graduate = true
+dev_versions = true
+pull_mode = "ff-only"
+lazygit_command = "lazygit"
+bacon_command = "bacon"
+version_manifest = "auto"
 
 [host_active]
