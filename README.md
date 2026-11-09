@@ -27,16 +27,8 @@ cargo build --release
 
 ## Building the image
 
-Two ways, per the brief (§6):
+Nix only (the Dockerfile fallback the brief allowed was never exercised and was removed on 8 Nov 2026):
 
-- **Docker (NOT verified here):** `docker build -t ripae:0.1.0 .` -- a plain
-  multi-stage build (`rust:1-slim-bookworm` → `debian:bookworm-slim`).
-  Migrations and templates are compiled into the binary; only `static/`
-  (vendored `pico.min.css` + `htmx.min.js`) needs to exist alongside it at
-  runtime, and the Dockerfile copies it in. The sandbox this was built in has
-  the `docker` CLI but no reachable daemon (`/var/run/docker.sock` doesn't
-  exist), so this has only been reviewed by eye, not actually built. Treat it
-  as unverified until someone with a working daemon runs it.
 - **Nix:** `nix build .#container` via `flake.nix` (crane +
   `dockerTools.buildLayeredImage`). `nix flake check` (builds the binary and
   runs the 17 tests) and `nix build .#container` both pass, and the image
@@ -85,9 +77,6 @@ Done:
 - [x] This README.
 
 Open / unverified:
-- [ ] `docker build .` -- Dockerfile written, not actually run: this
-      sandbox has the `docker` CLI but no reachable daemon (see "Building
-      the image" above).
 - [ ] Run the Nix-built image (`docker load < result`) -- it builds, but
       hasn't been started yet.
 - [ ] Actual spacedock deployment -- the dotfiles-side module is written
@@ -98,7 +87,7 @@ Open / unverified:
 
 Per §9's suggested order of work, steps 1-6 (scaffold through htmx
 edit/close/delete) are done and tested; step 7 (container image) builds via
-Nix but hasn't been run, and the Dockerfile path is still unverified; step 8 (spacedock module + README deploy section +
+Nix but hasn't been run; step 8 (spacedock module + README deploy section +
 `v0.1.0` tag) is split across repos -- the dotfiles half is done, the tag
 is left for whoever graduates that roll.
 
