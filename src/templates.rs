@@ -1,15 +1,26 @@
+//! Askama template structs. Pages extend `base.html`; fragments are the
+//! partials htmx swaps in. Fragments carry an `oob` flag so the same
+//! partial can ride along out-of-band on another response.
+
 use askama::Template;
 use axum::response::Html;
 
-use crate::runs::model::Run;
+use crate::stowage::views::{
+    BoardView, LedgerRow, LoadView, NewRunFormView, PlanCard, RecordView, ShareView, TotalsView,
+    VoyageView,
+};
 
 /// Renders any Askama template to an axum `Html` response, falling back to
 /// a plain-text error body (never a panic) if rendering itself fails.
 pub fn render<T: Template>(tmpl: &T) -> Html<String> {
-    Html(
-        tmpl.render()
-            .unwrap_or_else(|e| format!("template error: {e}")),
-    )
+    Html(render_str(tmpl))
+}
+
+pub fn render_str<T: Template>(tmpl: &T) -> String {
+    tmpl.render().unwrap_or_else(|e| {
+        tracing::error!(error = %e, "template render failed");
+        format!("template error: {e}")
+    })
 }
 
 /// aUEC with thousands separators, no decimals (§4: "displayed with
@@ -33,124 +44,158 @@ pub fn fmt_auec(amount: f64) -> String {
     }
 }
 
-/// Flat, template-friendly view of a `Run` -- all display formatting
-/// (aUEC amounts, submitter name) is resolved in Rust so the templates only
-/// ever do plain field access and `{% if %}` on booleans/options.
-pub struct RunView {
-    pub id: i64,
-    pub submitted_by_name: String,
-    pub status_label: &'static str,
-    pub bought_at: String,
-    pub commodity: String,
-    pub scu: f64,
-    pub buy_terminal: String,
-    pub buy_price_scu: f64,
-    pub cost_fmt: String,
-    pub destination: Option<String>,
-    pub stored_at: Option<String>,
-    pub ship: Option<String>,
-    pub notes: Option<String>,
-    /// Plain (never-`None`) counterparts of the above, for pre-filling form
-    /// `value=""` attributes without chaining `Option` methods in templates.
-    pub destination_input: String,
-    pub stored_at_input: String,
-    pub ship_input: String,
-    pub notes_input: String,
-    pub sold_at: Option<String>,
-    pub sell_terminal: Option<String>,
-    pub sell_price_scu: Option<f64>,
-    pub scu_sold: Option<f64>,
-    pub profit_fmt: Option<String>,
-    pub margin_pct_fmt: Option<String>,
+// ---------------------------------------------------------------------------
+// the shell every page shares: rail, footer, splash
+// ---------------------------------------------------------------------------
+
+/// What `base.html` needs: who's aboard, which screen is lit, and how the
+/// splash should play (`gate` / `welcome` / `hidden`).
+pub struct Shell {
+    pub crew_name: Option<String>,
+    /// `ledger` / `board` / `login` / `changelog` -- the `<main>` id.
+    pub screen: &'static str,
+    pub stardate: String,
+    pub splash_mode: &'static str,
+    /// Display name, upper-cased, for `SESSION VALID · <name>`.
+    pub splash_who: String,
+    /// JSON array of boot-log lines the splash types out.
+    pub boot_json: String,
+    pub gate_error: Option<&'static str>,
 }
 
-impl RunView {
-    pub fn new(run: &Run) -> Self {
-        Self {
-            id: run.id,
-            submitted_by_name: run.submitted_by_name.clone(),
-            status_label: run.status.as_str(),
-            bought_at: run.bought_at.clone(),
-            commodity: run.commodity.clone(),
-            scu: run.scu,
-            buy_terminal: run.buy_terminal.clone(),
-            buy_price_scu: run.buy_price_scu,
-            cost_fmt: fmt_auec(run.cost()),
-            destination: run.destination.clone(),
-            stored_at: run.stored_at.clone(),
-            ship: run.ship.clone(),
-            notes: run.notes.clone(),
-            destination_input: run.destination.clone().unwrap_or_default(),
-            stored_at_input: run.stored_at.clone().unwrap_or_default(),
-            ship_input: run.ship.clone().unwrap_or_default(),
-            notes_input: run.notes.clone().unwrap_or_default(),
-            sold_at: run.sold_at.clone(),
-            sell_terminal: run.sell_terminal.clone(),
-            sell_price_scu: run.sell_price_scu,
-            scu_sold: run.scu_sold,
-            profit_fmt: run.profit().map(fmt_auec),
-            margin_pct_fmt: run.margin().map(|m| format!("{:.0}", m * 100.0)),
-        }
-    }
-}
+// ---------------------------------------------------------------------------
+// pages
+// ---------------------------------------------------------------------------
 
 #[derive(Template)]
 #[template(path = "login.html")]
 pub struct LoginTemplate {
-    pub error: Option<&'static str>,
-}
-
-#[derive(Template)]
-#[template(path = "index.html")]
-pub struct IndexTemplate {
-    pub display_name: String,
-    pub handle: String,
-    pub open_runs: Vec<RunView>,
-    pub sold_runs: Vec<RunView>,
-    pub committed_fmt: String,
-    pub realised_fmt: String,
-    pub form_error: Option<String>,
-    /// Pick-lists, rendered once as `<datalist>`s that every form on the
-    /// page (including htmx-swapped edit/close rows) draws from.
-    pub commodities: Vec<String>,
-    pub terminals: Vec<String>,
-    pub ships: Vec<String>,
-    /// New-run defaults: the crew's last delivery point and last ship.
-    pub default_buy_terminal: String,
-    pub default_ship: String,
+    pub shell: Shell,
 }
 
 #[derive(Template)]
 #[template(path = "changelog.html")]
 pub struct ChangelogTemplate {
+    pub shell: Shell,
     /// Rendered from our own CHANGELOG.md, so it's trusted HTML.
     pub body: &'static str,
 }
 
+/// `/` -- the ledger terminal. The big panels are pre-rendered fragments so
+/// the page and the htmx responses share one template each.
 #[derive(Template)]
-#[template(path = "partials/run_row.html")]
-pub struct RunRowTemplate {
-    pub run: RunView,
+#[template(path = "index.html")]
+pub struct IndexTemplate {
+    pub shell: Shell,
+    pub totals_html: String,
+    pub open_cargo_html: String,
+    pub plans_html: String,
+    pub ledger_html: String,
+    pub new_run: NewRunFormView,
+    pub commodities: Vec<String>,
+    pub terminals: Vec<String>,
+    pub ships: Vec<String>,
 }
 
 #[derive(Template)]
-#[template(path = "partials/open_cargo_row.html")]
-pub struct OpenCargoRowTemplate {
-    pub run: RunView,
+#[template(path = "board.html")]
+pub struct BoardTemplate {
+    pub shell: Shell,
+    pub board: BoardView,
+}
+
+// ---------------------------------------------------------------------------
+// fragments
+// ---------------------------------------------------------------------------
+
+#[derive(Template)]
+#[template(path = "partials/totals.html")]
+pub struct TotalsFrag {
+    pub t: TotalsView,
+    pub oob: bool,
 }
 
 #[derive(Template)]
-#[template(path = "partials/run_form.html")]
-pub struct RunFormTemplate {
-    pub run: RunView,
-    pub error: Option<String>,
+#[template(path = "partials/open_cargo.html")]
+pub struct OpenCargoFrag {
+    pub voyages: Vec<VoyageView>,
+    pub oob: bool,
+    /// Always false here; the included head/load partials read them.
+    pub head_oob: bool,
+    pub load_oob: bool,
 }
 
 #[derive(Template)]
-#[template(path = "partials/close_form.html")]
-pub struct CloseFormTemplate {
-    pub run: RunView,
-    pub error: Option<String>,
+#[template(path = "partials/voyage_head.html")]
+pub struct VoyageHeadFrag {
+    pub v: VoyageView,
+    pub head_oob: bool,
+}
+
+#[derive(Template)]
+#[template(path = "partials/load.html")]
+pub struct LoadFrag {
+    pub l: LoadView,
+    pub load_oob: bool,
+}
+
+#[derive(Template)]
+#[template(path = "partials/plans.html")]
+pub struct PlansFrag {
+    pub cards: Vec<PlanCard>,
+    pub oob: bool,
+}
+
+#[derive(Template)]
+#[template(path = "partials/ledger.html")]
+pub struct LedgerFrag {
+    pub rows: Vec<LedgerRow>,
+    pub oob: bool,
+}
+
+#[derive(Template)]
+#[template(path = "partials/sale.html")]
+pub struct SaleFrag {
+    pub who_upper: String,
+    /// The bookkeeper, when someone other than the seller recorded it.
+    pub kept_by_upper: Option<String>,
+    pub profit_fmt: String,
+    pub profit_neg: bool,
+    pub commodity_upper: String,
+    pub scu_sold: u32,
+    pub from_short: String,
+    pub to_short: String,
+    pub shares: Vec<ShareView>,
+    pub keeps_fmt: String,
+    /// Live SCU left open on the voyage after a partial close.
+    pub kept_scu: u32,
+}
+
+pub struct ConfirmLine {
+    pub commodity_upper: String,
+    pub scu: u32,
+    pub cost_fmt: String,
+}
+
+#[derive(Template)]
+#[template(path = "partials/confirm_delete.html")]
+pub struct ConfirmFrag {
+    /// `voyage` or `load` -- decides the DELETE route.
+    pub kind: &'static str,
+    pub id: i64,
+    pub label: String,
+    pub ship_name: String,
+    pub logged_by_upper: String,
+    pub lines: Vec<ConfirmLine>,
+    pub load_count: usize,
+    pub scu: u32,
+    pub committed_fmt: String,
+}
+
+#[derive(Template)]
+#[template(path = "partials/verdict.html")]
+pub struct VerdictFrag {
+    pub r: RecordView,
 }
 
 #[cfg(test)]

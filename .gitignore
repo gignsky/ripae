@@ -7,3 +7,4 @@
 .direnv/
 result
 result-*
+proptest-regressions/

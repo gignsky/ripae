@@ -1,0 +1,23 @@
+<div class="tbl" id="ledger"{% if oob %} hx-swap-oob="true"{% endif %}>
+  <table class="cards">
+    <thead><tr><th>Commodity</th><th class="num">SCU sold</th><th>Route</th><th>Sold</th><th class="num">Sell / SCU</th><th class="num">Cost</th><th class="num">Profit</th><th class="num">Margin</th><th>Shares</th><th>By</th></tr></thead>
+    <tbody>
+      {% for r in rows %}
+      <tr class="ras">
+        <td title="Voyage {{ r.voyage_id }}{% if r.load.notes != "" %} · {{ r.load.notes }}{% endif %}">{{ r.load.commodity_upper }}{% if r.load.lost_count > 0 %} <span class="via">({{ r.load.lost_count }} lost)</span>{% endif %}</td>
+        <td class="num">{{ r.load.scu_sold }}</td>
+        <td class="route">{{ r.load.buy_terminal_short }}<span class="arr">→</span>{{ r.load.sell_terminal_short }}</td>
+        <td>{{ r.load.sold_at_short }}</td>
+        <td class="num">{{ r.load.sell_price_scu_fmt }}</td>
+        <td class="num">{{ r.load.cost_fmt }}</td>
+        <td class="num {% if r.load.profit_neg %}neg{% else %}pos{% endif %}">{{ r.load.profit_fmt }}</td>
+        <td class="num {% if r.load.profit_neg %}neg{% else %}pos{% endif %}">{{ r.load.margin_fmt }}</td>
+        <td class="who">{% for s in r.load.shares %}→ {{ s.to_name }} {{ s.paid_fmt }}{% if s.forfeited %} (to {{ s.paid_to_name }}){% endif %}{% if !loop.last %} · {% endif %}{% else %}—{% endfor %}</td>
+        <td class="who">{{ r.load.by_upper }}</td>
+      </tr>
+      {% else %}
+      <tr class="ras"><td colspan="10"><em>No sales yet.</em></td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>

@@ -1,0 +1,25 @@
+<div class="plans" id="plans"{% if oob %} hx-swap-oob="true"{% endif %}>
+  {% for p in cards %}
+  <div class="plan ras{% if p.suggest %} suggest{% endif %}">
+    <h3>{{ p.title }} <span>{{ p.sub }}</span></h3>
+    <ol>
+      {% for e in p.entries %}
+      <li><span class="n">{{ e.n }}</span><span class="what">{{ e.commodity_upper }} <span class="boxes">{% for b in e.boxes %}<b>{{ b.0 }}</b>×{{ b.1 }} {% endfor %}</span><small>stop {{ e.stop_no }} · {{ e.destination_label }}</small></span><span class="depth">{{ e.depth }}</span></li>
+      {% endfor %}
+    </ol>
+    {% if let Some(link) = p.link %}
+    <p><a href="{{ link }}" target="_blank" rel="noopener">Open this load-out in sc-cargo.space ↗</a></p>
+    {% endif %}
+    {% if p.foot != "" %}<p>{{ p.foot }}</p>{% endif %}
+    {% if let Some(m) = p.merge %}
+    <p>Unassigned and all bound for <b>{{ m.why }}</b>.
+      {% for s in m.sources %}
+      <button class="cmd warn" type="button" hx-post="/voyages/{{ s }}/move" hx-vals='{"voyage_id": "{{ m.target }}"}' hx-target="#open-cargo" hx-swap="outerHTML">{% if loop.first %}{{ m.label }}{% else %}and {{ s }}{% endif %}</button>
+      {% endfor %}
+      · or assign hulls separately.</p>
+    {% endif %}
+  </div>
+  {% else %}
+  <div class="plan ras"><p>Nothing afloat. Log a run and the plan draws itself.</p></div>
+  {% endfor %}
+</div>

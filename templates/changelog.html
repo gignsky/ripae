@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
-<p><a href="/">&larr; Back to the ledger</a></p>
-<article>
-  {{ body|safe }}
-</article>
+<section class="panel rs">
+  <header><h2>What's new</h2><span class="hint"><a href="/">← back to the ledger</a></span></header>
+  <div class="changelog-body" style="padding:.9rem">{{ body|safe }}</div>
+</section>
 {% endblock %}
