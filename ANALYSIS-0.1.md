@@ -50,15 +50,19 @@ Beyond the brief, rolls 1–5 added shared crew edits, fixed pick-lists with fuz
 5. **Sessions**: splash-as-login means `/` must know "session valid" before rendering and the splash is served by both `/login` and `/`; small change in `auth.rs`, but it touches the cookie `Secure` path that bit before.
 6. **Test surface**: 24 tests cover `runs`; per-lot pricing, partial close, shares, write-offs and derived status roughly triple the cases.
 
-## 4. Recommended sequencing
+## 4. Sequencing (ruled 8 Nov: one roll, tests first)
 
-0.2 as written is a big bite for a two-person org. Interface first still holds, and it splits cleanly:
+Roll 7 **"Stowage"** carries all of 0.2 and ships once. Inside it, the order below keeps every step buildable and `cargo test` green; the first four steps happen before any screen is touched, so the skin lands on data that already behaves.
 
-| Roll | Contents | Why this order |
+| Step | Work | Done when |
 |---|---|---|
-| 7 "Phosphor" | CRT stylesheet, splash-as-login, raster + blackout machinery, panel hide/show, responsive cards, delete confirmation -- **on the existing schema** | The look, with zero migration risk; proves htmx + raster together |
-| 8 "Stowage" | migrations 0004 / 0005, voyages / loads / crates, crate manifest + whereabouts, merge / detach / add-load, stowage plan + sc-cargo link | The hard, data-bearing part, isolated |
-| 9 "Settlement" | per-crate close, price modes, shares, SALE banner | Depends on crates existing |
-| 10 "Standings" | leaderboard, service record, verdicts | Read-only; can slip without hurting anyone |
+| 7.0 | Branch `roll/7-…-stowage`; `rf` graduates with the fixed tag settings; delete `scripts/retro-tags.sh` after running it once | `git tag` shows v0.1.0–v0.1.3 on origin |
+| 7.1 | Hotfix 2 (`0.1.4`, show validation errors) promoted and deployed, so the live 0.1 works whilst 0.2 is built | nisc.us badge reads `v0.1.4`; an edit with a bad station shows its message |
+| 7.2 | **Tests first.** `model.rs` gets the derived-figure table as failing unit tests (load status, where-now, cost, write-off, partial sale, shares incl. loss = 0 and forfeit, board_credit vs cash) plus `proptest` properties | tests compile and fail for the right reason |
+| 7.3 | Fresh `migrations/` (`0001_users`, `0002_lookups` with the 80 ships, `0003_stowage`); models `Voyage` / `Load` / `Crate` / `Share`; repo; crate-mix parser (`2×32, 4x8`) with its own property test | 7.2 tests pass; `nix flake check` green |
+| 7.4 | Handlers and plain fragments on the **old Pico base**: new run (multi-load), add load, merge/detach, crate manifest + whereabouts, close per crate with shares, delete with confirmation route | every route in RIPAE-0.2.md §5 answers; end-to-end browser script (Playwright, as used for the 0.1.3 forensics) passes |
+| 7.5 | **The skin.** CRT stylesheet replaces Pico; vendored fonts; raster + blackout machinery wired to `htmx:afterSwap`; splash-as-login with session detection; panel hide/show; responsive cards | mock and site are indistinguishable at 1280 / 760 / 400 px; no horizontal scroll |
+| 7.6 | Stowage plan + sc-cargo link; SALE banner; leaderboard, service record, verdicts | the three overlays play; link opens the right hull and crate mix |
+| 7.7 | `CHANGELOG.md` 0.2.0; README decisions; spacedock deploy with DB wipe + reseed; tag `v0.2.0` via `rf` promote | live, tagged, badge reads `v0.2.0` |
 
-Then tag `v0.2.0` once, with the three questions in `RIPAE-0.2.md` §9 answered along the way. First, though: cut the missing `v0.1.3` tag so the badge, `Cargo.toml` and git agree on what is running.
+Roll 8 onward returns to the original plan: Discord OAuth / org roster (0.3), UEX import and the price feed (0.4), with `/healthz` onto Gatus whenever convenient.

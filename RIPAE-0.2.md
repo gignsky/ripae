@@ -11,7 +11,7 @@
 - [ ] **Where a crate is lives on the crate** (`awaiting_pickup` / `aboard` / `stored at …`), set from the crate manifest one at a time or with `[ALL ABOARD]` / `[ALL STORED]`. A load's status is *derived*: all crates agree → that status; they differ → `SPLIT`; all sold → `sold`. The New Run form still takes one status for the whole voyage and stamps it onto every crate.
 - [ ] Each load carries a **stop №** and a **destination**; the **Stowage Plan** panel derives a loading order per voyage (last stop deepest) and a working **sc-cargo.space** link from the voyage's ship and crate mix (§6).
 - [ ] Individual crates can be marked **glitched** or **lost**; lost SCU is written off and shown.
-- [ ] **Closing** a load is done per crate: pick which crates sold (select-all for sound crates), sell price per SCU or per lot, and optional **profit shares** to other crew by percentage or flat fee. Kept crates stay open on the voyage.
+- [ ] **Closing** a load is done per crate: pick which crates sold (`[ALL SOUND CRATES]` / `[NONE]`; glitched crates must be ticked by hand; lost ones can't be), sell price per SCU or per lot, and optional **profit shares** to other crew by percentage or flat fee. On a losing sale no share of either kind is paid. A share may be **forfeited**: the earner keeps the leaderboard credit, the aUEC goes to the member named (so a captain can bankroll a first officer without losing his place on the board). Kept crates stay open on the voyage.
 - [ ] Recording a sale flickers the screen to black and shows the **SALE** banner (profit, route, shares, what the seller keeps).
 - [ ] A **Leaderboard** screen: crew standings sortable by profit / runs / SCU, org totals, recent shares. Clicking a crew name flickers to black, then **HOORAY** (rank 1) or **WOMP WOMP** (everyone else) and that member's **service record** raster in together, top to bottom, as one screen.
 - [ ] The **splash screen is the login**: ASCII `RIPAE`, boot log ending `IDENTIFY TO PROCEED`, then *Speak, friend, and enter* with handle and password; a wrong pair shows *The door does not open* in red on the same screen. With a valid session cookie the same splash runs without the gate: boot log ends `SESSION VALID · <name>`, then *Welcome back, <name> · Press any key · [LOG OUT]*. `[LOG OUT]` (rail or splash) clears the session and shows the gate; `[CLOSE]` in the footer replays the splash in whichever mode applies. `/login` renders the gate; `/` redirects there when unauthenticated.
@@ -33,7 +33,9 @@
 | Leaderboard, service record, verdict banners | Seasons / resets of the leaderboard |
 | Ships lookup seeded from sc-cargo.space (80 ships) | Terminals lookup from UEX (0.4) |
 
-**Design constraints carried forward from 0.1:** every load is still a price observation (commodity, terminal, price-per-SCU, timestamp, submitter) -- the per-lot price is stored *alongside* the derived per-SCU price, never instead of it. Names come from the lookups and keep the lookup's spelling.
+**Design constraints carried forward from 0.1:** every load is still a price observation (commodity, terminal, price-per-SCU, timestamp, submitter) -- the per-lot price is stored *alongside* the derived per-SCU price, never instead of it.
+
+**Names (changed from 0.1.1):** the pick-lists are *suggestions, not gates*. Any terminal or commodity name is accepted as typed, trimmed; a name on the list is stored with the list's spelling, a name off the list is stored verbatim. The 0.1 starter lists miss real locations and the UEX import in 0.4 is where names get reconciled; until then nobody is blocked from logging a run.
 
 ## 3. Design System -- "MU-TH-UR"
 
@@ -68,13 +70,13 @@ Implementation note: keep `pico.min.css` out of the new pages entirely; the mock
 ## 4. Data Model
 
 ```sql
--- migrations/0004_ships.sql  (provided: 80 ships scraped from sc-cargo.space, 8 Nov 2026)
+-- migrations/0002_lookups.sql  (ships: 80 hulls scraped from sc-cargo.space, 8 Nov 2026 -- see design/ships-sc-cargo.csv)
 CREATE TABLE ships (
   id INTEGER PRIMARY KEY, manufacturer TEXT NOT NULL, name TEXT NOT NULL UNIQUE,
   short TEXT NOT NULL, sc_cargo_slug TEXT NOT NULL, capacity_scu INTEGER NOT NULL, concept INTEGER NOT NULL DEFAULT 0
 );
 
--- migrations/0005_stowage.sql
+-- migrations/0003_stowage.sql
 CREATE TABLE voyages (
   id          INTEGER PRIMARY KEY,
   logged_by   INTEGER NOT NULL REFERENCES users(id),
@@ -118,13 +120,14 @@ CREATE TABLE crates (
 );
 
 CREATE TABLE shares (
-  id        INTEGER PRIMARY KEY,
-  load_id   INTEGER NOT NULL REFERENCES loads(id) ON DELETE CASCADE,
-  to_user   INTEGER NOT NULL REFERENCES users(id),
-  kind      TEXT NOT NULL CHECK (kind IN ('pct','flat')),
-  amount    REAL NOT NULL CHECK (amount >= 0),     -- percent (0-100) or aUEC
-  reason    TEXT,
-  paid_auec REAL NOT NULL                          -- frozen at close
+  id         INTEGER PRIMARY KEY,
+  load_id    INTEGER NOT NULL REFERENCES loads(id) ON DELETE CASCADE,
+  to_user    INTEGER NOT NULL REFERENCES users(id),   -- who EARNED it (leaderboard credit)
+  paid_to    INTEGER NOT NULL REFERENCES users(id),   -- who RECEIVES the aUEC; = to_user unless forfeited
+  kind       TEXT NOT NULL CHECK (kind IN ('pct','flat')),
+  amount     REAL NOT NULL CHECK (amount >= 0),       -- percent (0-100) or aUEC
+  reason     TEXT,
+  paid_auec  REAL NOT NULL                            -- frozen at close; 0 on a losing sale (both kinds)
 );
 
 CREATE INDEX loads_voyage ON loads(voyage_id);
@@ -132,7 +135,7 @@ CREATE INDEX loads_status ON loads(status);
 CREATE INDEX crates_load  ON crates(load_id);
 ```
 
-**Migration from 0.1.** Each existing `runs` row becomes one voyage with one load; its `scu` becomes crates: greedy 32s then 8s then 1s (document the choice; it is a guess at history, not a record). `scu_sold` on old sold runs → that many SCU of crates marked `sold`, remainder `lost`. The old `runs` table is dropped only after a `price_observations` view is re-pointed at `loads`.
+**No migration from 0.1.** The 0.1 database holds nothing worth keeping (ruled 8 Nov). `migrations/` is rewritten from scratch for 0.2: `0001_users.sql`, `0002_lookups.sql` (commodities, terminals, ships with the sc-cargo columns from the start), `0003_stowage.sql` (voyages, loads, crates, shares). The `runs` table never existed as far as 0.2 is concerned; spacedock's `/var/lib/ripae/ripae.db` is deleted on deploy and reseeded.
 
 **Derived figures (Rust, tested, never stored):**
 
@@ -146,8 +149,11 @@ sale.scu_sold     = Σ size_scu over crates sold in this close
 sale.revenue      = scu_sold × sell_price_scu          (or sell_price_lot when mode = lot)
 sale.cost_sold    = scu_sold × buy_price_scu
 sale.profit       = revenue − cost_sold
-share.paid        = profit × amount/100  (pct, profit floored at 0)  |  amount  (flat)
+share.paid        = 0 when profit ≤ 0 (ruled: nothing is owed on a loss, flat fees included)
+                    else profit × amount/100 (pct) | amount (flat)
 seller_keeps      = profit − Σ share.paid
+board_credit(u)   = Σ seller_keeps where u sold  +  Σ share.paid where share.to_user = u      -- net of shares
+cash(u)           = Σ seller_keeps where u sold  +  Σ share.paid where share.paid_to = u      -- who actually holds the aUEC
 committed         = Σ cost over open loads − written_off
 realised          = Σ profit over sold crates
 ```
@@ -196,9 +202,9 @@ Every panel header carries `[HIDE]`/`[SHOW]`; the body rasters out and in. New R
 
 ## 7. Leaderboard & Service Record
 
-Standings per user, closed sales only: profit (after shares paid, plus shares received), runs closed (voyages with all loads sold), loads sold, SCU hauled, best route, share of org profit (meter). Sort by profit (default), runs, SCU.
+Standings per user, closed sales only: profit **net of shares** (`board_credit`: what you kept as seller plus shares earned, forfeited or not), runs closed (voyages with all loads sold), loads sold, SCU hauled, best route, share of org profit (meter). Sort by profit (default), runs, SCU.
 
-Service record fields: lifetime profit, runs closed, loads sold, SCU hauled, best trade, worst trade, favourite commodity, favourite route, crates lost, shares paid out, shares received, ships flown, first sale, latest sale. Verdict: rank 1 by *profit* gets `HOORAY`; all others `WOMP WOMP`. Commentary lines are a small random pool; keep them short and unkind only to the ledger.
+Service record fields: lifetime profit (board credit), cash position (`cash(u)`, shown beside it when it differs because of forfeits), runs closed, loads sold, SCU hauled, best trade, worst trade, favourite commodity, favourite route, crates lost, shares paid out, shares received, ships flown, first sale, latest sale. Verdict: rank 1 by *profit* gets `HOORAY`; all others `WOMP WOMP`. Commentary lines are a small random pool; keep them short and unkind only to the ledger.
 
 ## 8. Order of Work
 
@@ -211,8 +217,12 @@ Service record fields: lifetime profit, runs closed, loads sold, SCU hauled, bes
 7. Leaderboard, service record, verdict banners.
 8. Responsive card layout; reduced-motion pass; `CHANGELOG.md` 0.2.0; tag.
 
-## 9. Open Questions (decide before step 5)
+## 9. Rulings (8 Nov 2026, Lord G.)
 
-- When a share is `pct` and the sale is a loss, the share is 0 -- confirmed on the mock. Should a `flat` share still be owed on a loss? (Mock says yes.)
-- Should `glitched` crates be sellable at all, or only recoverable back to `aboard`? (Mock lets you hand-pick them for sale.)
-- Leaderboard profit: credit the *seller* with gross profit and show shares separately, or net it as above? (Mock nets it.)
+- A `pct` share on a loss pays 0. A `flat` share on a loss **also pays 0** -- nothing is owed on a losing run.
+- `glitched` crates are **sellable by hand-pick only**; excluded from `[ALL SOUND CRATES]`.
+- Leaderboard credit is **net of shares**; a share may be **forfeited** to another member (`shares.paid_to`), keeping the credit with the earner.
+- Pick-lists are suggestions; **any location name is accepted** until the 0.4 UEX import.
+- The 0.1 database is **wiped**; migrations are rewritten, no data migration.
+- **Tests first**: the derived-figure table above becomes the unit-test list before any handler is written; `proptest` covers the money maths with random crate mixes, prices and share sets (invariants: `Σ share.paid + seller_keeps = profit`; `committed − written_off ≥ 0`; `cash` sums to `board_credit` sums across the org).
+- **One roll** (roll 7 "Stowage") carries all of 0.2; see `ANALYSIS-0.1.md` §4 for its internal milestones.
