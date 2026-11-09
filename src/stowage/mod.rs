@@ -602,7 +602,7 @@ pub async fn voyage_edit_form(State(state): State<AppState>, _user: CurrentUser,
     }
 }
 
-/// `PUT /voyages/:id` -- ship, date, notes, who logged it. Success re-renders Open Cargo
+/// `PUT /voyages/:id` -- ship, date, notes, whose run it is and who logged it. Success re-renders Open Cargo
 /// (every load's where-now names the hull).
 pub async fn voyage_update(State(state): State<AppState>, _user: CurrentUser, Path(id): Path<i64>, body: String) -> Response {
     let v = match find_voyage(&state, id).await {
@@ -628,11 +628,12 @@ async fn voyage_form(state: &AppState, v: &Voyage) -> VoyageFormView {
         users: repo::list_users(&state.pool).await.unwrap_or_default(),
         shares: share_rows_of(&repo::voyage_shares(&state.pool, v.id).await.unwrap_or_default()),
         owner: v.logged_by.to_string(),
+        move_loads: false,
         error: None,
     }
 }
 
-/// Validates and saves the voyage form (ship, date, notes, who logged it,
+/// Validates and saves the voyage form (ship, date, notes, owner, who logged it,
 /// the voyage-wide shares); on failure hands the form back with its error
 /// to re-render.
 async fn save_voyage_form(state: &AppState, v: &Voyage, body: &str) -> Result<(), VoyageFormView> {
@@ -644,16 +645,18 @@ async fn save_voyage_form(state: &AppState, v: &Voyage, body: &str) -> Result<()
         entered_by: form.get("entered_by").into(),
         users: repo::list_users(&state.pool).await.unwrap_or_default(),
         shares: share_rows_from(&form),
-        owner: v.logged_by.to_string(),
+        owner: form.get("logged_by").into(),
+        move_loads: form.get("move_loads") == "1",
         error: None,
     };
     let parsed = async {
         let bought_at = parse_date(&view.bought_at, today()).map_err(|e| format!("Bought on: {e}"))?;
         let ship_id = pick_ship(state, &view.ship).await?;
+        let logged_by = pick_member(&view.owner, v.logged_by, &view.users, "Crew member")?;
         let entered_by = pick_member(&view.entered_by, v.entered_by, &view.users, "Logged by")?;
         // the run's owner sells by default and keeps the remainder
-        let shares = parse_shares(&view.shares, &view.users, v.logged_by, "run's owner")?;
-        Ok::<_, String>(EditVoyage { ship_id, bought_at, notes: opt(&view.notes), entered_by, shares })
+        let shares = parse_shares(&view.shares, &view.users, logged_by, "run's owner")?;
+        Ok::<_, String>(EditVoyage { ship_id, bought_at, notes: opt(&view.notes), logged_by, move_loads: view.move_loads, entered_by, shares })
     }
     .await;
     let edit = match parsed {
@@ -996,6 +999,7 @@ pub async fn load_edit_form(State(state): State<AppState>, _user: CurrentUser, P
     };
     let mut form = LoadFormView::from_load(&load);
     form.show_status = true;
+    form.users = repo::list_users(&state.pool).await.unwrap_or_default();
     load_response(&state, id, LoadExtra::Edit(form), StatusCode::OK).await
 }
 
@@ -1009,12 +1013,17 @@ pub async fn load_update(State(state): State<AppState>, _user: CurrentUser, Path
     let mut f = load_form_from(&form, 0);
     f.boxes = views::LoadFormView::from_load(&load).boxes;
     f.show_status = true;
-    match parse_load_line(&state, &f, false, load.scu()).await {
+    f.users = repo::list_users(&state.pool).await.unwrap_or_default();
+    let parsed = match pick_member(&f.bought_by, load.bought_by, &f.users, if load.is_haul() { "Hauled by" } else { "Bought by" }) {
+        Ok(buyer) => parse_load_line(&state, &f, false, load.scu()).await.map(|p| (buyer, p)),
+        Err(e) => Err(e),
+    };
+    match parsed {
         Err(e) => {
             f.error = Some(e);
             load_response(&state, id, LoadExtra::Edit(f), StatusCode::UNPROCESSABLE_ENTITY).await
         }
-        Ok(p) => {
+        Ok((buyer, p)) => {
             let edit = EditLoad {
                 kind: p.kind,
                 reward: p.reward,
@@ -1028,6 +1037,7 @@ pub async fn load_update(State(state): State<AppState>, _user: CurrentUser, Path
                 whereabouts: p.whereabouts,
                 stored_at: p.stored_at,
                 notes: p.notes,
+                bought_by: buyer,
             };
             if let Err(e) = repo::update_load(&state.pool, id, &edit).await {
                 tracing::error!(error = %e, "failed to update load");
@@ -1167,6 +1177,7 @@ fn blank_close(load: &Load, users: Vec<User>, voyage_shares: &[ShareInput]) -> C
         shares: share_rows_of(&shares),
         users,
         sold_by: load.submitted_by.to_string(),
+        bought_by: load.bought_by.to_string(),
         error: None,
     }
 }
@@ -1199,6 +1210,7 @@ fn close_form_from(form: &FormData, users: Vec<User>) -> CloseFormView {
         shares: share_rows_from(form),
         users,
         sold_by: form.get("sold_by").into(),
+        bought_by: form.get("bought_by").into(),
         error: None,
     }
 }
@@ -1436,6 +1448,7 @@ pub async fn sale_edit_form(State(state): State<AppState>, _user: CurrentUser, P
             .collect(),
         users,
         sold_by: load.submitted_by.to_string(),
+        bought_by: load.bought_by.to_string(),
         error: None,
     };
     sale_overlay(&load, f, StatusCode::OK)
@@ -1453,19 +1466,20 @@ pub async fn sale_update(State(state): State<AppState>, _user: CurrentUser, Path
     let mut f = close_form_from(&FormData::parse(&body), users.clone());
     let parsed = async {
         let seller = pick_member(&f.sold_by, load.submitted_by, &users, "Sold by")?;
+        let buyer = pick_member(&f.bought_by, load.bought_by, &users, if load.is_haul() { "Hauled by" } else { "Bought by" })?;
         let (sold_at, sell_terminal, price_mode, price, shares) = parse_sale(&state, &f, &users, seller).await?;
         let resale = resettle(&load, price_mode, price, &shares)?;
-        Ok::<_, String>((seller, sold_at, sell_terminal, resale))
+        Ok::<_, String>((seller, buyer, sold_at, sell_terminal, resale))
     }
     .await;
-    let (seller, sold_at, sell_terminal, resale) = match parsed {
+    let (seller, buyer, sold_at, sell_terminal, resale) = match parsed {
         Ok(x) => x,
         Err(e) => {
             f.error = Some(e);
             return sale_overlay(&load, f, StatusCode::UNPROCESSABLE_ENTITY);
         }
     };
-    if let Err(e) = repo::update_sale(&state.pool, id, seller, &sold_at, &sell_terminal, &resale).await {
+    if let Err(e) = repo::update_sale(&state.pool, id, seller, buyer, &sold_at, &sell_terminal, &resale).await {
         tracing::error!(error = %e, "failed to update sale");
         f.error = Some("Could not save those changes.".into());
         return sale_overlay(&load, f, StatusCode::UNPROCESSABLE_ENTITY);

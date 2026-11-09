@@ -353,7 +353,7 @@
     onChange = onChange || function () {};
     function rows() { return Array.prototype.slice.call(box.querySelectorAll(".share")); }
     // whoever keeps the remainder: the seller picked on a sale, the run's owner on a voyage
-    function owner() { var s = form.querySelector("[name=sold_by]"); return s ? s.value : form.dataset.owner || ""; }
+    function owner() { var s = form.querySelector("[name=sold_by], [name=logged_by]"); return s ? s.value : form.dataset.owner || ""; }
     // a % share nobody has typed into is an even cut: what the typed-in %
     // shares leave, split equally among them and whoever keeps the remainder
     function even() {

@@ -3,6 +3,29 @@
 Every notable change to Ripae. Newest first. This file is also what the
 version badge in the corner of the site shows.
 
+## 0.2.9
+
+### Added
+- **Change whose run it is.** A voyage's *Edit* form (in Open Cargo, and
+  the *Voyage* button on the ledger) now has a *Crew member* choice, so a
+  run logged under the wrong person can be put right. It changes only the
+  run unless you tick *Move the old crew member's unsold loads too*; loads
+  that have already sold are never moved.
+- **Correct who bought a sold load.** The ledger's *Sale* form has a
+  *Bought by* choice (*Hauled by* on a delivery) next to *Sold by*. A sale
+  used to forget who bought the cargo once it was sold; it now remembers.
+  Sales recorded before this version show the run's owner as the buyer,
+  since the real one wasn't kept -- check them and correct any that are
+  wrong.
+
+### Fixed
+- **Bought by on a load's Edit form.** The *Bought by* choice when editing
+  an open load was empty and its value was ignored; it now lists the crew
+  and saves.
+- **Ledger commands spilling out of the panel.** The *Sale* and *Voyage*
+  buttons on each ledger row now stack, so the last column stays inside
+  the panel.
+
 ## 0.2.8
 
 ### Added

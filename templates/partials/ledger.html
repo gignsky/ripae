@@ -14,7 +14,7 @@
         <td class="num {% if r.load.profit_neg %}neg{% else %}pos{% endif %}">{{ r.load.margin_fmt }}</td>
         <td class="who">{% for s in r.load.shares %}→ {{ s.to_name }} {{ s.paid_fmt }}{% if s.forfeited %} (to {{ s.paid_to_name }}){% endif %}{% if !loop.last %} · {% endif %}{% else %}—{% endfor %}</td>
         <td class="who">{{ r.load.by_upper }}</td>
-        <td><span class="actions"><button class="cmd" type="button" title="Correct who sold it, when, where, the price and the shares" hx-get="/loads/{{ r.load.id }}/sale" hx-target="#overlay" hx-swap="innerHTML">Sale</button> <button class="cmd" type="button" title="Ship, date, notes and who logged it -- works on closed voyages too" hx-get="/voyages/{{ r.voyage_id }}/details" hx-target="#overlay" hx-swap="innerHTML">Voyage {{ r.voyage_id }}</button></span></td>
+        <td><span class="actions"><button class="cmd" type="button" title="Correct who bought and sold it, when, where, the price and the shares" hx-get="/loads/{{ r.load.id }}/sale" hx-target="#overlay" hx-swap="innerHTML">Sale</button> <button class="cmd" type="button" title="Ship, date, notes, whose run it is and who logged it -- works on closed voyages too" hx-get="/voyages/{{ r.voyage_id }}/details" hx-target="#overlay" hx-swap="innerHTML">Voyage {{ r.voyage_id }}</button></span></td>
       </tr>
       {% else %}
       <tr class="ras"><td colspan="11"><em>No sales yet.</em></td></tr>

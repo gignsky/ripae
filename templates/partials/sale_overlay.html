@@ -1,4 +1,4 @@
-{# Correct a recorded sale from the ledger: who sold it, when, where, the
+{# Correct a recorded sale from the ledger: who bought and sold it, when, where, the
    price and the shares. The crates that sold don't change. A successful
    save answers with an empty overlay (static/ripae.js closes it) plus the
    ledger and totals oob. `close-form` gets it the close form's live preview;
@@ -9,6 +9,7 @@
     {% if let Some(error) = f.error %}<p class="ras neg form-error">{{ error }}</p>{% endif %}
     <div class="ras fields">
       <label>Sold by<select name="sold_by" title="Who made the sale: credit and the remainder are theirs">{% for u in f.users %}<option value="{{ u.id }}"{% if f.sold_by == u.id.to_string() %} selected{% endif %}>{{ u.display_name|upper }}</option>{% endfor %}</select></label>
+      <label>{% if haul %}Hauled by{% else %}Bought by{% endif %}<select name="bought_by" title="Who bought it in the first place">{% for u in f.users %}<option value="{{ u.id }}"{% if f.bought_by == u.id.to_string() %} selected{% endif %}>{{ u.display_name|upper }}</option>{% endfor %}</select></label>
       <label>Sold on<input name="sold_at" type="date" value="{{ f.sold_at }}" required /></label>
       <label>Sell terminal<input name="sell_terminal" type="text" list="pick-terminals" data-pick autocomplete="off" value="{{ f.sell_terminal }}" required /></label>
       {% include "partials/sale_price_fields.html" %}

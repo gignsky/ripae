@@ -51,6 +51,10 @@ pub struct EditVoyage {
     pub ship_id: Option<i64>,
     pub bought_at: String,
     pub notes: Option<String>,
+    /// Whose run it is.
+    pub logged_by: i64,
+    /// Also hand the old owner's unsold loads to the new one.
+    pub move_loads: bool,
     pub entered_by: i64,
     /// Replaces the voyage-wide shares every close starts from.
     pub shares: Vec<ShareInput>,
@@ -72,6 +76,8 @@ pub struct EditLoad {
     pub whereabouts: Option<Whereabouts>,
     pub stored_at: Option<String>,
     pub notes: Option<String>,
+    /// Who bought it; on an open load also who holds it (`submitted_by`).
+    pub bought_by: i64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -121,6 +127,8 @@ fn row_to_load(row: &SqliteRow) -> Result<Load> {
         voyage_id: row.try_get("voyage_id")?,
         submitted_by: row.try_get("submitted_by")?,
         submitted_by_name: row.try_get("submitted_by_name")?,
+        bought_by: row.try_get("bought_by")?,
+        bought_by_name: row.try_get("bought_by_name")?,
         kind: kind.parse().map_err(|e| anyhow!("bad load kind in db: {e}"))?,
         commodity: row.try_get("commodity")?,
         buy_terminal: row.try_get("buy_terminal")?,
@@ -180,9 +188,11 @@ const SELECT_VOYAGE: &str = "SELECT v.id, v.logged_by, u.display_name AS logged_
     JOIN users e ON e.id = COALESCE(v.entered_by, v.logged_by) LEFT JOIN ships s ON s.id = v.ship_id";
 
 const SELECT_LOAD: &str = "SELECT l.id, l.voyage_id, l.submitted_by, u.display_name AS submitted_by_name,
+    COALESCE(l.bought_by, l.submitted_by) AS bought_by, b.display_name AS bought_by_name,
     l.kind, l.commodity, l.buy_terminal, l.price_mode, l.buy_price_scu, l.buy_price_lot, l.stop_no,
     l.destination, l.sold_at, l.sell_terminal, l.sell_price_scu, l.sell_price_lot, l.reward, l.notes
-    FROM loads l JOIN users u ON u.id = l.submitted_by";
+    FROM loads l JOIN users u ON u.id = l.submitted_by
+    JOIN users b ON b.id = COALESCE(l.bought_by, l.submitted_by)";
 
 const SELECT_CRATE: &str =
     "SELECT id, load_id, size_scu, condition, whereabouts, stored_at, sold_at FROM crates";
@@ -377,11 +387,12 @@ async fn insert_load(
     new: &NewLoad,
 ) -> Result<i64> {
     let row = sqlx::query(
-        "INSERT INTO loads (voyage_id, submitted_by, kind, commodity, buy_terminal, price_mode,
+        "INSERT INTO loads (voyage_id, submitted_by, bought_by, kind, commodity, buy_terminal, price_mode,
             buy_price_scu, buy_price_lot, stop_no, destination, reward, notes)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
     )
     .bind(voyage_id)
+    .bind(submitted_by)
     .bind(submitted_by)
     .bind(new.kind.as_str())
     .bind(&new.commodity)
@@ -463,12 +474,24 @@ async fn touch_voyage(conn: &mut SqliteConnection, voyage_id: i64) -> Result<()>
 
 pub async fn update_voyage(pool: &SqlitePool, id: i64, edit: &EditVoyage) -> Result<()> {
     let mut tx = pool.begin().await?;
+    if edit.move_loads {
+        // a sold row's submitted_by is its seller, so only open loads follow the owner
+        sqlx::query(
+            "UPDATE loads SET submitted_by = ?1, bought_by = ?1, updated_at = datetime('now')
+             WHERE voyage_id = ?2 AND sold_at IS NULL AND submitted_by = (SELECT logged_by FROM voyages WHERE id = ?2)",
+        )
+        .bind(edit.logged_by)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    }
     sqlx::query(
-        "UPDATE voyages SET ship_id = ?, bought_at = ?, notes = ?, entered_by = ?, updated_at = datetime('now') WHERE id = ?",
+        "UPDATE voyages SET ship_id = ?, bought_at = ?, notes = ?, logged_by = ?, entered_by = ?, updated_at = datetime('now') WHERE id = ?",
     )
     .bind(edit.ship_id)
     .bind(&edit.bought_at)
     .bind(edit.notes.as_deref())
+    .bind(edit.logged_by)
     .bind(edit.entered_by)
     .bind(id)
     .execute(&mut *tx)
@@ -519,7 +542,8 @@ pub async fn update_load(pool: &SqlitePool, id: i64, edit: &EditLoad) -> Result<
     let mut tx = pool.begin().await?;
     sqlx::query(
         "UPDATE loads SET kind = ?, commodity = ?, buy_terminal = ?, price_mode = ?, buy_price_scu = ?,
-            buy_price_lot = ?, stop_no = ?, destination = ?, reward = ?, notes = ?, updated_at = datetime('now')
+            buy_price_lot = ?, stop_no = ?, destination = ?, reward = ?, notes = ?, bought_by = ?,
+            submitted_by = CASE WHEN sold_at IS NULL THEN ? ELSE submitted_by END, updated_at = datetime('now')
          WHERE id = ?",
     )
     .bind(edit.kind.as_str())
@@ -532,6 +556,8 @@ pub async fn update_load(pool: &SqlitePool, id: i64, edit: &EditLoad) -> Result<
     .bind(edit.destination.as_deref())
     .bind(edit.reward)
     .bind(edit.notes.as_deref())
+    .bind(edit.bought_by)
+    .bind(edit.bought_by)
     .bind(id)
     .execute(&mut *tx)
     .await?;
@@ -713,10 +739,10 @@ pub async fn close_load(
         load_id
     } else {
         let row = sqlx::query(
-            "INSERT INTO loads (voyage_id, submitted_by, kind, commodity, buy_terminal, price_mode,
+            "INSERT INTO loads (voyage_id, submitted_by, bought_by, kind, commodity, buy_terminal, price_mode,
                 buy_price_scu, buy_price_lot, stop_no, destination, reward, notes,
                 sold_at, sell_terminal, sell_price_scu, sell_price_lot)
-             SELECT voyage_id, ?, kind, commodity, buy_terminal, price_mode,
+             SELECT voyage_id, ?, COALESCE(bought_by, submitted_by), kind, commodity, buy_terminal, price_mode,
                 buy_price_scu, buy_price_lot, stop_no, destination, reward, notes, ?, ?, ?, ?
              FROM loads WHERE id = ? RETURNING id",
         )
@@ -781,16 +807,18 @@ pub async fn update_sale(
     pool: &SqlitePool,
     load_id: i64,
     seller: i64,
+    buyer: i64,
     sold_at: &str,
     sell_terminal: &str,
     sale: &Resale,
 ) -> Result<()> {
     let mut tx = pool.begin().await?;
     let done = sqlx::query(
-        "UPDATE loads SET submitted_by = ?, sold_at = ?, sell_terminal = ?, sell_price_scu = ?,
+        "UPDATE loads SET submitted_by = ?, bought_by = ?, sold_at = ?, sell_terminal = ?, sell_price_scu = ?,
             sell_price_lot = ?, updated_at = datetime('now') WHERE id = ? AND sold_at IS NOT NULL",
     )
     .bind(seller)
+    .bind(buyer)
     .bind(sold_at)
     .bind(sell_terminal)
     .bind(sale.sell_price_scu)
@@ -1180,6 +1208,7 @@ mod tests {
                 whereabouts: Some(Whereabouts::AwaitingPickup),
                 stored_at: None,
                 notes: Some("freight elevator 2".into()),
+                bought_by: gig,
             },
         )
         .await
@@ -1199,11 +1228,61 @@ mod tests {
         let v = create_voyage(&pool, jt, jt, &new_voyage(None), &[new_load("Laranite", vec![(1, 8)], None)])
             .await
             .unwrap();
-        let edit = EditVoyage { ship_id: None, bought_at: "2026-11-08".into(), notes: None, entered_by: gig, shares: vec![] };
+        let edit = EditVoyage { ship_id: None, bought_at: "2026-11-08".into(), notes: None, logged_by: jt, move_loads: false, entered_by: gig, shares: vec![] };
         update_voyage(&pool, v, &edit).await.unwrap();
         let voyage = find_voyage(&pool, v).await.unwrap().unwrap();
         assert_eq!((voyage.logged_by, voyage.entered_by), (jt, gig));
         assert_eq!(voyage.loads[0].submitted_by, jt);
+    }
+
+    #[tokio::test]
+    async fn changing_a_voyages_owner_moves_their_unsold_loads_only() {
+        let (pool, gig, jt) = test_pool().await;
+        let v = create_voyage(
+            &pool,
+            gig,
+            gig,
+            &new_voyage(None),
+            &[new_load("Laranite", vec![(1, 8)], None), new_load("Agricium", vec![(1, 8)], None)],
+        )
+        .await
+        .unwrap();
+        let sold = find_voyage(&pool, v).await.unwrap().unwrap().loads.remove(0);
+        let sale = settle(
+            &sold,
+            &SaleInput { crate_ids: sold.crates.iter().map(|c| c.id).collect(), price_mode: PriceMode::Scu, price: 20.0, shares: vec![] },
+        )
+        .unwrap();
+        close_load(&pool, sold.id, gig, &sale, "2026-11-09", "Area18 TDD").await.unwrap();
+
+        // by default only the run changes hands
+        let edit = EditVoyage { ship_id: None, bought_at: "2026-11-08".into(), notes: None, logged_by: jt, move_loads: false, entered_by: gig, shares: vec![] };
+        update_voyage(&pool, v, &edit).await.unwrap();
+        let voyage = find_voyage(&pool, v).await.unwrap().unwrap();
+        assert_eq!((voyage.logged_by, voyage.logged_by_name.as_str(), voyage.entered_by), (jt, "JT", gig));
+        let open = voyage.loads.iter().find(|l| l.commodity == "Agricium").unwrap();
+        assert_eq!((open.submitted_by, open.bought_by), (gig, gig), "loads stay put unless asked");
+
+        // asked to: the old owner's open loads follow, the sold one keeps its seller and buyer
+        update_voyage(&pool, v, &EditVoyage { logged_by: gig, ..edit.clone() }).await.unwrap();
+        update_voyage(&pool, v, &EditVoyage { move_loads: true, ..edit }).await.unwrap();
+        let voyage = find_voyage(&pool, v).await.unwrap().unwrap();
+        let by = |c: &str| voyage.loads.iter().find(|l| l.commodity == c).map(|l| (l.submitted_by, l.bought_by)).unwrap();
+        assert_eq!(by("Laranite"), (gig, gig), "a sold row is left alone");
+        assert_eq!(by("Agricium"), (jt, jt), "an open load follows the new owner");
+    }
+
+    #[tokio::test]
+    async fn a_split_sale_remembers_who_bought_the_load() {
+        let (pool, gig, jt) = test_pool().await;
+        let v = create_voyage(&pool, gig, gig, &new_voyage(None), &[]).await.unwrap();
+        let id = add_load(&pool, v, jt, &new_load("Laranite", vec![(2, 8)], None)).await.unwrap();
+        let load = find_load(&pool, id).await.unwrap().unwrap();
+        let input = SaleInput { crate_ids: vec![load.crates[0].id], price_mode: PriceMode::Scu, price: 20.0, shares: vec![] };
+        let sold_id = close_load(&pool, id, gig, &settle(&load, &input).unwrap(), "2026-11-09", "Area18 TDD").await.unwrap();
+        assert_ne!(sold_id, id);
+        let sold = find_load(&pool, sold_id).await.unwrap().unwrap();
+        assert_eq!((sold.submitted_by, sold.bought_by, sold.bought_by_name.as_str()), (gig, jt, "JT"));
     }
 
     #[tokio::test]
@@ -1263,10 +1342,11 @@ mod tests {
         // the terminal showed the wrong price: it was 3,000 for the lot, sold by JT, Gig on 50 %
         let half = ShareInput { to_user: gig, ..pct(50.0) };
         let resale = crate::stowage::model::resettle(&sold, PriceMode::Lot, 3000.0, &[half]).unwrap();
-        update_sale(&pool, sold.id, jt, "2026-11-10", "Lorville TDD", &resale).await.unwrap();
+        update_sale(&pool, sold.id, jt, jt, "2026-11-10", "Lorville TDD", &resale).await.unwrap();
         let l = find_voyage(&pool, v).await.unwrap().unwrap().loads.remove(0);
         assert_eq!(l.id, sold.id);
         assert_eq!((l.submitted_by, l.sold_at.as_deref(), l.sell_terminal.as_deref()), (jt, Some("2026-11-10"), Some("Lorville TDD")));
+        assert_eq!((l.bought_by, l.bought_by_name.as_str()), (jt, "JT"), "the buyer is corrected too");
         assert_eq!(l.profit(), Some(2840.0));
         assert_eq!(l.shares.len(), 1, "the old share is replaced, not added to");
         assert_eq!((l.shares[0].to_user, l.shares[0].paid_auec), (gig, 1420.0));
@@ -1274,7 +1354,7 @@ mod tests {
         // an open load isn't a sale to edit
         let open = create_voyage(&pool, gig, gig, &new_voyage(None), &[new_load("Agricium", vec![(1, 8)], None)]).await.unwrap();
         let open = find_voyage(&pool, open).await.unwrap().unwrap().loads.remove(0);
-        assert!(update_sale(&pool, open.id, gig, "2026-11-10", "x", &resale).await.is_err());
+        assert!(update_sale(&pool, open.id, gig, gig, "2026-11-10", "x", &resale).await.is_err());
     }
 
     #[tokio::test]
@@ -1332,7 +1412,7 @@ mod tests {
             ShareInput { to_user: jt, paid_to: None, kind: ShareKind::Pct, amount: 50.0, reason: Some("crew".into()) },
             ShareInput { to_user: jt, paid_to: Some(gig), kind: ShareKind::Flat, amount: 1000.0, reason: None },
         ];
-        let edit = EditVoyage { ship_id: None, bought_at: "2026-11-08".into(), notes: None, entered_by: gig, shares: split.clone() };
+        let edit = EditVoyage { ship_id: None, bought_at: "2026-11-08".into(), notes: None, logged_by: gig, move_loads: false, entered_by: gig, shares: split.clone() };
         update_voyage(&pool, v, &edit).await.unwrap();
         assert_eq!(voyage_shares(&pool, v).await.unwrap(), split);
 
