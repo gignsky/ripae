@@ -11,6 +11,7 @@ export RIPAE_BIND=0.0.0.0:8080            # optional, this is the default
 export RIPAE_DB_PATH=./ripae.db
 export RIPAE_SESSION_SECRET=$(openssl rand -base64 64)
 export RIPAE_SEED_USERS="lordgig:Lord Gig:changeme,firstofficer:First Officer:changeme"
+export RIPAE_COOKIE_SECURE=0              # only when serving plain HTTP off localhost
 cargo run
 ```
 
