@@ -7,6 +7,21 @@
     <link rel="stylesheet" href="/static/pico.min.css" />
     <script src="/static/htmx.min.js"></script>
     <script src="/static/picker.js" defer></script>
+    <script>
+      // Date fields marked data-today are pre-filled with the server's UTC
+      // date; swap in the viewer's local date unless they've changed it.
+      document.addEventListener("htmx:load", function (e) {
+        var root = e.detail && e.detail.elt;
+        if (!root || !root.querySelectorAll) return;
+        var now = new Date();
+        var local = now.getFullYear() + "-" +
+          String(now.getMonth() + 1).padStart(2, "0") + "-" +
+          String(now.getDate()).padStart(2, "0");
+        root.querySelectorAll("input[data-today]").forEach(function (input) {
+          if (input.value === input.defaultValue) input.value = local;
+        });
+      });
+    </script>
     <style>
       .pick { position: relative; }
       .pick-menu {

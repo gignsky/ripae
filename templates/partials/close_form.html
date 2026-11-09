@@ -6,8 +6,8 @@
       {% endif %}
       <p>Closing <strong>{{ run.commodity }}</strong> ({{ run.scu }} SCU, bought at {{ run.buy_terminal }}).</p>
       <div class="grid">
-        <label>Sold at (date)
-          <input type="text" name="sold_at" required />
+        <label>Sold on
+          <input type="date" name="sold_at" value="{{ crate::runs::model::today() }}" data-today required />
         </label>
         <label>Sell terminal
           <input type="text" name="sell_terminal" list="pick-terminals" data-pick autocomplete="off" value="{{ run.destination_input }}" required />

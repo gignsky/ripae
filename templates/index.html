@@ -40,8 +40,8 @@
   <h2>New Run</h2>
   <form method="post" action="/runs">
     <div class="grid">
-      <label>Bought at (date)
-        <input type="text" name="bought_at" placeholder="2954-01-15" required />
+      <label>Bought on
+        <input type="date" name="bought_at" value="{{ crate::runs::model::today() }}" data-today required />
       </label>
       <label>Commodity
         <input type="text" name="commodity" list="pick-commodities" data-pick autocomplete="off" placeholder="Laranite" required />

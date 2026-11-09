@@ -1414,7 +1414,7 @@ dependencies = [
 
 [[package]]
 name = "ripae"
-version = "0.1.1-roll5"
+version = "0.1.2-roll5"
 dependencies = [
  "anyhow",
  "argon2",
