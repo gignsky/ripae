@@ -131,7 +131,6 @@ CREATE TABLE shares (
 );
 
 CREATE INDEX loads_voyage ON loads(voyage_id);
-CREATE INDEX loads_status ON loads(status);
 CREATE INDEX crates_load  ON crates(load_id);
 ```
 

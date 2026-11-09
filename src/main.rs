@@ -3,7 +3,6 @@ mod changelog;
 mod config;
 mod db;
 mod lookups;
-mod runs;
 mod stowage;
 mod templates;
 
@@ -48,17 +47,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/changelog", get(changelog::changelog))
         .route("/login", get(auth::login_form).post(auth::login))
         .route("/logout", post(auth::logout))
-        .route("/", get(runs::index))
-        .route("/runs", post(runs::create))
-        .route("/runs/{id}/edit", get(runs::edit_form))
-        .route(
-            "/runs/{id}/close",
-            get(runs::close_form).post(runs::close_run),
-        )
-        .route(
-            "/runs/{id}",
-            axum::routing::put(runs::update_run).delete(runs::delete_run),
-        )
+        .route("/", get(stowage::index))
         .nest_service("/static", ServeDir::new("static"))
         .layer(session_layer)
         .with_state(state);

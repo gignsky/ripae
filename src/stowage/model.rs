@@ -325,7 +325,19 @@ impl Load {
     /// `'sold' if every crate sold/lost; else the one whereabouts all live
     /// crates share; else 'split'`.
     pub fn status(&self) -> LoadStatus {
-        todo!()
+        let mut live = self.crates.iter().filter(|c| c.is_live()).map(|c| c.whereabouts);
+        let Some(first) = live.next() else {
+            return LoadStatus::Sold;
+        };
+        if live.all(|w| w == first) {
+            match first {
+                Whereabouts::Aboard => LoadStatus::InTransit,
+                Whereabouts::Stored => LoadStatus::Stored,
+                Whereabouts::AwaitingPickup => LoadStatus::AwaitingPickup,
+            }
+        } else {
+            LoadStatus::Split
+        }
     }
 
     pub fn is_open(&self) -> bool {
@@ -342,13 +354,51 @@ impl Load {
     /// one place the count is dropped (`"aboard JT's Hull-C"`,
     /// `"at Everus Harbor"`).
     pub fn where_now(&self, hull: Option<&str>) -> String {
-        let _ = hull;
-        todo!()
+        let live: Vec<&Crate> = self.crates.iter().filter(|c| c.is_live()).collect();
+        if live.is_empty() {
+            return "sold".to_string();
+        }
+        let aboard = live.iter().filter(|c| c.whereabouts == Whereabouts::Aboard).count();
+        let pickup = live
+            .iter()
+            .filter(|c| c.whereabouts == Whereabouts::AwaitingPickup)
+            .count();
+        // stored, grouped by station in first-seen order
+        let mut stations: Vec<(String, usize)> = Vec::new();
+        for c in live.iter().filter(|c| c.whereabouts == Whereabouts::Stored) {
+            let at = c.stored_at.clone().unwrap_or_else(|| "unknown station".into());
+            match stations.iter_mut().find(|(s, _)| *s == at) {
+                Some((_, n)) => *n += 1,
+                None => stations.push((at, 1)),
+            }
+        }
+        let groups = (aboard > 0) as usize + (pickup > 0) as usize + stations.len();
+        let hull_text = hull.map(|h| format!("aboard {h}")).unwrap_or_else(|| "aboard · no hull yet".into());
+        if groups == 1 {
+            if aboard > 0 {
+                return hull_text;
+            }
+            if pickup > 0 {
+                return format!("awaiting pickup at {}", self.buy_terminal);
+            }
+            return format!("at {}", stations[0].0);
+        }
+        let mut parts = Vec::new();
+        if aboard > 0 {
+            parts.push(format!("{aboard} {hull_text}"));
+        }
+        for (at, n) in &stations {
+            parts.push(format!("{n} stored at {at}"));
+        }
+        if pickup > 0 {
+            parts.push(format!("{pickup} awaiting pickup"));
+        }
+        parts.join(" · ")
     }
 
     /// Σ size over crates that aren't lost (sold ones included).
     pub fn scu(&self) -> u32 {
-        todo!()
+        self.crates.iter().filter(|c| !c.is_lost()).map(|c| c.size_scu).sum()
     }
 
     /// Σ size over every crate, lost included.
@@ -372,32 +422,41 @@ impl Load {
 
     /// `cost = scu(all crates incl. lost) × buy_price_scu`.
     pub fn cost(&self) -> f64 {
-        todo!()
+        self.scu_all() as f64 * self.buy_price_scu
     }
 
     /// `written_off = Σ size over lost crates × buy_price_scu`.
     pub fn written_off(&self) -> f64 {
-        todo!()
+        self.scu_lost() as f64 * self.buy_price_scu
     }
 
     /// Revenue of a sold load: the lot figure when priced per lot, else
     /// `scu_sold × sell_price_scu`. `None` while open.
     pub fn revenue(&self) -> Option<f64> {
-        todo!()
+        if !self.is_sold() || self.scu_sold() == 0 && self.sell_price_scu.is_none() {
+            return None;
+        }
+        match (self.sell_price_lot, self.sell_price_scu) {
+            (Some(lot), _) => Some(lot),
+            (None, Some(per)) => Some(self.scu_sold() as f64 * per),
+            (None, None) => None,
+        }
     }
 
     /// `cost_sold = scu_sold × buy_price_scu` -- only the crates that sold.
     pub fn cost_sold(&self) -> Option<f64> {
-        todo!()
+        self.is_sold().then(|| self.scu_sold() as f64 * self.buy_price_scu)
     }
 
     pub fn profit(&self) -> Option<f64> {
-        todo!()
+        Some(self.revenue()? - self.cost_sold()?)
     }
 
     /// `profit / cost_sold`, 0 when cost is 0. `None` while open.
     pub fn margin(&self) -> Option<f64> {
-        todo!()
+        let cost = self.cost_sold()?;
+        let profit = self.profit()?;
+        Some(if cost == 0.0 { 0.0 } else { profit / cost })
     }
 
     pub fn shares_paid(&self) -> f64 {
@@ -406,7 +465,7 @@ impl Load {
 
     /// `seller_keeps = profit − Σ share.paid`.
     pub fn seller_keeps(&self) -> Option<f64> {
-        todo!()
+        Some(self.profit()? - self.shares_paid())
     }
 
     /// Crate mix of the non-lost crates as `(count, size)`, largest first.
@@ -430,8 +489,10 @@ impl Load {
 /// Per SCU → lot is `price × scu`; per lot → per SCU is `price / scu`
 /// (0 when there's no SCU to divide by).
 pub fn derive_prices(mode: PriceMode, price: f64, scu: u32) -> (f64, f64) {
-    let _ = (mode, price, scu);
-    todo!()
+    match mode {
+        PriceMode::Scu => (price, price * scu as f64),
+        PriceMode::Lot => (if scu == 0 { 0.0 } else { price / scu as f64 }, price),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -494,15 +555,81 @@ impl Sale {
 /// `share.paid = 0 when profit ≤ 0 (ruled: nothing is owed on a loss, flat
 /// fees included) else profit × amount/100 (pct) | amount (flat)`.
 pub fn share_paid(profit: f64, kind: ShareKind, amount: f64) -> f64 {
-    let _ = (profit, kind, amount);
-    todo!()
+    if profit <= 0.0 {
+        return 0.0;
+    }
+    match kind {
+        ShareKind::Pct => profit * amount / 100.0,
+        ShareKind::Flat => amount,
+    }
 }
 
 /// Works out a sale against a load without touching it: which crates go,
 /// which stay, the money, and what every share pays.
 pub fn settle(load: &Load, input: &SaleInput) -> Result<Sale, String> {
-    let _ = (load, input);
-    todo!()
+    if input.crate_ids.is_empty() {
+        return Err("Pick at least one crate to sell.".into());
+    }
+    if input.price < 0.0 || !input.price.is_finite() {
+        return Err("Sell price can't be negative.".into());
+    }
+    let mut sold = Vec::new();
+    let mut kept = Vec::new();
+    for c in &load.crates {
+        if input.crate_ids.contains(&c.id) {
+            if !c.is_sellable() {
+                return Err(format!(
+                    "Crate #{} is {} and can't be sold.",
+                    c.id, c.condition
+                ));
+            }
+            sold.push(c.clone());
+        } else {
+            kept.push(c.clone());
+        }
+    }
+    if sold.len() != input.crate_ids.iter().collect::<std::collections::HashSet<_>>().len() {
+        return Err("One of those crates isn't on this load.".into());
+    }
+    let scu_sold: u32 = sold.iter().map(|c| c.size_scu).sum();
+    let (sell_price_scu, sell_price_lot) = derive_prices(input.price_mode, input.price, scu_sold);
+    let revenue = sell_price_lot;
+    let cost_sold = scu_sold as f64 * load.buy_price_scu;
+    let profit = revenue - cost_sold;
+    let mut pct_total = 0.0;
+    let mut shares = Vec::new();
+    for s in &input.shares {
+        if s.amount < 0.0 || !s.amount.is_finite() {
+            return Err("Share amounts can't be negative.".into());
+        }
+        if s.kind == ShareKind::Pct {
+            pct_total += s.amount;
+        }
+        shares.push(SettledShare {
+            to_user: s.to_user,
+            paid_to: s.paid_to.unwrap_or(s.to_user),
+            kind: s.kind,
+            amount: s.amount,
+            reason: s.reason.clone(),
+            paid: share_paid(profit, s.kind, s.amount),
+        });
+    }
+    if pct_total > 100.0 + 1e-9 {
+        return Err(format!("Percentage shares add up to {pct_total}% -- more than the whole profit."));
+    }
+    let paid: f64 = shares.iter().map(|s| s.paid).sum();
+    Ok(Sale {
+        sold,
+        kept,
+        scu_sold,
+        sell_price_scu,
+        sell_price_lot,
+        revenue,
+        cost_sold,
+        profit,
+        shares,
+        seller_keeps: profit - paid,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -526,8 +653,26 @@ pub struct Totals {
 
 impl Totals {
     pub fn from_voyages<'a>(voyages: impl IntoIterator<Item = &'a Voyage>) -> Self {
-        let _ = voyages;
-        todo!()
+        let mut t = Totals::default();
+        for v in voyages {
+            let mut any_open = false;
+            for l in &v.loads {
+                if l.is_open() {
+                    any_open = true;
+                    t.open_loads += 1;
+                    t.open_scu += l.scu();
+                    t.committed_gross += l.cost();
+                    t.written_off += l.written_off();
+                } else if let Some(p) = l.profit() {
+                    t.realised += p;
+                }
+            }
+            if any_open {
+                t.open_voyages += 1;
+            }
+        }
+        t.committed = t.committed_gross - t.written_off;
+        t
     }
 }
 
@@ -582,20 +727,88 @@ impl SortKey {
 
 /// `board_credit(u) = Σ seller_keeps where u sold + Σ share.paid where share.to_user = u`.
 pub fn board_credit(user_id: i64, voyages: &[Voyage]) -> f64 {
-    let _ = (user_id, voyages);
-    todo!()
+    sold_loads(voyages)
+        .map(|l| {
+            let kept = if l.submitted_by == user_id { l.seller_keeps().unwrap_or(0.0) } else { 0.0 };
+            let earned: f64 = l.shares.iter().filter(|s| s.to_user == user_id).map(|s| s.paid_auec).sum();
+            kept + earned
+        })
+        .sum()
 }
 
 /// `cash(u) = Σ seller_keeps where u sold + Σ share.paid where share.paid_to = u`.
 pub fn cash(user_id: i64, voyages: &[Voyage]) -> f64 {
-    let _ = (user_id, voyages);
-    todo!()
+    sold_loads(voyages)
+        .map(|l| {
+            let kept = if l.submitted_by == user_id { l.seller_keeps().unwrap_or(0.0) } else { 0.0 };
+            let received: f64 = l.shares.iter().filter(|s| s.paid_to == user_id).map(|s| s.paid_auec).sum();
+            kept + received
+        })
+        .sum()
+}
+
+/// Every sold load across the ledger; `submitted_by` on a sold row is the
+/// member who closed it (the seller).
+fn sold_loads(voyages: &[Voyage]) -> impl Iterator<Item = &Load> {
+    voyages.iter().flat_map(|v| v.loads.iter()).filter(|l| l.is_sold())
+}
+
+/// Voyages with every load sold where `user_id` sold at least one of them.
+fn runs_closed_by(user_id: i64, voyages: &[Voyage]) -> usize {
+    voyages
+        .iter()
+        .filter(|v| v.is_fully_sold() && v.loads.iter().any(|l| l.submitted_by == user_id))
+        .count()
+}
+
+fn best_route_of(user_id: i64, voyages: &[Voyage]) -> Option<Route> {
+    sold_loads(voyages)
+        .filter(|l| l.submitted_by == user_id)
+        .filter_map(|l| {
+            Some(Route {
+                from: l.buy_terminal.clone(),
+                to: l.sell_terminal.clone()?,
+                profit: l.profit()?,
+            })
+        })
+        .max_by(|a, b| a.profit.total_cmp(&b.profit))
 }
 
 /// One row per user, sorted by `key` (descending), ties by display name.
 pub fn standings(users: &[User], voyages: &[Voyage], key: SortKey) -> Vec<Standing> {
-    let _ = (users, voyages, key);
-    todo!()
+    let mut rows: Vec<Standing> = users
+        .iter()
+        .map(|u| {
+            let mine: Vec<&Load> = sold_loads(voyages).filter(|l| l.submitted_by == u.id).collect();
+            Standing {
+                user_id: u.id,
+                handle: u.handle.clone(),
+                display_name: u.display_name.clone(),
+                board_credit: board_credit(u.id, voyages),
+                cash: cash(u.id, voyages),
+                runs_closed: runs_closed_by(u.id, voyages),
+                loads_sold: mine.len(),
+                scu_hauled: mine.iter().map(|l| l.scu_sold()).sum(),
+                best_route: best_route_of(u.id, voyages),
+                pct_of_org: 0.0,
+            }
+        })
+        .collect();
+    let positive: f64 = rows.iter().map(|r| r.board_credit.max(0.0)).sum();
+    for r in &mut rows {
+        r.pct_of_org = if positive > 0.0 { r.board_credit.max(0.0) / positive * 100.0 } else { 0.0 };
+    }
+    rows.sort_by(|a, b| {
+        let primary = match key {
+            SortKey::Profit => b.board_credit.total_cmp(&a.board_credit),
+            SortKey::Runs => b.runs_closed.cmp(&a.runs_closed),
+            SortKey::Scu => b.scu_hauled.cmp(&a.scu_hauled),
+        };
+        primary
+            .then(b.board_credit.total_cmp(&a.board_credit))
+            .then_with(|| a.display_name.cmp(&b.display_name))
+    });
+    rows
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -625,8 +838,83 @@ pub struct ServiceRecord {
 }
 
 pub fn service_record(user: &User, users: &[User], voyages: &[Voyage]) -> ServiceRecord {
-    let _ = (user, users, voyages);
-    todo!()
+    let mine: Vec<&Load> = sold_loads(voyages).filter(|l| l.submitted_by == user.id).collect();
+    let trade = |pick: fn(f64, f64) -> bool| -> Option<(String, f64)> {
+        let mut best: Option<(String, f64)> = None;
+        for l in &mine {
+            if let Some(p) = l.profit() {
+                if best.as_ref().map_or(true, |(_, b)| pick(p, *b)) {
+                    best = Some((l.commodity.clone(), p));
+                }
+            }
+        }
+        best
+    };
+    let mut by_commodity: HashMap<&str, usize> = HashMap::new();
+    let mut by_route: HashMap<(&str, &str), usize> = HashMap::new();
+    for l in &mine {
+        *by_commodity.entry(l.commodity.as_str()).or_insert(0) += 1;
+        if let Some(to) = l.sell_terminal.as_deref() {
+            *by_route.entry((l.buy_terminal.as_str(), to)).or_insert(0) += 1;
+        }
+    }
+    let favourite_commodity = by_commodity
+        .into_iter()
+        .max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(a.0)))
+        .map(|(c, n)| (c.to_string(), n));
+    let favourite_route = by_route
+        .into_iter()
+        .max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(&a.0)))
+        .map(|((f, t), n)| (f.to_string(), t.to_string(), n));
+
+    // crates lost on anything this member logged, open or sold
+    let logged: Vec<&Load> = voyages
+        .iter()
+        .flat_map(|v| v.loads.iter())
+        .filter(|l| l.submitted_by == user.id)
+        .collect();
+    let lost: Vec<&Crate> = logged.iter().flat_map(|l| l.crates.iter()).filter(|c| c.is_lost()).collect();
+
+    let mut ships_flown: Vec<String> = voyages
+        .iter()
+        .filter(|v| v.loads.iter().any(|l| l.submitted_by == user.id) || v.logged_by == user.id)
+        .filter_map(|v| v.ship.as_ref().map(|s| s.name.clone()))
+        .collect();
+    ships_flown.sort();
+    ships_flown.dedup();
+
+    let mut dates: Vec<&str> = mine.iter().filter_map(|l| l.sold_at.as_deref()).collect();
+    dates.sort_unstable();
+
+    let rank = standings(users, voyages, SortKey::Profit)
+        .iter()
+        .position(|s| s.user_id == user.id)
+        .map(|i| i + 1);
+
+    ServiceRecord {
+        user: user.clone(),
+        board_credit: board_credit(user.id, voyages),
+        cash: cash(user.id, voyages),
+        runs_closed: runs_closed_by(user.id, voyages),
+        loads_sold: mine.len(),
+        scu_hauled: mine.iter().map(|l| l.scu_sold()).sum(),
+        best_trade: trade(|p, b| p > b),
+        worst_trade: trade(|p, b| p < b),
+        favourite_commodity,
+        favourite_route,
+        crates_lost: lost.len(),
+        scu_lost: lost.iter().map(|c| c.size_scu).sum(),
+        shares_paid_out: mine.iter().map(|l| l.shares_paid()).sum(),
+        shares_received: sold_loads(voyages)
+            .flat_map(|l| l.shares.iter())
+            .filter(|s| s.to_user == user.id)
+            .map(|s| s.paid_auec)
+            .sum(),
+        ships_flown,
+        first_sale: dates.first().map(|d| d.to_string()),
+        latest_sale: dates.last().map(|d| d.to_string()),
+        rank,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -641,14 +929,45 @@ pub type BoxMix = Vec<(u32, u32)>;
 /// counts are refused; repeated sizes are merged; result is normalised
 /// (largest first).
 pub fn parse_boxes(raw: &str) -> Result<BoxMix, String> {
-    let _ = raw;
-    todo!()
+    let mut counts: BTreeMap<u32, u32> = BTreeMap::new();
+    // "2 × 32" with spaces around the sign is one token: glue a bare sign
+    // to its neighbours before splitting on whitespace.
+    let glued = raw
+        .replace(" x ", "x")
+        .replace(" X ", "x")
+        .replace(" × ", "x")
+        .replace(" * ", "x");
+    let tokens: Vec<&str> = glued
+        .split(|c: char| c == ',' || c == ';' || c.is_whitespace())
+        .filter(|t| !t.is_empty())
+        .collect();
+    if tokens.is_empty() {
+        return Err("Boxes are required -- e.g. 2×32, 4×8.".into());
+    }
+    for tok in tokens {
+        let mut parts = tok.splitn(2, |c: char| matches!(c, 'x' | 'X' | '×' | '*'));
+        let (Some(n), Some(size)) = (parts.next(), parts.next()) else {
+            return Err(format!("\"{tok}\" isn't count×size -- e.g. 2×32."));
+        };
+        let n: u32 = n.trim().parse().map_err(|_| format!("\"{tok}\": count must be a whole number."))?;
+        let size: u32 = size.trim().parse().map_err(|_| format!("\"{tok}\": size must be a whole number."))?;
+        if n == 0 {
+            return Err(format!("\"{tok}\": a count of zero is no crate at all."));
+        }
+        if !CRATE_SIZES.contains(&size) {
+            return Err(format!("\"{tok}\": {size} SCU isn't a crate size (1, 2, 4, 8, 16, 24, 32)."));
+        }
+        *counts.entry(size).or_insert(0) += n;
+    }
+    Ok(counts.into_iter().rev().map(|(size, n)| (n, size)).collect())
 }
 
 /// `[(2, 32), (4, 8)]` → `"2×32, 4×8"`.
 pub fn format_boxes(mix: &BoxMix) -> String {
-    let _ = mix;
-    todo!()
+    mix.iter()
+        .map(|(n, size)| format!("{n}×{size}"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// One entry per crate, largest first.
@@ -707,24 +1026,117 @@ pub struct PlanEntry {
 /// within a stop, larger crates first. First entry `Deepest`, the
 /// lowest-stop entries `DoorSide`, anything between `MidHold`.
 pub fn stowage_order(loads: &[&Load]) -> Vec<PlanEntry> {
-    let _ = loads;
-    todo!()
+    let mut entries: Vec<PlanEntry> = loads
+        .iter()
+        .map(|l| {
+            let mut sizes: Vec<u32> = l.crates.iter().filter(|c| c.is_live()).map(|c| c.size_scu).collect();
+            sizes.sort_unstable_by(|a, b| b.cmp(a));
+            PlanEntry {
+                load_id: l.id,
+                commodity: l.commodity.clone(),
+                stop_no: l.stop_no,
+                destination: l.destination.clone(),
+                sizes,
+                depth: Depth::MidHold,
+            }
+        })
+        .collect();
+    entries.sort_by(|a, b| {
+        b.stop_no
+            .cmp(&a.stop_no)
+            .then_with(|| b.sizes.first().cmp(&a.sizes.first()))
+            .then_with(|| a.load_id.cmp(&b.load_id))
+    });
+    let min_stop = entries.iter().map(|e| e.stop_no).min().unwrap_or(1);
+    for (i, e) in entries.iter_mut().enumerate() {
+        e.depth = if i == 0 {
+            Depth::Deepest
+        } else if e.stop_no == min_stop {
+            Depth::DoorSide
+        } else {
+            Depth::MidHold
+        };
+    }
+    entries
 }
 
 /// `https://sc-cargo.space/#/viewer/<slug>-official[-q<n>][-w<n>]…`, sizes
 /// `1 2 4 8 16 24 32` = `q w e r t y u`; zero counts omitted; spaces in the
 /// slug URL-encoded.
 pub fn sc_cargo_link(slug: &str, sizes: &[u32]) -> String {
-    let _ = (slug, sizes);
-    todo!()
+    let mut url = format!(
+        "https://sc-cargo.space/#/viewer/{}-official",
+        url_encode(slug)
+    );
+    for (i, &size) in CRATE_SIZES.iter().enumerate() {
+        let n = sizes.iter().filter(|&&s| s == size).count();
+        if n > 0 {
+            url.push('-');
+            url.push(SIZE_KEYS[i]);
+            url.push_str(&n.to_string());
+        }
+    }
+    url
+}
+
+/// `encodeURIComponent` for the slug: unreserved characters pass, the rest
+/// is percent-encoded (a space becomes `%20`).
+fn url_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'!' | b'~' | b'*' | b'\'' | b'(' | b')' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
 }
 
 /// Hull-less voyages grouped: two join a cluster when any of their loads
 /// share a destination (transitively). Undecided destinations never pair.
 /// Each cluster is sorted by voyage id; clusters are sorted by their first id.
 pub fn cluster_unassigned(voyages: &[&Voyage]) -> Vec<Vec<i64>> {
-    let _ = voyages;
-    todo!()
+    let mut un: Vec<&Voyage> = voyages.iter().copied().filter(|v| v.ship.is_none()).collect();
+    un.sort_by_key(|v| v.id);
+    // union-find over indices
+    let mut parent: Vec<usize> = (0..un.len()).collect();
+    fn find(p: &mut Vec<usize>, i: usize) -> usize {
+        if p[i] != i {
+            let root = find(p, p[i]);
+            p[i] = root;
+        }
+        p[i]
+    }
+    let mut owner_of_dest: HashMap<String, usize> = HashMap::new();
+    for (i, v) in un.iter().enumerate() {
+        for d in v.destinations() {
+            let key = d.to_lowercase();
+            match owner_of_dest.get(&key) {
+                Some(&j) => {
+                    let (a, b) = (find(&mut parent, i), find(&mut parent, j));
+                    if a != b {
+                        parent[a] = b;
+                    }
+                }
+                None => {
+                    owner_of_dest.insert(key, i);
+                }
+            }
+        }
+    }
+    let mut groups: BTreeMap<usize, Vec<i64>> = BTreeMap::new();
+    for i in 0..un.len() {
+        let root = find(&mut parent, i);
+        groups.entry(root).or_default().push(un[i].id);
+    }
+    let mut clusters: Vec<Vec<i64>> = groups.into_values().collect();
+    for c in &mut clusters {
+        c.sort_unstable();
+    }
+    clusters.sort_by_key(|c| c[0]);
+    clusters
 }
 
 // ---------------------------------------------------------------------------
@@ -1531,7 +1943,7 @@ mod properties {
             prop::sample::select(vec![JT, THIRD]),
             prop::option::of(prop::sample::select(vec![JT, THIRD])),
             prop_oneof![Just(ShareKind::Pct), Just(ShareKind::Flat)],
-            0u32..=100,
+            0u32..=25, // four shares at most, so percentages never exceed the whole profit
             0u32..=100_000,
         )
             .prop_map(|(to, forfeit, kind, pct, flat)| ShareInput {
