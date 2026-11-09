@@ -145,6 +145,10 @@ pub fn trim_num(n: f64) -> String {
     }
 }
 
+pub fn to_cents(n: f64) -> f64 {
+    (n * 100.0).round() / 100.0
+}
+
 /// What sits under a load row: nothing, the crate manifest, an edit form or
 /// the close form.
 pub enum LoadExtra {
@@ -343,8 +347,10 @@ impl LoadFormView {
             boxes: format_boxes(&l.boxes()),
             scu: l.scu().to_string(),
             price_mode: l.price_mode.as_str().into(),
-            price_scu: trim_num(l.buy_price_scu),
-            price_lot: l.buy_price_lot.map(trim_num).unwrap_or_default(),
+            // A per-lot price leaves a derived per-SCU price like 333.333…;
+            // show both to the cent so the inputs hold a sane figure.
+            price_scu: trim_num(to_cents(l.buy_price_scu)),
+            price_lot: l.buy_price_lot.map(|p| trim_num(to_cents(p))).unwrap_or_default(),
             terminal: l.buy_terminal.clone(),
             stop_no: l.stop_no.to_string(),
             destination: l.destination.clone().unwrap_or_default(),
@@ -816,5 +822,17 @@ mod tests {
         assert_eq!(short_terminal("ArcCorp Mining Area 141"), "ArcCorp 141");
         assert_eq!(trim_num(25.0), "25");
         assert_eq!(trim_num(12.5), "12.5");
+    }
+
+    #[test]
+    fn edit_form_shows_a_per_lot_load_to_the_cent() {
+        use crate::stowage::model::fixtures::{load, sound};
+        // 1,000 aUEC for 3 SCU: the derived per-SCU price is 333.333…
+        let mut l = load(1, 1000.0 / 3.0, vec![sound(1, 1), sound(2, 1), sound(3, 1)]);
+        l.price_mode = crate::stowage::model::PriceMode::Lot;
+        l.buy_price_lot = Some(1000.0);
+        let f = LoadFormView::from_load(&l);
+        assert_eq!(f.price_scu, "333.33");
+        assert_eq!(f.price_lot, "1000");
     }
 }
