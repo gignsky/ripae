@@ -116,8 +116,9 @@
       });
     }
 
-    function render() {
-      var q = input.value;
+    // `query` defaults to what is typed; focus passes "" to show the whole list.
+    function render(query) {
+      var q = typeof query === "string" ? query : input.value;
       shown = options
         .map(function (name) { return { name: name, s: score(q, name) }; })
         .filter(function (r) { return r.s !== null; })
@@ -151,7 +152,16 @@
       validate();
     }
 
-    input.addEventListener("focus", render);
+    input.addEventListener("focus", function () {
+      // A pre-filled pick (e.g. the default terminal) is selected so typing
+      // replaces it, and the menu opens on the full list rather than one hit.
+      if (canonical(input.value)) {
+        input.select();
+        render("");
+      } else {
+        render();
+      }
+    });
     input.addEventListener("input", function () {
       render();
       validate();
