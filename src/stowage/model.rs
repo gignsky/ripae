@@ -134,6 +134,36 @@ impl FromStr for PriceMode {
     }
 }
 
+/// Commodity cargo bought at a terminal, or the boxes of a hauling contract:
+/// picked up for nothing and paid for on delivery.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LoadKind {
+    #[default]
+    Trade,
+    Haul,
+}
+
+impl LoadKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            LoadKind::Trade => "trade",
+            LoadKind::Haul => "haul",
+        }
+    }
+}
+
+impl FromStr for LoadKind {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "trade" => Ok(LoadKind::Trade),
+            "haul" => Ok(LoadKind::Haul),
+            other => Err(format!("unknown load kind: {other}")),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ShareKind {
@@ -262,7 +292,9 @@ pub struct Load {
     pub voyage_id: i64,
     pub submitted_by: i64,
     pub submitted_by_name: String,
+    pub kind: LoadKind,
     pub commodity: String,
+    /// The pickup, on a haul.
     pub buy_terminal: String,
     pub price_mode: PriceMode,
     pub buy_price_scu: f64,
@@ -273,6 +305,8 @@ pub struct Load {
     pub sell_terminal: Option<String>,
     pub sell_price_scu: Option<f64>,
     pub sell_price_lot: Option<f64>,
+    /// A haul's promised payout; only the delivery's recorded price counts.
+    pub reward: Option<f64>,
     pub notes: Option<String>,
     pub crates: Vec<Crate>,
     pub shares: Vec<Share>,
@@ -342,6 +376,10 @@ impl Load {
 
     pub fn is_sold(&self) -> bool {
         !self.is_open()
+    }
+
+    pub fn is_haul(&self) -> bool {
+        self.kind == LoadKind::Haul
     }
 
     /// Closed by an actual sale -- as opposed to every crate lost or written
@@ -1347,6 +1385,7 @@ pub(crate) mod fixtures {
             submitted_by: GIG,
             submitted_by_name: name_of(GIG),
             commodity: "Laranite".into(),
+            kind: LoadKind::Trade,
             buy_terminal: "ArcCorp Mining Area 141".into(),
             price_mode: PriceMode::Scu,
             buy_price_scu,
@@ -1357,6 +1396,7 @@ pub(crate) mod fixtures {
             sell_terminal: None,
             sell_price_scu: None,
             sell_price_lot: None,
+            reward: None,
             notes: None,
             crates: crates
                 .into_iter()
