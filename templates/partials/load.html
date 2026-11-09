@@ -7,7 +7,7 @@
     <td><span class="status {{ l.status_css }}">{{ l.status_label }}</span></td>
     <td><span class="stop">{{ l.stop_no }}</span>{{ l.destination_label }}</td>
     <td class="where">{{ l.where_now }}</td>
-    <td class="num">{{ l.cost_fmt }}</td>
+    <td class="num">{{ l.cost_fmt }}<small class="per-scu">{{ l.buy_price_scu_fmt }} / SCU</small></td>
     <td class="who">{{ l.by_upper }}</td>
     <td><span class="actions">
       <button class="cmd" type="button" hx-get="/loads/{{ l.id }}/edit" hx-target="#load-{{ l.id }}" hx-swap="outerHTML">Edit</button>
