@@ -23,14 +23,14 @@
     <thead>
       <tr>
         <th>Commodity</th><th>SCU</th><th>Bought at</th><th>Date</th><th>Status</th>
-        <th>Destination</th><th>Where now</th><th>Cost</th><th>Actions</th>
+        <th>Destination</th><th>Where now</th><th>Cost</th><th>By</th><th>Actions</th>
       </tr>
     </thead>
     <tbody>
       {% for run in open_runs %}
       {% include "partials/open_cargo_row.html" %}
       {% else %}
-      <tr><td colspan="9"><em>No open cargo. Fly safe.</em></td></tr>
+      <tr><td colspan="10"><em>No open cargo. Fly safe.</em></td></tr>
       {% endfor %}
     </tbody>
   </table>
@@ -74,7 +74,7 @@
     <thead>
       <tr>
         <th>Commodity</th><th>SCU sold</th><th>Sell terminal</th><th>Sold at</th>
-        <th>Sell price / SCU</th><th>Cost</th><th>Profit</th><th>Margin</th>
+        <th>Sell price / SCU</th><th>Cost</th><th>Profit</th><th>Margin</th><th>By</th>
       </tr>
     </thead>
     <tbody>
@@ -88,9 +88,10 @@
         <td>{{ run.cost_fmt }}</td>
         <td>{% if let Some(profit_fmt) = run.profit_fmt %}{{ profit_fmt }}{% endif %} aUEC</td>
         <td>{% if let Some(margin_pct_fmt) = run.margin_pct_fmt %}{{ margin_pct_fmt }}%{% endif %}</td>
+        <td>{{ run.submitted_by_name }}</td>
       </tr>
       {% else %}
-      <tr><td colspan="8"><em>No sales yet.</em></td></tr>
+      <tr><td colspan="9"><em>No sales yet.</em></td></tr>
       {% endfor %}
     </tbody>
   </table>
