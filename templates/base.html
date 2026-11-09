@@ -6,6 +6,17 @@
     <title>Ripae</title>
     <link rel="stylesheet" href="/static/pico.min.css" />
     <script src="/static/htmx.min.js"></script>
+    <script>
+      // Validation failures come back as 422 with the form re-rendered and an
+      // error line. htmx 1.9 refuses to swap any 4xx by default, so without
+      // this the edit/close forms looked like they did nothing (0.1.3 bug).
+      document.addEventListener("htmx:beforeSwap", function (e) {
+        if (e.detail.xhr && e.detail.xhr.status === 422) {
+          e.detail.shouldSwap = true;
+          e.detail.isError = false;
+        }
+      });
+    </script>
     <script src="/static/picker.js" defer></script>
     <script>
       // Date fields marked data-today are pre-filled with the server's UTC
