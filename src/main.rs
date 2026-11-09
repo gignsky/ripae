@@ -84,6 +84,7 @@ async fn main() -> anyhow::Result<()> {
             get(stowage::close_form).post(stowage::close_load),
         )
         .route("/loads/{id}/delete", get(stowage::load_delete_confirm))
+        .route("/loads/{id}/sale", get(stowage::sale_edit_form).put(stowage::sale_update))
         .route(
             "/loads/{id}/write-off",
             get(stowage::load_write_off_confirm).post(stowage::load_write_off),

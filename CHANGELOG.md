@@ -3,6 +3,15 @@
 Every notable change to Ripae. Newest first. This file is also what the
 version badge in the corner of the site shows.
 
+## 0.2.4
+
+### Added
+- **Edit a recorded sale.** Every ledger row has a *Sale* button that
+  reopens the sale: who sold it, the date, the sell terminal, the price
+  (per SCU, per lot or from your balance) and the profit shares. Profit
+  and every share are worked out again on the corrected figures, with the
+  same live preview as the close form. Which crates sold doesn't change.
+
 ## 0.2.3
 
 ### Added

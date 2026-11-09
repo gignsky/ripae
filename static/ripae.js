@@ -269,6 +269,7 @@
       if (sk) sk.textContent = i.checked ? "sold" : "kept";
     }
     function syncScu() {
+      if (form.dataset.scu) return +form.dataset.scu; // the sale editor: the crates already sold
       var q = 0; crates().forEach(function (c) { var i = c.querySelector("input"); if (i.checked && !i.disabled) q += +c.dataset.size; });
       if (scuSold) scuSold.value = q; return q;
     }

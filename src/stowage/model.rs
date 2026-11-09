@@ -613,9 +613,29 @@ pub fn settle(load: &Load, input: &SaleInput) -> Result<Sale, String> {
     let revenue = sell_price_lot;
     let cost_sold = scu_sold as f64 * load.buy_price_scu;
     let profit = revenue - cost_sold;
+    let shares = settle_shares(profit, &input.shares)?;
+    let paid: f64 = shares.iter().map(|s| s.paid).sum();
+    Ok(Sale {
+        sold,
+        kept,
+        written_off: Vec::new(),
+        scu_sold,
+        sell_price_scu,
+        sell_price_lot,
+        revenue,
+        cost_sold,
+        profit,
+        shares,
+        seller_keeps: profit - paid,
+    })
+}
+
+/// What every share pays on `profit`, refusing negative amounts and
+/// percentages that add up to more than the whole.
+fn settle_shares(profit: f64, inputs: &[ShareInput]) -> Result<Vec<SettledShare>, String> {
     let mut pct_total = 0.0;
     let mut shares = Vec::new();
-    for s in &input.shares {
+    for s in inputs {
         if s.amount < 0.0 || !s.amount.is_finite() {
             return Err("Share amounts can't be negative.".into());
         }
@@ -634,20 +654,31 @@ pub fn settle(load: &Load, input: &SaleInput) -> Result<Sale, String> {
     if pct_total > 100.0 + 1e-9 {
         return Err(format!("Percentage shares add up to {pct_total}% -- more than the whole profit."));
     }
-    let paid: f64 = shares.iter().map(|s| s.paid).sum();
-    Ok(Sale {
-        sold,
-        kept,
-        written_off: Vec::new(),
-        scu_sold,
-        sell_price_scu,
-        sell_price_lot,
-        revenue,
-        cost_sold,
-        profit,
-        shares,
-        seller_keeps: profit - paid,
-    })
+    Ok(shares)
+}
+
+/// A recorded sale re-priced: the same crates, a corrected price and shares.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Resale {
+    pub sell_price_scu: f64,
+    pub sell_price_lot: f64,
+    pub profit: f64,
+    pub shares: Vec<SettledShare>,
+}
+
+/// Works out a correction to a sale already on the books. Which crates sold
+/// doesn't change -- only the price, and the shares paid on the new profit.
+pub fn resettle(load: &Load, price_mode: PriceMode, price: f64, shares: &[ShareInput]) -> Result<Resale, String> {
+    if !load.was_sold() {
+        return Err("That load hasn't been sold.".into());
+    }
+    if price < 0.0 || !price.is_finite() {
+        return Err("Sell price can't be negative.".into());
+    }
+    let scu_sold = load.scu_sold();
+    let (sell_price_scu, sell_price_lot) = derive_prices(price_mode, price, scu_sold);
+    let profit = sell_price_lot - scu_sold as f64 * load.buy_price_scu;
+    Ok(Resale { sell_price_scu, sell_price_lot, profit, shares: settle_shares(profit, shares)? })
 }
 
 // ---------------------------------------------------------------------------
@@ -1773,6 +1804,26 @@ mod tests {
         assert_eq!((by_runs[1].display_name.as_str(), by_runs[1].runs_closed), ("Lord Gig", 1));
         let by_scu = standings(&users(), &vs, SortKey::Scu);
         assert_eq!(by_scu.iter().map(|r| r.scu_hauled).collect::<Vec<_>>(), vec![96, 72, 0]);
+    }
+
+    #[test]
+    fn resettle_reprices_a_sale_and_pays_shares_on_the_new_profit() {
+        // 16 SCU bought at 10, recorded at 15/SCU; really 3,000 for the lot
+        let l = sold_load(1, GIG, 10.0, 15.0, &[8, 8], vec![(JT, None, ShareKind::Pct, 50.0)]);
+        let half = ShareInput { to_user: JT, paid_to: None, kind: ShareKind::Pct, amount: 50.0, reason: None };
+        let r = resettle(&l, PriceMode::Lot, 3000.0, &[half.clone()]).unwrap();
+        assert_eq!((r.sell_price_scu, r.sell_price_lot), (187.5, 3000.0));
+        assert_eq!(r.profit, 2840.0);
+        assert_eq!(r.shares[0].paid, 1420.0);
+        // a loss pays nothing, flat or percent
+        let flat = ShareInput { kind: ShareKind::Flat, amount: 100.0, ..half.clone() };
+        let r = resettle(&l, PriceMode::Scu, 5.0, &[flat]).unwrap();
+        assert_eq!(r.profit, -80.0);
+        assert_eq!(r.shares[0].paid, 0.0);
+        // over 100 % refused; an unsold load can't be re-priced
+        let over = ShareInput { amount: 60.0, ..half.clone() };
+        assert!(resettle(&l, PriceMode::Lot, 3000.0, &[over.clone(), over]).is_err());
+        assert!(resettle(&load(2, 10.0, vec![sound(1, 8)]), PriceMode::Lot, 1.0, &[]).is_err());
     }
 
     #[test]

@@ -202,6 +202,19 @@ pub struct VoyageOverlayFrag {
 }
 
 #[derive(Template)]
+#[template(path = "partials/sale_overlay.html")]
+pub struct SaleOverlayFrag {
+    pub id: i64,
+    pub voyage_id: i64,
+    pub commodity_upper: String,
+    pub scu_sold: u32,
+    /// Plain number for the live preview; `_fmt` for people.
+    pub buy_price_scu: String,
+    pub buy_price_scu_fmt: String,
+    pub f: crate::stowage::views::CloseFormView,
+}
+
+#[derive(Template)]
 #[template(path = "partials/confirm_write_off.html")]
 pub struct ConfirmWriteOffFrag {
     pub id: i64,
