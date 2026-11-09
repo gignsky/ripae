@@ -50,6 +50,7 @@ INSERT INTO terminals (name) VALUES
 
 INSERT INTO ships (name) VALUES
   ('Avenger Titan'), ('C2 Hercules'), ('Caterpillar'), ('Constellation Andromeda'),
+  ('Constellation Mk V Centaurus'),
   ('Constellation Taurus'), ('Corsair'), ('Cutlass Black'), ('Freelancer MAX'),
   ('Hull A'), ('Hull C'), ('Ironclad'), ('M2 Hercules'), ('Mercury Star Runner'),
   ('Nomad'), ('RAFT'), ('Starlancer MAX'), ('Zeus Mk II CL');
