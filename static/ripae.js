@@ -1,11 +1,37 @@
 // Ripae 0.2 "Stowage" -- the terminal's behaviour, lifted from
 // design/ripae-crt-mock.html and wired to htmx. Everything that appears or
-// disappears paints line by line (raster); overlays start with the screen
+// disappears paints line by line (raster), and within each painted block every
+// row and field flickers on in turn (scanIn); overlays start with the screen
 // flickering to black; prefers-reduced-motion makes all of it instant.
 (function () {
   "use strict";
   var reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   document.documentElement.classList.add("js");
+
+  /* ---- scanlines within a block: every row, heading, field and tile in a lit block flickers on in
+          turn, top to bottom, the way MU-TH-UR draws a reply. Outermost match wins (a tr, not its cells). ---- */
+  var SCAN = "header, tr, li, h1, h2, h3, p, label, dl > div, .tile, .crate, .crate-tile, pre, .sub-h, .formfoot, .sale-fig, .sale-line, .sale-shares > div";
+  var SCAN_STEP = 55, SCAN_BLOCK_MAX = 1800, SCAN_FLICKER = 320; // ms: per line, cap per block, one line's flicker
+  function scanLines(block) {
+    var all = Array.prototype.slice.call(block.querySelectorAll(SCAN));
+    return all.filter(function (el) {
+      if (el.closest("[hidden], template")) return false;
+      for (var p = el.parentElement; p && p !== block; p = p.parentElement) if (all.indexOf(p) >= 0) return false;
+      return true;
+    });
+  }
+  function scanIn(block) {
+    var subs = scanLines(block);
+    if (!subs.length) { block.classList.add("scan"); block.style.animationDelay = "0ms"; subs = [block]; }
+    var step = Math.min(SCAN_STEP, SCAN_BLOCK_MAX / subs.length), d = 0;
+    subs.forEach(function (s, i) {
+      s.classList.remove("scan"); void s.offsetWidth; // restart if it already ran (panel [SHOW] again)
+      s.style.animationDelay = Math.round(d) + "ms"; s.classList.add("scan");
+      d += (i % 3 === 2) ? step + 40 : step;
+    });
+    setTimeout(function () { subs.forEach(function (s) { s.classList.remove("scan"); s.style.animationDelay = ""; }); }, d + SCAN_FLICKER + 50);
+    return d;
+  }
 
   /* ---- slow raster: paint (or unpaint) a list of lines one tick at a time, uneven tick, no easing ---- */
   function raster(lines, on, done) {
@@ -19,16 +45,20 @@
     var seq = on ? lines : lines.slice().reverse();
     seq.forEach(function (l, i) {
       t += (i % 3 === 2) ? 210 : 120;
+      var at = t;
+      // painting in, a block's own lines take their time before the next block starts
+      if (on) t += Math.min(scanLines(l).length * SCAN_STEP, SCAN_BLOCK_MAX);
       timers.push(setTimeout(function () {
         l.classList.add("flash"); l.classList.toggle("lit", on);
+        if (on) scanIn(l);
         if (!on) { l.classList.add("lit"); } /* keep visible while flashing, then drop */
         timers.push(setTimeout(function () {
           l.classList.remove("flash"); if (!on) l.classList.remove("lit");
           l.removeAttribute("data-queued");
         }, 90));
-      }, t));
+      }, at));
     });
-    if (done) timers.push(setTimeout(done, t + 120));
+    if (done) timers.push(setTimeout(done, t + 120 + (on ? SCAN_FLICKER : 0)));
     return timers;
   }
   window.raster = raster;

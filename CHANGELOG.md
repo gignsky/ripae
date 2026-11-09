@@ -3,6 +3,23 @@
 Every notable change to Ripae. Newest first. This file is also what the
 version badge in the corner of the site shows.
 
+## 0.2.5-roll16
+
+### Changed
+- **MU-TH-UR screen.** Everything that paints in now comes up a line at a
+  time: each row, heading, field and tile flickers on in turn, top to
+  bottom, with a brief phosphor flare, and the RIPAE banner wipes down row
+  by row. The glass hums too: the scanlines breathe, a faint refresh band
+  rolls down the screen and the picture slips sync now and then. All of it
+  is off when your system asks for reduced motion.
+
+### Fixed
+- **From balance showed one box instead of two.** After an update the
+  browser could keep running the old script, which didn't know the
+  *From balance* mode and showed *Paid for the lot* instead of the
+  before/after balances. The stylesheet and scripts are now tagged with
+  the version, so each release loads fresh.
+
 ## 0.2.4
 
 ### Added
