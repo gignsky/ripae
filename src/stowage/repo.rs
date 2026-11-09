@@ -316,7 +316,7 @@ pub async fn find_crate(pool: &SqlitePool, id: i64) -> Result<Option<Crate>> {
 }
 
 pub async fn list_users(pool: &SqlitePool) -> Result<Vec<User>> {
-    let rows = sqlx::query("SELECT id, handle, display_name, created_at FROM users ORDER BY id")
+    let rows = sqlx::query("SELECT id, handle, display_name, created_at, avatar_url FROM users ORDER BY id")
         .fetch_all(pool)
         .await?;
     rows.iter()
@@ -326,6 +326,7 @@ pub async fn list_users(pool: &SqlitePool) -> Result<Vec<User>> {
                 handle: r.try_get("handle")?,
                 display_name: r.try_get("display_name")?,
                 created_at: r.try_get("created_at")?,
+                avatar_url: r.try_get("avatar_url")?,
             })
         })
         .collect()

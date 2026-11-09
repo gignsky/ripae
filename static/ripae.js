@@ -488,7 +488,7 @@
         var t = 0;
         lines.forEach(function (l, i) { t += (reduce || instant) ? 0 : (i === lines.length - 1 ? 420 : 160); splashTimers.push(setTimeout(function () { boot.textContent += l + "\n"; }, t)); });
         splashTimers.push(setTimeout(function () {
-          raster(ps.slice(3), true, function () { var h = document.getElementById("g-handle"); if (h && gate) h.focus({ preventScroll: true }); armed = true; });
+          raster(ps.slice(3), true, function () { var h = document.getElementById("g-discord") || document.getElementById("g-handle"); if (h && gate) h.focus({ preventScroll: true }); armed = true; });
         }, t + 150));
       });
     }

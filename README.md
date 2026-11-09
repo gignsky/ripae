@@ -40,6 +40,38 @@ Node (`npm i -g playwright && npx playwright install chromium`, or a
 preinstalled copy on `NODE_PATH`). The raster reveal is not something a
 script can judge; eyeball it.
 
+## Discord sign-in
+
+Set all four of these and the gate becomes `[SIGN IN WITH DISCORD]`:
+anyone in the NISC Discord server gets in, and their account is made on
+first sign-in. Set none and the gate stays handle + password (what local
+dev and `smoke.mjs` use). Setting only some of them is a boot error.
+
+```sh
+export RIPAE_DISCORD_CLIENT_ID=...        # Discord application → OAuth2 → Client ID
+export RIPAE_DISCORD_CLIENT_SECRET=...    # same page → Client Secret (keep it in the sops secret)
+export RIPAE_DISCORD_GUILD_ID=...         # the NISC server's id (Developer Mode → right-click the server → Copy Server ID)
+export RIPAE_PUBLIC_URL=https://ripae.example   # what the browser sees; no trailing path
+```
+
+On the application (<https://discord.com/developers/applications>), under
+**OAuth2 → Redirects**, add `$RIPAE_PUBLIC_URL/auth/discord/callback`
+exactly. No bot is needed: the `identify` and `guilds.members.read` scopes
+are enough to see who someone is and whether they're in the server.
+
+Every sign-in refreshes the member's profile from Discord: their Discord
+**username** becomes the handle, their **server nickname** (else their
+Discord display name) the name on the ledger and leaderboard, and their
+avatar goes on the service record. If the username is already some other
+account's handle, the account keeps the handle it has.
+
+**Claiming the old accounts.** Accounts from before Discord (the seeded
+`lordgig` and `firstofficer`, with their voyages) are claimed once: on the
+gate, open *Crew from before Discord? Claim your account*, enter the old
+handle and password, and Discord links that account to you. From then on
+only Discord signs into it; its password no longer works. An account that
+is never claimed keeps its password but can only use it to claim.
+
 ## Building the image
 
 Nix only (the Dockerfile fallback the brief allowed was never exercised and

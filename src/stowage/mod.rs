@@ -124,6 +124,7 @@ pub async fn shell(
         splash_who: user.map(|u| u.display_name.to_uppercase()).unwrap_or_default(),
         boot_json: serde_json::to_string(&lines).unwrap_or_else(|_| "[]".into()),
         gate_error,
+        discord: state.discord.is_some(),
     }
 }
 
@@ -1554,7 +1555,7 @@ mod tests {
     fn crew() -> Vec<User> {
         [(1, "Lord Gig"), (2, "JT"), (3, "Crew-03")]
             .iter()
-            .map(|(id, n)| User { id: *id, handle: n.to_lowercase(), display_name: n.to_string(), created_at: String::new() })
+            .map(|(id, n)| User { id: *id, handle: n.to_lowercase(), display_name: n.to_string(), created_at: String::new(), avatar_url: None })
             .collect()
     }
 

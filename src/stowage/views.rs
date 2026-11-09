@@ -750,6 +750,7 @@ pub struct RecordView {
     pub win: bool,
     pub name_upper: String,
     pub handle_line: String,
+    pub avatar_url: Option<String>,
     pub line: String,
     pub stats: Vec<StatView>,
 }
@@ -844,6 +845,7 @@ pub fn record_view(rec: &ServiceRecord, seed: u64) -> RecordView {
                 _ => "no record yet".to_string(),
             }
         ),
+        avatar_url: rec.user.avatar_url.clone(),
         line,
         stats,
     }

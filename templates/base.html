@@ -82,6 +82,25 @@
 ╚═╝  ╚═╝╚═╝╚═╝     ╚═╝  ╚═╝╚══════╝</pre>
         <p class="ras tag">LEDGER TERMINAL · NISC CARGO</p>
         <pre class="ras boot" id="boot"></pre>
+        {% if shell.discord %}
+        {# Discord is the door. The password form only claims an account from
+           before Discord (it goes on to Discord to link it). #}
+        <div class="ras gate" id="gate"{% if shell.splash_mode != "gate" %} hidden{% endif %}>
+          <p class="tag gate-line">Speak, friend, and enter<span class="cursor"></span></p>
+          <p class="any"><a class="cmd boxed" href="/auth/discord" id="g-discord">Sign in with Discord</a></p>
+          {% if let Some(err) = shell.gate_error %}<p class="gate-err neg" id="g-err">{{ err }}</p>{% endif %}
+          <details class="claim">
+            <summary class="any">Crew from before Discord? Claim your account</summary>
+            <form method="post" action="/login">
+              <div class="fields">
+                <label>Handle<input id="g-handle" name="handle" type="text" autocomplete="username" placeholder="lordgig" required /></label>
+                <label>Password<input id="g-pass" name="password" type="password" autocomplete="current-password" placeholder="••••••••" required /></label>
+              </div>
+              <p class="any"><button class="cmd boxed" type="submit" id="g-enter">Claim with Discord</button></p>
+            </form>
+          </details>
+        </div>
+        {% else %}
         <form class="ras gate" id="gate" method="post" action="/login"{% if shell.splash_mode != "gate" %} hidden{% endif %}>
           <p class="tag gate-line">Speak, friend, and enter<span class="cursor"></span></p>
           <div class="fields">
@@ -91,6 +110,7 @@
           {% if let Some(err) = shell.gate_error %}<p class="gate-err neg" id="g-err">{{ err }}</p>{% endif %}
           <p class="any"><button class="cmd boxed" type="submit" id="g-enter">Enter</button></p>
         </form>
+        {% endif %}
         <div class="ras any" id="g-known"{% if shell.splash_mode == "gate" %} hidden{% endif %}>Welcome back, <b id="g-who">{{ shell.splash_who }}</b> · Press any key<span class="cursor"></span> · <form method="post" action="/logout" class="inline"><button class="cmd" type="submit" id="g-logout">Log out</button></form></div>
       </div>
     </div>

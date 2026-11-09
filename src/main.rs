@@ -2,6 +2,7 @@ mod auth;
 mod changelog;
 mod config;
 mod db;
+mod discord;
 mod live;
 mod lookups;
 mod stowage;
@@ -12,7 +13,8 @@ use axum::Router;
 use base64::Engine;
 use time::Duration;
 use tower_http::services::ServeDir;
-use tower_sessions::cookie::Key;
+use std::sync::Arc;
+use tower_sessions::cookie::{Key, SameSite};
 use tower_sessions::{Expiry, SessionManagerLayer};
 use tower_sessions_sqlx_store::SqliteStore;
 
@@ -23,12 +25,17 @@ pub struct AppState {
     pub pool: sqlx::SqlitePool,
     /// Write announcements for `GET /live` (see `live`).
     pub live: tokio::sync::broadcast::Sender<String>,
+    /// Discord sign-in, when configured (see `config::DiscordConfig`).
+    pub discord: Option<Arc<discord::Discord>>,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let config = Config::from_env()?;
     init_tracing(config.log_json);
+    // reqwest is built without a crypto provider of its own; use ring, the
+    // one sqlx's rustls already pulls in
+    let _ = rustls::crypto::ring::default_provider().install_default();
 
     let pool = db::connect(&config.db_path).await?;
     db::migrate(&pool).await?;
@@ -41,15 +48,28 @@ async fn main() -> anyhow::Result<()> {
     let session_layer = SessionManagerLayer::new(session_store)
         .with_expiry(Expiry::OnInactivity(Duration::days(30)))
         .with_secure(config.cookie_secure)
+        // Lax, not the default Strict: the browser has to send the cookie
+        // on the redirect back from Discord, or the OAuth state can't be
+        // checked. Every write is a POST/PUT/DELETE, which Lax still guards.
+        .with_same_site(SameSite::Lax)
         .with_signed(session_key);
 
-    let state = AppState { pool, live: live::channel() };
+    let discord = match config.discord.clone() {
+        Some(d) => {
+            tracing::info!(guild_id = %d.guild_id, redirect_uri = %d.redirect_uri, "Discord sign-in on");
+            Some(Arc::new(discord::Discord::new(d)?))
+        }
+        None => None,
+    };
+    let state = AppState { pool, live: live::channel(), discord };
 
     let app = Router::new()
         .route("/healthz", get(healthz))
         .route("/changelog", get(changelog::changelog))
         .route("/login", get(auth::login_form).post(auth::login))
         .route("/logout", post(auth::logout))
+        .route("/auth/discord", get(auth::discord_start))
+        .route("/auth/discord/callback", get(auth::discord_callback))
         .route("/", get(stowage::index))
         .route("/live", get(live::events))
         .route("/live/panels", get(stowage::live_panels))

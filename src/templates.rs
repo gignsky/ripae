@@ -61,6 +61,9 @@ pub struct Shell {
     /// JSON array of boot-log lines the splash types out.
     pub boot_json: String,
     pub gate_error: Option<&'static str>,
+    /// The gate is `[SIGN IN WITH DISCORD]`, with the password form kept
+    /// only for claiming an old account.
+    pub discord: bool,
 }
 
 // ---------------------------------------------------------------------------
