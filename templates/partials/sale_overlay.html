@@ -5,7 +5,7 @@
    data-scu stands in for the crate picker. #}
 <div class="splash-in" data-overlay="sale-edit" role="dialog" aria-label="Edit sale">
   <form class="run close-form sale-edit" hx-put="/loads/{{ id }}/sale" hx-target="#overlay" hx-swap="innerHTML" data-buy-scu="{{ buy_price_scu }}" data-scu="{{ scu_sold }}">
-    <p class="ras tag">Edit sale · <b>{{ commodity_upper }}</b> · {{ scu_sold }} SCU from voyage {{ voyage_id }} · bought at {{ buy_price_scu_fmt }} / SCU</p>
+    <p class="ras tag">Edit {% if haul %}delivery{% else %}sale{% endif %} · <b>{{ commodity_upper }}</b> · {{ scu_sold }} SCU from voyage {{ voyage_id }} · {% if haul %}hauling contract{% else %}bought at {{ buy_price_scu_fmt }} / SCU{% endif %}</p>
     {% if let Some(error) = f.error %}<p class="ras neg form-error">{{ error }}</p>{% endif %}
     <div class="ras fields">
       <label>Sold by<select name="sold_by" title="Who made the sale: credit and the remainder are theirs">{% for u in f.users %}<option value="{{ u.id }}"{% if f.sold_by == u.id.to_string() %} selected{% endif %}>{{ u.display_name|upper }}</option>{% endfor %}</select></label>
