@@ -3,6 +3,39 @@
 Every notable change to Ripae. Newest first. This file is also what the
 version badge in the corner of the site shows.
 
+## 0.2.8
+
+### Added
+- **Hauling contracts.** A voyage can now carry hauling-mission cargo
+  alongside the commodities you bought. Every load line in *New Run* and
+  *Add load* starts with a *Cargo* choice: pick *Hauling contract* and the
+  buy price gives way to the *Contract reward*, the terminals read *Pick up
+  at* and *Deliver to*, and the load is marked *HAUL* in Open Cargo with
+  its reward where the cost would be. *Deliver* records the payout the way
+  *Close* records a sale -- the reward is filled in, the crates and shares
+  work the same -- and all of it is profit. The reward only counts once
+  the delivery is recorded, and losing a contract's crates costs nothing.
+- **Profit shares for a whole voyage.** A voyage's *Edit* form (in Open
+  Cargo, and the *Voyage* button on the ledger) has a *Split profit*
+  section. Set the split once and every load you close on that voyage
+  comes up with it filled in; change it on any one sale if that one splits
+  differently. The run's owner keeps the remainder. A detached load takes
+  the split with it.
+
+### Changed
+- **Even shares by default.** A new percentage share starts as an even cut
+  between everyone splitting the profit -- one crewmate is 50 %, two are
+  33.33 % each -- and evens out again as shares are added or removed, until
+  you type your own figure. It also goes to the first crew member who
+  doesn't have a share yet.
+- **Cost per SCU in Open Cargo.** Each load's *Cost* now shows what it cost
+  per SCU underneath the total.
+
+### Fixed
+- **Add load was one long column.** The form under a voyage's *Add load*
+  stacked every field in a single narrow column; it now lays the fields
+  out across the row like the other forms.
+
 ## 0.2.7
 
 ### Fixed
