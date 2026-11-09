@@ -13,6 +13,10 @@ pub struct Config {
     pub session_secret: String,
     pub seed_users: Vec<SeedUser>,
     pub log_json: bool,
+    /// Mark the session cookie `Secure`. On by default; set
+    /// `RIPAE_COOKIE_SECURE=0` when serving over plain HTTP (e.g. a LAN IP),
+    /// since browsers drop `Secure` cookies on non-localhost `http://`.
+    pub cookie_secure: bool,
 }
 
 impl Config {
@@ -26,6 +30,7 @@ impl Config {
             Err(_) => Vec::new(),
         };
         let log_json = std::env::var("RIPAE_LOG_JSON").as_deref() == Ok("1");
+        let cookie_secure = std::env::var("RIPAE_COOKIE_SECURE").as_deref() != Ok("0");
 
         Ok(Self {
             bind,
@@ -33,6 +38,7 @@ impl Config {
             session_secret,
             seed_users,
             log_json,
+            cookie_secure,
         })
     }
 }

@@ -35,6 +35,7 @@ async fn main() -> anyhow::Result<()> {
     let session_key = decode_session_key(&config.session_secret)?;
     let session_layer = SessionManagerLayer::new(session_store)
         .with_expiry(Expiry::OnInactivity(Duration::days(30)))
+        .with_secure(config.cookie_secure)
         .with_signed(session_key);
 
     let state = AppState { pool };

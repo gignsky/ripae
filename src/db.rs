@@ -93,6 +93,7 @@ mod tests {
                 },
             ],
             log_json: false,
+            cookie_secure: true,
         }
     }
 

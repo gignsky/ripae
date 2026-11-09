@@ -149,6 +149,7 @@ Validation errors render back into the form with a message; never a bare 4xx pag
 | `RIPAE_SESSION_SECRET` | yes | 64 random bytes, base64 |
 | `RIPAE_SEED_USERS` | first boot only | `lordgig:Lord Gig:<pw>,firstofficer:First Officer:<pw>` |
 | `RIPAE_LOG_JSON` | no | `1` |
+| `RIPAE_COOKIE_SECURE` | no (default on) | `0` to drop the cookie's `Secure` flag for plain-HTTP serving |
 
 Seeding runs only when the `users` table is empty; afterwards the var is ignored and may be removed.
 
