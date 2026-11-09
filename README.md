@@ -95,6 +95,17 @@ to `127.0.0.1:8080`, reverse-proxied by the host). See that file's header
 comment for the one-time setup step (adding the `ripae-env` sops secret).
 Bump the image tag there to `0.2.0`.
 
+**The image is prebuilt on spacedock at promotion.** `rf promote` runs
+`scripts/cache-on-spacedock.sh` as its last gate. It builds `.#container`
+*on spacedock* against the nixpkgs its dotfiles have locked (they make
+ripae follow their own nixpkgs, so the image from ripae's own lock would be
+a different derivation), and it leaves a GC root at
+`~/.cache/ripae-container`. The deploy's rebuild after
+`nix flake update ripae` then finds the image already built. This works
+from any machine that can `ssh spacedock` as a nix trusted user. If
+spacedock can't be reached, the gate fails; promote with
+`--force --reason ...` and the deploy builds the image itself.
+
 ### 0.1 → 0.2: wipe and reseed
 
 0.2 starts the schema over (ruled 8 Nov 2026: no data migration). The
