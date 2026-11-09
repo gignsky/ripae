@@ -39,5 +39,5 @@ out=$(nix build ".#container" \
   --store "ssh-ng://$host" --eval-store auto \
   --no-link --print-out-paths)
 
-ssh "$host" nix build --out-link .cache/ripae-container "$out"
+ssh "$host" nix-store --realise --add-root .cache/ripae-container "$out" > /dev/null
 echo "cache-on-spacedock: $out is in $host's store"
