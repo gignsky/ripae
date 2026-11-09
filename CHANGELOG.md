@@ -13,6 +13,11 @@ version badge in the corner of the site shows.
   stations, gateways (Nyx, Pyro, Terra), mining facilities, research
   outposts, salvage yards and distribution centres UEX lists as live.
 
+### Changed
+- **Free cargo needs no buy terminal.** When the buy price is 0, the buy
+  terminal can be left blank; it shows as `—`, and such loads don't count
+  towards best or favourite routes. Any price above 0 still needs one.
+
 ### Fixed
 - **Custom locations stick.** Typing a station that isn't on the list and
   pressing Enter or Tab no longer swaps it for the nearest fuzzy match.

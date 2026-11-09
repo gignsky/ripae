@@ -209,7 +209,7 @@ impl LoadView {
             lost_count: l.lost_count(),
             glitched_count: l.glitched_count(),
             buy_terminal: l.buy_terminal.clone(),
-            buy_terminal_short: short_terminal(&l.buy_terminal),
+            buy_terminal_short: if l.buy_terminal.is_empty() { "—".into() } else { short_terminal(&l.buy_terminal) },
             status_label: status.label(),
             status_css: status.css(),
             stop_no: l.stop_no,
