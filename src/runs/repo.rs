@@ -8,7 +8,7 @@ fn row_to_run(row: SqliteRow) -> Result<Run> {
     let status: String = row.try_get("status")?;
     Ok(Run {
         id: row.try_get("id")?,
-        submitted_by: row.try_get("submitted_by")?,
+        submitted_by_name: row.try_get("submitted_by_name")?,
         status: status
             .parse::<Status>()
             .map_err(|e| anyhow!("bad status in db: {e}"))?,
@@ -28,9 +28,11 @@ fn row_to_run(row: SqliteRow) -> Result<Run> {
     })
 }
 
-const SELECT_RUN: &str = "SELECT id, submitted_by, status, bought_at, commodity, scu,
-    buy_terminal, buy_price_scu, destination, stored_at, ship, sold_at,
-    sell_terminal, sell_price_scu, scu_sold, notes FROM runs";
+const SELECT_RUN: &str = "SELECT r.id, u.display_name AS submitted_by_name,
+    r.status, r.bought_at, r.commodity, r.scu, r.buy_terminal, r.buy_price_scu,
+    r.destination, r.stored_at, r.ship, r.sold_at, r.sell_terminal,
+    r.sell_price_scu, r.scu_sold, r.notes
+    FROM runs r JOIN users u ON u.id = r.submitted_by";
 
 pub async fn create(pool: &SqlitePool, submitted_by: i64, new_run: &NewRun) -> Result<i64> {
     let commodity = super::model::normalise_name(&new_run.commodity);
@@ -58,7 +60,7 @@ pub async fn list_all(pool: &SqlitePool) -> Result<Vec<Run>> {
 }
 
 pub async fn find(pool: &SqlitePool, id: i64) -> Result<Option<Run>> {
-    let row = sqlx::query(&format!("{SELECT_RUN} WHERE id = ?"))
+    let row = sqlx::query(&format!("{SELECT_RUN} WHERE r.id = ?"))
         .bind(id)
         .fetch_optional(pool)
         .await?;
@@ -208,5 +210,43 @@ mod tests {
         .unwrap();
         delete(&pool, id).await.unwrap();
         assert!(find(&pool, id).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn every_user_sees_every_run_with_its_submitter() {
+        let (pool, gig) = test_pool_with_user().await;
+        let row = sqlx::query(
+            "INSERT INTO users (handle, display_name, password_hash) VALUES ('jt', 'JT', 'x') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let jt: i64 = row.try_get("id").unwrap();
+        let run = |commodity: &str| NewRun {
+            bought_at: "2026-01-01".into(),
+            commodity: commodity.into(),
+            scu: 100.0,
+            buy_terminal: "ArcCorp Mining Area 141".into(),
+            buy_price_scu: 10.0,
+            destination: None,
+            ship: None,
+        };
+        create(&pool, gig, &run("Laranite")).await.unwrap();
+        create(&pool, jt, &run("Agricium")).await.unwrap();
+
+        let mut seen: Vec<(String, String)> = list_all(&pool)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|r| (r.commodity, r.submitted_by_name))
+            .collect();
+        seen.sort();
+        assert_eq!(
+            seen,
+            vec![
+                ("Agricium".to_string(), "JT".to_string()),
+                ("Laranite".to_string(), "Lord Gig".to_string()),
+            ]
+        );
     }
 }

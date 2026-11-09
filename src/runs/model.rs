@@ -48,7 +48,8 @@ impl FromStr for Status {
 #[derive(Debug, Clone)]
 pub struct Run {
     pub id: i64,
-    pub submitted_by: i64,
+    /// `users.display_name` of whoever logged the run, joined in on every read.
+    pub submitted_by_name: String,
     pub status: Status,
 
     pub bought_at: String,
@@ -187,7 +188,7 @@ mod tests {
     fn open_run(scu: f64, buy_price_scu: f64) -> Run {
         Run {
             id: 1,
-            submitted_by: 1,
+            submitted_by_name: "Lord Gig".into(),
             status: Status::InTransit,
             bought_at: "2026-01-01".into(),
             commodity: "Laranite".into(),
