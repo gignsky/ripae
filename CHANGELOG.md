@@ -22,7 +22,6 @@ version badge in the corner of the site shows.
 ### Changed
 - Commodity, terminal, and ship names are saved with the list's spelling
   (e.g. `RAFT`, `ArcCorp`), instead of being title-cased.
-- Optional fields left blank are now stored as empty, not as blank text.
 
 ## 0.1.0 "Dockside"
 

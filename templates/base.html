@@ -42,7 +42,7 @@
     {# Works as a plain link without JS; with htmx it opens the dialog. #}
     <a class="version-badge" href="/changelog" title="What's new"
        hx-get="/changelog" hx-target="#changelog-body" hx-swap="innerHTML"
-       hx-on::after-request="if (event.detail.successful) document.getElementById('changelog').showModal()"
+       onclick="document.getElementById('changelog').showModal()"
        >v{{ crate::changelog::VERSION }}</a>
     <dialog id="changelog" onclick="if (event.target === this) this.close()">
       <article>
