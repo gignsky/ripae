@@ -12,13 +12,14 @@
     <td><span class="actions">
       <button class="cmd" type="button" hx-get="/loads/{{ l.id }}/edit" hx-target="#load-{{ l.id }}" hx-swap="outerHTML">Edit</button>
       <button class="cmd" type="button" hx-get="/loads/{{ l.id }}/close" hx-target="#load-{{ l.id }}" hx-swap="outerHTML">Close</button>
-      <button class="cmd warn" type="button" title="Mark every crate still open lost: for glitched or vanished cargo you won't sell" hx-get="/loads/{{ l.id }}/write-off" hx-target="#overlay" hx-swap="innerHTML">Write off</button>
       {% if let crate::stowage::views::LoadExtra::Manifest = l.extra %}
       <button class="cmd on" type="button" hx-get="/loads/{{ l.id }}" hx-target="#load-{{ l.id }}" hx-swap="outerHTML">Crates</button>
       {% else %}
       <button class="cmd" type="button" hx-get="/loads/{{ l.id }}/crates" hx-target="#load-{{ l.id }}" hx-swap="outerHTML">Crates</button>
       {% endif %}
+      {% if l.can_detach %}
       <button class="cmd" type="button" title="Move this load to a voyage of its own" hx-post="/loads/{{ l.id }}/move" hx-vals='{"voyage_id": "new"}' hx-target="#open-cargo" hx-swap="outerHTML">Detach</button>
+      {% endif %}
     </span></td>
   </tr>
 
@@ -29,6 +30,7 @@
         <button class="cmd" type="button" hx-post="/loads/{{ l.id }}/where" hx-vals='{"whereabouts": "aboard"}' hx-target="#load-{{ l.id }}" hx-swap="outerHTML">All aboard</button>
         <button class="cmd warn" type="button" hx-post="/loads/{{ l.id }}/where" hx-vals='{"whereabouts": "stored"}' hx-include="#stored-at-{{ l.id }}" hx-target="#load-{{ l.id }}" hx-swap="outerHTML">All stored</button>
         <label class="inline-label">at <input id="stored-at-{{ l.id }}" name="stored_at" type="text" list="pick-terminals" data-pick autocomplete="off" value="{{ l.stored_at }}" placeholder="station" /></label>
+        <button class="cmd warn" type="button" title="Mark every crate still open lost: for glitched or vanished cargo you won't sell" hx-get="/loads/{{ l.id }}/write-off" hx-target="#overlay" hx-swap="innerHTML">Write off</button>
       </span>
       <span>{% if l.has_write_off %}<span class="neg">{{ l.scu_lost }} SCU written off · {{ l.written_off_fmt }} aUEC</span>{% else %}nothing written off{% endif %}</span>
     </div>
