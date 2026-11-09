@@ -770,6 +770,19 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn free_load_round_trips_without_a_buy_terminal() {
+        let (pool, gig, _) = test_pool().await;
+        let mut free = new_load("Scrap", vec![(1, 8)], None);
+        free.buy_terminal = String::new();
+        free.buy_price_scu = 0.0;
+        free.buy_price_lot = 0.0;
+        let id = create_voyage(&pool, gig, &new_voyage(None), &[free]).await.unwrap();
+        let v = find_voyage(&pool, id).await.unwrap().unwrap();
+        assert_eq!(v.loads[0].buy_terminal, "");
+        assert_eq!(v.loads[0].buy_price_scu, 0.0);
+    }
+
+    #[tokio::test]
     async fn voyage_load_crate_round_trip() {
         let (pool, gig, _) = test_pool().await;
         let hull = find_ship_by_name(&pool, "hull-c").await.unwrap().unwrap();
