@@ -308,6 +308,9 @@ pub struct LoadFormView {
     pub price_mode: String,
     pub price_scu: String,
     pub price_lot: String,
+    /// "balance" price mode only; never stored -- the load keeps the lot price.
+    pub balance_before: String,
+    pub balance_after: String,
     pub terminal: String,
     pub stop_no: String,
     pub destination: String,
@@ -351,6 +354,8 @@ impl LoadFormView {
             // show both to the cent so the inputs hold a sane figure.
             price_scu: trim_num(to_cents(l.buy_price_scu)),
             price_lot: l.buy_price_lot.map(|p| trim_num(to_cents(p))).unwrap_or_default(),
+            balance_before: String::new(),
+            balance_after: String::new(),
             terminal: l.buy_terminal.clone(),
             stop_no: l.stop_no.to_string(),
             destination: l.destination.clone().unwrap_or_default(),
@@ -406,6 +411,9 @@ pub struct CloseFormView {
     pub price_mode: String,
     pub sell_scu: String,
     pub sell_lot: String,
+    /// "balance" price mode only; the sale keeps the lot price.
+    pub balance_before: String,
+    pub balance_after: String,
     /// Which crate ids are ticked.
     pub selected: Vec<i64>,
     pub shares: Vec<ShareFormRow>,
