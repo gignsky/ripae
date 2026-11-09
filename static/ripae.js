@@ -101,8 +101,12 @@
   if (overlay) {
     document.addEventListener("htmx:afterSwap", function (e) {
       if (e.detail.target !== overlay) return;
+      // a form in an overlay answers a success with nothing: close it
+      if (!overlay.innerHTML.trim()) { if (!overlay.hidden) flick(function () { overlay.hidden = true; }); return; }
       var parts = Array.prototype.slice.call(overlay.querySelectorAll(".ras"));
       parts.forEach(function (p) { p.classList.remove("lit"); });
+      // already up (a form re-rendered with its error): repaint without the blackout
+      if (!overlay.hidden) { raster(parts, true); return; }
       flick(function () { overlay.hidden = false; raster(parts, true); });
     });
     overlay.addEventListener("click", function (e) {
@@ -379,6 +383,7 @@
     // a refresh held back by an overlay runs once it's dismissed (after the flicker)
     var retry = function () { setTimeout(function () { if (pending) refresh(); }, 1200); };
     if (overlay) overlay.addEventListener("click", function (e) { if (e.target.closest("[data-dismiss]")) retry(); });
+    document.addEventListener("htmx:afterSwap", function (e) { if (e.detail.target === overlay && !overlay.innerHTML.trim()) retry(); });
     document.addEventListener("keydown", function (e) { if (e.key === "Escape") retry(); });
     var timer = null, dropped = false;
     var es = new EventSource("/live");

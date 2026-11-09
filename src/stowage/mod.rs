@@ -22,7 +22,7 @@ use tower_sessions::Session;
 use crate::auth::{take_splash_mode, CurrentUser, SplashMode};
 use crate::lookups::{self, Kind};
 use crate::templates::{
-    render_str, BoardTemplate, ConfirmFrag, ConfirmLine, ConfirmWriteOffFrag, IndexTemplate, LedgerFrag, LoadFrag,
+    render_str, BoardTemplate, ConfirmFrag, ConfirmLine, ConfirmWriteOffFrag, VoyageOverlayFrag, IndexTemplate, LedgerFrag, LoadFrag,
     OpenCargoFrag, PlansFrag, SaleFrag, Shell, TotalsFrag, VerdictFrag, VoyageHeadFrag,
 };
 use crate::AppState;
@@ -605,7 +605,19 @@ pub async fn voyage_update(State(state): State<AppState>, _user: CurrentUser, Pa
         Ok(v) => v,
         Err(r) => return r,
     };
-    let form = FormData::parse(&body);
+    match save_voyage_form(&state, &v, &body).await {
+        Err(view) => head_with(&v, VoyageExtra::Edit(view), StatusCode::UNPROCESSABLE_ENTITY),
+        Ok(()) => match ledger(&state).await {
+            Ok(l) => retarget(open_cargo_response(&l), "#open-cargo", "outerHTML"),
+            Err(r) => r,
+        },
+    }
+}
+
+/// Validates and saves the voyage form (ship, date, notes, who logged it);
+/// on failure hands the form back with its error to re-render.
+async fn save_voyage_form(state: &AppState, v: &Voyage, body: &str) -> Result<(), VoyageFormView> {
+    let form = FormData::parse(body);
     let mut view = VoyageFormView {
         bought_at: form.get("bought_at").into(),
         ship: form.get("ship").into(),
@@ -616,27 +628,72 @@ pub async fn voyage_update(State(state): State<AppState>, _user: CurrentUser, Pa
     };
     let parsed = async {
         let bought_at = parse_date(&view.bought_at, today()).map_err(|e| format!("Bought on: {e}"))?;
-        let ship_id = pick_ship(&state, &view.ship).await?;
+        let ship_id = pick_ship(state, &view.ship).await?;
         let entered_by = pick_member(&view.entered_by, v.entered_by, &view.users, "Logged by")?;
         Ok::<_, String>(EditVoyage { ship_id, bought_at, notes: opt(&view.notes), entered_by })
     }
     .await;
-    match parsed {
+    let edit = match parsed {
+        Ok(edit) => edit,
         Err(e) => {
             view.error = Some(e);
-            head_with(&v, VoyageExtra::Edit(view), StatusCode::UNPROCESSABLE_ENTITY)
+            return Err(view);
         }
-        Ok(edit) => {
-            if let Err(e) = repo::update_voyage(&state.pool, id, &edit).await {
-                tracing::error!(error = %e, "failed to update voyage");
-                view.error = Some("Could not save those changes.".into());
-                return head_with(&v, VoyageExtra::Edit(view), StatusCode::UNPROCESSABLE_ENTITY);
-            }
-            match ledger(&state).await {
-                Ok(l) => retarget(open_cargo_response(&l), "#open-cargo", "outerHTML"),
-                Err(r) => r,
-            }
+    };
+    if let Err(e) = repo::update_voyage(&state.pool, v.id, &edit).await {
+        tracing::error!(error = %e, "failed to update voyage");
+        view.error = Some("Could not save those changes.".into());
+        return Err(view);
+    }
+    Ok(())
+}
+
+fn voyage_overlay(v: &Voyage, f: VoyageFormView, status: StatusCode) -> Response {
+    let n = v.loads.len();
+    let summary = format!(
+        "{n} load{} · {}",
+        if n == 1 { "" } else { "s" },
+        if v.is_fully_sold() { "closed" } else { "still open" }
+    );
+    html(status, render_str(&VoyageOverlayFrag { id: v.id, summary, f }))
+}
+
+/// `GET /voyages/:id/details` -- the voyage form in an overlay, for any
+/// voyage: the ledger's way in to one that's already closed.
+pub async fn voyage_details_form(State(state): State<AppState>, _user: CurrentUser, Path(id): Path<i64>) -> Response {
+    match find_voyage(&state, id).await {
+        Ok(v) => {
+            let f = VoyageFormView {
+                bought_at: v.bought_at.clone(),
+                ship: v.ship.as_ref().map(|s| s.name.clone()).unwrap_or_default(),
+                notes: v.notes.clone().unwrap_or_default(),
+                entered_by: v.entered_by.to_string(),
+                users: repo::list_users(&state.pool).await.unwrap_or_default(),
+                error: None,
+            };
+            voyage_overlay(&v, f, StatusCode::OK)
         }
+        Err(r) => r,
+    }
+}
+
+/// `PUT /voyages/:id/details` -- saves the overlay form. Success empties
+/// the overlay (which closes it) and refreshes every panel the voyage
+/// shows up in.
+pub async fn voyage_details_update(State(state): State<AppState>, _user: CurrentUser, Path(id): Path<i64>, body: String) -> Response {
+    let v = match find_voyage(&state, id).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    match save_voyage_form(&state, &v, &body).await {
+        Err(view) => voyage_overlay(&v, view, StatusCode::UNPROCESSABLE_ENTITY),
+        Ok(()) => match ledger(&state).await {
+            Ok(l) => html(
+                StatusCode::OK,
+                format!("{}{}{}", open_cargo_frag(&l, true), oob_common(&l), ledger_frag(&l, true)),
+            ),
+            Err(r) => r,
+        },
     }
 }
 

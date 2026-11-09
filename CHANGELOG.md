@@ -26,6 +26,10 @@ version badge in the corner of the site shows.
   with glitched crates you aren't selling, they're marked lost by default
   instead of staying open on the voyage, so the load closes whole. Untick
   the box in the close form to keep them open.
+- **Edit closed voyages.** Every ledger row has a *Voyage N* button that
+  opens the voyage's ship, date, notes and *Logged by* in an overlay, so a
+  voyage can be corrected after every load has sold and it's left Open
+  Cargo.
 
 ### Fixed
 - **Profit shares count on the leaderboard.** A crew member on a share of
