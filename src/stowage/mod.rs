@@ -224,7 +224,7 @@ fn load_view(l: &Ledger, id: i64) -> Option<LoadView> {
         v.loads
             .iter()
             .find(|x| x.id == id)
-            .map(|x| LoadView::new(x, v.hull_label().as_deref()))
+            .map(|x| LoadView { can_detach: v.open_loads().count() > 1, ..LoadView::new(x, v.hull_label().as_deref()) })
     })
 }
 
@@ -1035,6 +1035,16 @@ pub async fn load_move(State(state): State<AppState>, user: CurrentUser, Path(id
             Err(_) => return (StatusCode::UNPROCESSABLE_ENTITY, "Pick a voyage, or \"new\".").into_response(),
         },
     };
+    if let MoveTarget::New = target {
+        // detaching a voyage's only open load would just renumber the voyage
+        let l = match ledger(&state).await {
+            Ok(l) => l,
+            Err(r) => return r,
+        };
+        if !load_view(&l, id).is_some_and(|lv| lv.can_detach) {
+            return (StatusCode::CONFLICT, "That load is already on a voyage of its own.").into_response();
+        }
+    }
     if let Err(e) = repo::move_load(&state.pool, id, target, user.id).await {
         tracing::error!(error = %e, "failed to move load");
         return (StatusCode::UNPROCESSABLE_ENTITY, "Could not move that load.").into_response();

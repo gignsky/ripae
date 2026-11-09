@@ -177,6 +177,8 @@ pub struct LoadView {
     pub cost_fmt: String,
     pub written_off_fmt: String,
     pub has_write_off: bool,
+    /// Its voyage has other open loads, so `[DETACH]` means something.
+    pub can_detach: bool,
     pub by_upper: String,
     pub buy_price_scu_fmt: String,
     pub notes: String,
@@ -226,6 +228,7 @@ impl LoadView {
             cost_fmt: fmt_auec(l.cost()),
             written_off_fmt: fmt_auec(l.written_off()),
             has_write_off: l.scu_lost() > 0,
+            can_detach: false,
             by_upper: l.submitted_by_name.to_uppercase(),
             buy_price_scu_fmt: fmt_price(l.buy_price_scu),
             notes: l.notes.clone().unwrap_or_default(),
@@ -290,7 +293,10 @@ impl VoyageView {
             load_count: open.len(),
             stop_count: v.stop_count(),
             notes: v.notes.clone().unwrap_or_default(),
-            loads: open.iter().map(|l| LoadView::new(l, hull.as_deref())).collect(),
+            loads: open
+                .iter()
+                .map(|l| LoadView { can_detach: open.len() > 1, ..LoadView::new(l, hull.as_deref()) })
+                .collect(),
             extra: VoyageExtra::None,
         }
     }
@@ -856,5 +862,16 @@ mod tests {
         let f = LoadFormView::from_load(&l);
         assert_eq!(f.price_scu, "333.33");
         assert_eq!(f.price_lot, "1000");
+    }
+
+    #[test]
+    fn detach_is_offered_only_beside_another_open_load() {
+        use crate::stowage::model::fixtures::{load, sold_load, sound, voyage};
+        // a sold sibling doesn't count: Open Cargo shows the load alone
+        let alone = VoyageView::new(&voyage(1, 1, None, vec![load(1, 10.0, vec![sound(1, 32)]), sold_load(2, 1, 10.0, 12.0, &[32], vec![])]));
+        assert!(alone.loads.iter().all(|l| !l.can_detach));
+        let pair = VoyageView::new(&voyage(2, 1, None, vec![load(3, 10.0, vec![sound(3, 32)]), load(4, 10.0, vec![sound(4, 32)])]));
+        assert_eq!(pair.loads.len(), 2);
+        assert!(pair.loads.iter().all(|l| l.can_detach));
     }
 }
