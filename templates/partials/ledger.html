@@ -4,7 +4,7 @@
     <tbody>
       {% for r in rows %}
       <tr class="ras">
-        <td title="Voyage {{ r.voyage_id }}{% if r.load.notes != "" %} · {{ r.load.notes }}{% endif %}">{{ r.load.commodity_upper }}{% if r.load.lost_count > 0 %} <span class="via">({{ r.load.lost_count }} lost)</span>{% endif %}</td>
+        <td title="Voyage {{ r.voyage_id }}{% if r.load.notes != "" %} · {{ r.load.notes }}{% endif %}">{{ r.load.commodity_upper }}{% if r.load.is_haul %}<span class="kind-tag" title="Hauling contract">Haul</span>{% endif %}{% if r.load.lost_count > 0 %} <span class="via">({{ r.load.lost_count }} lost)</span>{% endif %}</td>
         <td class="num">{{ r.load.scu_sold }}</td>
         <td class="route">{{ r.load.buy_terminal_short }}<span class="arr">→</span>{{ r.load.sell_terminal_short }}</td>
         <td>{{ r.load.sold_at_short }}</td>

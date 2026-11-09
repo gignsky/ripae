@@ -27,7 +27,7 @@ use crate::templates::{
 };
 use crate::AppState;
 use model::{
-    parse_boxes, parse_date, service_record, resettle, settle, today, Load, PriceMode, Sale, SaleInput, ShareInput,
+    parse_boxes, parse_date, service_record, resettle, settle, today, Load, LoadKind, PriceMode, Sale, SaleInput, ShareInput,
     ShareKind, SortKey, Totals, User, Voyage, Whereabouts,
 };
 use repo::{EditLoad, EditVoyage, MoveTarget, NewLoad, NewVoyage};
@@ -327,6 +327,7 @@ fn balance_delta(before: &str, after: &str, selling: bool) -> Result<f64, String
 /// Everything a load line needs, validated and canonicalised. Shared by New
 /// Run, Add Load and Edit.
 struct LoadParts {
+    kind: LoadKind,
     commodity: String,
     buy_terminal: String,
     price_mode: PriceMode,
@@ -335,6 +336,7 @@ struct LoadParts {
     stop_no: u32,
     destination: Option<String>,
     boxes: model::BoxMix,
+    reward: Option<f64>,
     whereabouts: Option<Whereabouts>,
     stored_at: Option<String>,
     notes: Option<String>,
@@ -357,15 +359,20 @@ async fn parse_load_line(state: &AppState, f: &LoadFormView, boxes_editable: boo
     } else {
         (Vec::new(), existing_scu)
     };
-    // "balance" is a form-only mode: the drop in balance is what the lot cost.
-    let (price_mode, price) = match f.price_mode.as_str() {
-        "balance" => (PriceMode::Lot, balance_delta(&f.balance_before, &f.balance_after, false)?),
-        mode => match mode.parse().unwrap_or(PriceMode::Scu) {
-            PriceMode::Scu => (PriceMode::Scu, parse_money(&f.price_scu, "Buy price per SCU")?),
-            PriceMode::Lot => (PriceMode::Lot, parse_money(&f.price_lot, "Price paid for the lot")?),
+    let kind: LoadKind = f.kind.parse().unwrap_or_default();
+    // A haul is picked up for nothing; what it earns is the contract reward,
+    // paid on delivery. "balance" is a form-only mode: the drop in balance is
+    // what the lot cost.
+    let (price_mode, price, reward) = match (kind, f.price_mode.as_str()) {
+        (LoadKind::Haul, _) => (PriceMode::Lot, 0.0, Some(parse_money(&f.reward, "Contract reward")?)),
+        (LoadKind::Trade, "balance") => (PriceMode::Lot, balance_delta(&f.balance_before, &f.balance_after, false)?, None),
+        (LoadKind::Trade, mode) => match mode.parse().unwrap_or(PriceMode::Scu) {
+            PriceMode::Scu => (PriceMode::Scu, parse_money(&f.price_scu, "Buy price per SCU")?, None),
+            PriceMode::Lot => (PriceMode::Lot, parse_money(&f.price_lot, "Price paid for the lot")?, None),
         },
     };
-    // Free cargo (price 0) may have no buy terminal; it's stored as "".
+    // Free cargo (price 0, hauls included) may have no buy terminal; it's
+    // stored as "".
     let buy_terminal = match opt(&f.terminal) {
         Some(t) => pick(state, Kind::Terminal, &t).await,
         None if price == 0.0 => String::new(),
@@ -382,6 +389,7 @@ async fn parse_load_line(state: &AppState, f: &LoadFormView, boxes_editable: boo
         return Err("Stored cargo needs a stored-at station.".into());
     }
     Ok(LoadParts {
+        kind,
         commodity: pick(state, Kind::Commodity, &commodity).await,
         buy_terminal,
         price_mode,
@@ -390,6 +398,7 @@ async fn parse_load_line(state: &AppState, f: &LoadFormView, boxes_editable: boo
         stop_no,
         destination: pick_opt(state, Kind::Terminal, &f.destination).await,
         boxes,
+        reward,
         whereabouts,
         stored_at,
         notes: opt(&f.notes),
@@ -398,6 +407,8 @@ async fn parse_load_line(state: &AppState, f: &LoadFormView, boxes_editable: boo
 
 fn load_form_from(form: &FormData, i: usize) -> LoadFormView {
     LoadFormView {
+        kind: form.nth("kind", i).into(),
+        reward: form.nth("reward", i).into(),
         commodity: form.nth("commodity", i).into(),
         boxes: form.nth("boxes", i).into(),
         scu: form.nth("scu", i).into(),
@@ -547,6 +558,8 @@ async fn parse_new_run(state: &AppState, v: &NewRunFormView) -> Result<(NewVoyag
             .await
             .map_err(|e| format!("Load {}: {e}", i + 1))?;
         loads.push(NewLoad {
+            kind: p.kind,
+            reward: p.reward,
             commodity: p.commodity,
             buy_terminal: p.buy_terminal,
             price_mode: p.price_mode,
@@ -786,6 +799,8 @@ pub async fn add_load(State(state): State<AppState>, _user: CurrentUser, Path(id
         }
         Ok(p) => {
             let new = NewLoad {
+                kind: p.kind,
+                reward: p.reward,
                 commodity: p.commodity,
                 buy_terminal: p.buy_terminal,
                 price_mode: p.price_mode,
@@ -1001,6 +1016,8 @@ pub async fn load_update(State(state): State<AppState>, _user: CurrentUser, Path
         }
         Ok(p) => {
             let edit = EditLoad {
+                kind: p.kind,
+                reward: p.reward,
                 commodity: p.commodity,
                 buy_terminal: p.buy_terminal,
                 price_mode: p.price_mode,
@@ -1135,9 +1152,10 @@ fn blank_close(load: &Load, users: Vec<User>) -> CloseFormView {
     CloseFormView {
         sold_at: today().to_string(),
         sell_terminal: load.destination.clone().unwrap_or_default(),
-        price_mode: "scu".into(),
+        // a haul is paid what the contract promised, as one sum
+        price_mode: if load.is_haul() { "lot" } else { "scu" }.into(),
         sell_scu: String::new(),
-        sell_lot: String::new(),
+        sell_lot: load.reward.filter(|_| load.is_haul()).map(|r| views::trim_num(views::to_cents(r))).unwrap_or_default(),
         balance_before: String::new(),
         balance_after: String::new(),
         selected: load.crates.iter().filter(|c| c.default_selected()).map(|c| c.id).collect(),
@@ -1298,6 +1316,7 @@ pub async fn close_load(State(state): State<AppState>, user: CurrentUser, Path(i
     let kept_scu: u32 = sale.kept.iter().filter(|c| c.is_live()).map(|c| c.size_scu).sum();
     let seller_name = users.iter().find(|u| u.id == seller).map(|u| u.display_name.clone()).unwrap_or_default();
     let banner = SaleFrag {
+        haul: sold.is_haul(),
         who_upper: seller_name.to_uppercase(),
         kept_by_upper: (seller != user.id).then(|| user.display_name.to_uppercase()),
         profit_fmt: views::fmt_signed(sale.profit),
@@ -1337,6 +1356,7 @@ fn sale_overlay(load: &Load, f: CloseFormView, status: StatusCode) -> Response {
     html(
         status,
         render_str(&SaleOverlayFrag {
+            haul: load.is_haul(),
             id: load.id,
             voyage_id: load.voyage_id,
             commodity_upper: load.commodity.to_uppercase(),
