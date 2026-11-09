@@ -138,6 +138,7 @@ input[type=date]::-webkit-calendar-picker-indicator{filter:invert(.7) sepia(1) h
 .sub-h{font-size:.72rem;letter-spacing:.18em;text-transform:uppercase;color:var(--fg-dim);display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap;align-items:baseline}
 .formfoot{display:flex;flex-wrap:wrap;gap:1rem 1.5rem;align-items:center;justify-content:space-between}
 .formfoot .note{font-size:.78rem;color:var(--fg-dim)}
+.shares-form > .note{margin:0;font-size:.78rem;color:var(--fg-dim)}
 /* slow-raster reveal: each .ras line is drawn as a whole, in stepped order, no easing */
 .panel.collapsed .body{display:none}
 .js .ras{visibility:hidden}

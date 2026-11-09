@@ -398,6 +398,11 @@ pub struct VoyageFormView {
     /// Who typed the voyage in (user id), correctable here; the crew list.
     pub entered_by: String,
     pub users: Vec<User>,
+    /// Shares every load closed on the voyage starts with.
+    pub shares: Vec<ShareFormRow>,
+    /// Whose run it is (user id): they keep the remainder, so they hold no
+    /// share and a new share row picks someone else.
+    pub owner: String,
     pub error: Option<String>,
 }
 

@@ -38,12 +38,13 @@
   {% endif %}
   {% if let crate::stowage::views::VoyageExtra::Edit(f) = v.extra %}
   <tr class="chooser"><td colspan="10">
-    <form class="run" hx-put="/voyages/{{ v.id }}" hx-target="#vhead-{{ v.id }}" hx-swap="outerHTML">
-      <span class="crates-h"><span>Edit {{ v.label }}</span><span>Ship and date apply to every load</span></span>
+    <form class="run shares-form" hx-put="/voyages/{{ v.id }}" hx-target="#vhead-{{ v.id }}" hx-swap="outerHTML" data-owner="{{ f.owner }}">
+      <span class="crates-h"><span>Edit {{ v.label }}</span><span>Ship, date and profit shares apply to every load</span></span>
       {% if let Some(error) = f.error %}<p class="neg form-error">{{ error }}</p>{% endif %}
       <div class="fields">
         {% include "partials/voyage_fields.html" %}
       </div>
+      {% include "partials/voyage_shares.html" %}
       <span class="actions">
         <button class="cmd boxed" type="submit">Save</button>
         <button class="cmd" type="button" hx-get="/voyages/{{ v.id }}/head" hx-target="#vhead-{{ v.id }}" hx-swap="outerHTML">Cancel</button>

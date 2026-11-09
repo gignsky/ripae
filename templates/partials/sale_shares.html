@@ -1,5 +1,7 @@
-{# Profit shares on a sale, with the template [+ ADD SHARE] clones.
-   Expects `f: CloseFormView`. Shared by the close form and the sale editor. #}
+{# Profit shares on a sale or a whole voyage, with the template [+ ADD SHARE]
+   clones (an even % cut until typed into -- static/ripae.js).
+   Expects `f` with `shares` and `users`: the close form, the sale editor,
+   and the voyage form. #}
 <div class="ras sub-h"><span>Split profit</span><span>Percent of profit, or a flat fee. Remainder stays with the seller. Nothing is owed on a loss.</span></div>
 <div class="shares">
   {% for s in f.shares %}
@@ -14,10 +16,10 @@
   {% endfor %}
 </div>
 <template class="share-tpl">
-  <div class="ras share fields">
+  <div class="ras share fields" data-auto="1">
     <label>Crew<select name="share_to">{% for u in f.users %}<option value="{{ u.id }}">{{ u.display_name|upper }}</option>{% endfor %}</select></label>
     <label>Terms<select name="share_kind"><option value="pct" selected>% of profit</option><option value="flat">Flat fee</option></select></label>
-    <label>Amount<input name="share_amount" type="number" step="any" min="0" value="25" /></label>
+    <label>Amount<input name="share_amount" type="number" step="any" min="0" title="An even cut for everyone splitting it until you type your own" /></label>
     <label>For<input name="share_reason" type="text" placeholder="escort, loan, half the hull" /></label>
     <label>Forfeit to<select name="share_paid_to"><option value="">— keeps it</option>{% for u in f.users %}<option value="{{ u.id }}">{{ u.display_name|upper }}</option>{% endfor %}</select></label>
     <span class="line-cmd"><button class="cmd danger rm-share" type="button">Remove</button></span>
