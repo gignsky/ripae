@@ -3,6 +3,15 @@
 Every notable change to Ripae. Newest first. This file is also what the
 version badge in the corner of the site shows.
 
+## 0.1.4
+
+### Fixed
+- **Inline edit and close forms show their errors.** When a save was
+  refused (a terminal not on the pick-list, a stored run with no station,
+  a date in the future) the message was sent back but the page swallowed
+  it, so the form looked frozen. The message now appears in the form.
+  This is what 0.1.3 set out to fix and only half did.
+
 ## 0.1.3
 
 ### Fixed
