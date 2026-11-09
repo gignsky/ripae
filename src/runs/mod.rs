@@ -47,8 +47,8 @@ async fn render_index(
     let body = render(&IndexTemplate {
         display_name: user.display_name.clone(),
         handle: user.handle.clone(),
-        open_runs: open.into_iter().map(|r| RunView::new(r, user.id)).collect(),
-        sold_runs: sold.into_iter().map(|r| RunView::new(r, user.id)).collect(),
+        open_runs: open.into_iter().map(|r| RunView::new(r)).collect(),
+        sold_runs: sold.into_iter().map(|r| RunView::new(r)).collect(),
         committed_fmt: fmt_auec(totals.committed),
         realised_fmt: fmt_auec(totals.realised),
         form_error,
@@ -90,12 +90,11 @@ pub async fn create(
     axum::response::Redirect::to("/").into_response()
 }
 
-async fn load_owned(state: &AppState, user: &CurrentUser, id: i64) -> Result<Run, Response> {
+/// The ledger is shared crew-wide: any logged-in user may edit, close, or
+/// delete any run, so cargo one of you bought the other can sell.
+async fn load_run(state: &AppState, id: i64) -> Result<Run, Response> {
     match repo::find(&state.pool, id).await {
-        Ok(Some(run)) if run.submitted_by == user.id => Ok(run),
-        Ok(Some(_)) => {
-            Err((StatusCode::FORBIDDEN, "You can only edit your own runs.").into_response())
-        }
+        Ok(Some(run)) => Ok(run),
         Ok(None) => Err((StatusCode::NOT_FOUND, "No such run.").into_response()),
         Err(e) => {
             tracing::error!(error = %e, "failed to load run");
@@ -106,12 +105,12 @@ async fn load_owned(state: &AppState, user: &CurrentUser, id: i64) -> Result<Run
 
 pub async fn edit_form(
     State(state): State<AppState>,
-    user: CurrentUser,
+    _user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Response {
-    match load_owned(&state, &user, id).await {
+    match load_run(&state, id).await {
         Ok(run) => render(&RunFormTemplate {
-            run: RunView::new(&run, user.id),
+            run: RunView::new(&run),
             error: None,
         })
         .into_response(),
@@ -121,11 +120,11 @@ pub async fn edit_form(
 
 pub async fn update_run(
     State(state): State<AppState>,
-    user: CurrentUser,
+    _user: CurrentUser,
     Path(id): Path<i64>,
     Form(edit): Form<EditRun>,
 ) -> Response {
-    let run = match load_owned(&state, &user, id).await {
+    let run = match load_run(&state, id).await {
         Ok(run) => run,
         Err(resp) => return resp,
     };
@@ -134,7 +133,7 @@ pub async fn update_run(
         return (
             StatusCode::UNPROCESSABLE_ENTITY,
             render(&RunFormTemplate {
-                run: RunView::new(&run, user.id),
+                run: RunView::new(&run),
                 error: Some(
                     "Commodity, buy terminal, and a positive SCU are required.".to_string(),
                 ),
@@ -148,7 +147,7 @@ pub async fn update_run(
         return (
             StatusCode::UNPROCESSABLE_ENTITY,
             render(&RunFormTemplate {
-                run: RunView::new(&run, user.id),
+                run: RunView::new(&run),
                 error: Some("Stored cargo needs a stored-at station.".to_string()),
             }),
         )
@@ -160,7 +159,7 @@ pub async fn update_run(
         return (
             StatusCode::UNPROCESSABLE_ENTITY,
             render(&RunFormTemplate {
-                run: RunView::new(&run, user.id),
+                run: RunView::new(&run),
                 error: Some("Could not save those changes.".to_string()),
             }),
         )
@@ -169,7 +168,7 @@ pub async fn update_run(
 
     match repo::find(&state.pool, id).await {
         Ok(Some(run)) => render(&RunRowTemplate {
-            run: RunView::new(&run, user.id),
+            run: RunView::new(&run),
         })
         .into_response(),
         _ => Html("saved".to_string()).into_response(),
@@ -178,12 +177,12 @@ pub async fn update_run(
 
 pub async fn close_form(
     State(state): State<AppState>,
-    user: CurrentUser,
+    _user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Response {
-    match load_owned(&state, &user, id).await {
+    match load_run(&state, id).await {
         Ok(run) => render(&CloseFormTemplate {
-            run: RunView::new(&run, user.id),
+            run: RunView::new(&run),
             error: None,
         })
         .into_response(),
@@ -193,11 +192,11 @@ pub async fn close_form(
 
 pub async fn close_run(
     State(state): State<AppState>,
-    user: CurrentUser,
+    _user: CurrentUser,
     Path(id): Path<i64>,
     Form(close): Form<CloseRun>,
 ) -> Response {
-    let run = match load_owned(&state, &user, id).await {
+    let run = match load_run(&state, id).await {
         Ok(run) => run,
         Err(resp) => return resp,
     };
@@ -206,7 +205,7 @@ pub async fn close_run(
         return (
             StatusCode::UNPROCESSABLE_ENTITY,
             render(&CloseFormTemplate {
-                run: RunView::new(&run, user.id),
+                run: RunView::new(&run),
                 error: Some("Sell terminal and date sold are required.".to_string()),
             }),
         )
@@ -216,7 +215,7 @@ pub async fn close_run(
         return (
             StatusCode::UNPROCESSABLE_ENTITY,
             render(&CloseFormTemplate {
-                run: RunView::new(&run, user.id),
+                run: RunView::new(&run),
                 error: Some("Sell price and SCU sold can't be negative.".to_string()),
             }),
         )
@@ -228,7 +227,7 @@ pub async fn close_run(
         return (
             StatusCode::UNPROCESSABLE_ENTITY,
             render(&CloseFormTemplate {
-                run: RunView::new(&run, user.id),
+                run: RunView::new(&run),
                 error: Some("Could not record that sale.".to_string()),
             }),
         )
@@ -237,7 +236,7 @@ pub async fn close_run(
 
     match repo::find(&state.pool, id).await {
         Ok(Some(run)) => render(&OpenCargoRowTemplate {
-            run: RunView::new(&run, user.id),
+            run: RunView::new(&run),
         })
         .into_response(),
         _ => Html("closed".to_string()).into_response(),
@@ -246,10 +245,10 @@ pub async fn close_run(
 
 pub async fn delete_run(
     State(state): State<AppState>,
-    user: CurrentUser,
+    _user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Response {
-    if let Err(resp) = load_owned(&state, &user, id).await {
+    if let Err(resp) = load_run(&state, id).await {
         return resp;
     }
     if let Err(e) = repo::delete(&state.pool, id).await {

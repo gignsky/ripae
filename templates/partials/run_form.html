@@ -1,5 +1,5 @@
 <tr id="run-{{ run.id }}">
-  <td colspan="9">
+  <td colspan="10">
     <form hx-put="/runs/{{ run.id }}" hx-target="#run-{{ run.id }}" hx-swap="outerHTML">
       {% if let Some(error) = error %}
       <p style="color: var(--pico-del-color);">{{ error }}</p>
