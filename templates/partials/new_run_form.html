@@ -1,7 +1,8 @@
 <form class="run" method="post" action="/voyages" id="newrun-form">
   {% if let Some(error) = new_run.error %}<p class="ras neg form-error">{{ error }}</p>{% endif %}
-  <div class="ras sub-h"><span>Voyage</span><span>Ship and date apply to every load below</span></div>
+  <div class="ras sub-h"><span>Voyage</span><span>Crew member, ship and date apply to every load below</span></div>
   <div class="ras fields">
+    <label>Crew member<select name="logged_by" title="Whose run this is: they bought it and will sell it; you may just be keeping the books">{% for u in new_run.users %}<option value="{{ u.id }}"{% if new_run.logged_by == u.id.to_string() %} selected{% endif %}>{{ u.display_name|upper }}</option>{% endfor %}</select></label>
     <label>Bought on<input type="date" name="bought_at" value="{{ new_run.bought_at }}" data-today required /></label>
     <label>Ship<input type="text" name="ship" list="pick-ships" data-pick autocomplete="off" value="{{ new_run.ship }}" placeholder="no hull yet" /></label>
     <label>Status<select name="voyage_status">

@@ -71,6 +71,7 @@
       <div class="ras sub-h"><span>Close load · <b>{{ l.commodity_upper }}</b> · {{ l.scu }} SCU bought at {{ l.buy_terminal_short }} · {{ l.buy_price_scu_fmt }} / SCU</span><span>Sale leg</span></div>
       {% if let Some(error) = f.error %}<p class="ras neg form-error">{{ error }}</p>{% endif %}
       <div class="ras fields">
+        <label>Sold by<select name="sold_by" title="Who made the sale: credit and the remainder are theirs; you may just be keeping the books">{% for u in f.users %}<option value="{{ u.id }}"{% if f.sold_by == u.id.to_string() %} selected{% endif %}>{{ u.display_name|upper }}</option>{% endfor %}</select></label>
         <label>Sold on<input name="sold_at" type="date" value="{{ f.sold_at }}" data-today required /></label>
         <label>Sell terminal<input name="sell_terminal" type="text" list="pick-terminals" data-pick autocomplete="off" value="{{ f.sell_terminal }}" required /></label>
         <label>SCU sold · from crates<input name="scu_sold" type="number" readonly data-scu-sold /></label>
@@ -94,7 +95,7 @@
       <div class="shares">
         {% for s in f.shares %}
         <div class="ras share fields">
-          <label>Crew<select name="share_to">{% for u in f.users %}{% if u.id != f.seller_id %}<option value="{{ u.id }}"{% if s.to_user == u.id.to_string() %} selected{% endif %}>{{ u.display_name|upper }}</option>{% endif %}{% endfor %}</select></label>
+          <label>Crew<select name="share_to">{% for u in f.users %}<option value="{{ u.id }}"{% if s.to_user == u.id.to_string() %} selected{% endif %}>{{ u.display_name|upper }}</option>{% endfor %}</select></label>
           <label>Terms<select name="share_kind"><option value="pct"{% if s.kind != "flat" %} selected{% endif %}>% of profit</option><option value="flat"{% if s.kind == "flat" %} selected{% endif %}>Flat fee</option></select></label>
           <label>Amount<input name="share_amount" type="number" step="0.01" min="0" value="{{ s.amount }}" /></label>
           <label>For<input name="share_reason" type="text" placeholder="escort, loan, half the hull" value="{{ s.reason }}" /></label>
@@ -105,7 +106,7 @@
       </div>
       <template class="share-tpl">
         <div class="ras share fields">
-          <label>Crew<select name="share_to">{% for u in f.users %}{% if u.id != f.seller_id %}<option value="{{ u.id }}">{{ u.display_name|upper }}</option>{% endif %}{% endfor %}</select></label>
+          <label>Crew<select name="share_to">{% for u in f.users %}<option value="{{ u.id }}">{{ u.display_name|upper }}</option>{% endfor %}</select></label>
           <label>Terms<select name="share_kind"><option value="pct" selected>% of profit</option><option value="flat">Flat fee</option></select></label>
           <label>Amount<input name="share_amount" type="number" step="0.01" min="0" value="25" /></label>
           <label>For<input name="share_reason" type="text" placeholder="escort, loan, half the hull" /></label>

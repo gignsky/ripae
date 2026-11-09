@@ -1,8 +1,12 @@
 # Ripae
 
-A ledger for Star Citizen commodity runs, shared by an org. See
-[RIPAE-ALPHA.md](./RIPAE-ALPHA.md) for the full Alpha 0.1 "Dockside" brief
-this build follows.
+A ledger for Star Citizen commodity runs, shared by an org. 0.2 "Stowage"
+wears the CRT terminal look and tracks cargo down to the crate. The briefs:
+[RIPAE-ALPHA.md](./RIPAE-ALPHA.md) (0.1, stack and working agreement),
+[RIPAE-0.2.md](./RIPAE-0.2.md) (0.2 spec; §4 and §9 are law) and
+[RIPAE-ROLL7.md](./RIPAE-ROLL7.md) (the roll 7 work order). The interactive
+mock in `design/ripae-crt-mock.html` is the source of truth for how anything
+looks or behaves.
 
 ## Local dev
 
@@ -12,7 +16,7 @@ export RIPAE_DB_PATH=./ripae.db
 export RIPAE_SESSION_SECRET=$(openssl rand -base64 64)
 export RIPAE_SEED_USERS="lordgig:Lord Gig:changeme,firstofficer:First Officer:changeme"
 export RIPAE_COOKIE_SECURE=0              # only when serving plain HTTP off localhost
-cargo run
+cargo run                                 # from the repo root (see Decisions: static/ is cwd-relative)
 ```
 
 Migrations run automatically on boot (`sqlx::migrate!`, embedded in the
@@ -21,19 +25,34 @@ binary at compile time). Seeding from `RIPAE_SEED_USERS` only happens while
 drop it once the two accounts exist.
 
 ```sh
-cargo test     # unit tests -- profit math, seeding, auth, repo round-trips
+cargo test                 # unit tests: money maths, derived status, repo round-trips, auth
+cargo build && node scripts/smoke.mjs     # headless-browser smoke test (Playwright, Chromium)
 cargo build --release
 ```
 
+`scripts/smoke.mjs` spawns `target/debug/ripae` on `127.0.0.1:18080` with a
+throwaway database, walks the whole 0.2 story (gate → new run → crate
+manifest → partial close with a forfeited share → SALE banner → leaderboard
+→ service record → delete through the confirmation) and asserts there is no
+horizontal scroll at 1280 / 760 / 400 px. Set `RIPAE_URL` to run it against
+an already-running build instead. It needs `playwright` resolvable from
+Node (`npm i -g playwright && npx playwright install chromium`, or a
+preinstalled copy on `NODE_PATH`). The raster reveal is not something a
+script can judge; eyeball it.
+
 ## Building the image
 
-Nix only (the Dockerfile fallback the brief allowed was never exercised and was removed on 8 Nov 2026):
+Nix only (the Dockerfile fallback the brief allowed was never exercised and
+was removed on 8 Nov 2026):
 
-- **Nix:** `nix build .#container` via `flake.nix` (crane +
-  `dockerTools.buildLayeredImage`). `nix flake check` (builds the binary and
-  runs the 17 tests) and `nix build .#container` both pass, and the image
-  contains `static/`. The image has not yet been loaded and run under
-  docker/podman.
+```sh
+nix flake check          # builds the binary and runs the tests
+nix build .#container    # dockerTools.buildLayeredImage → ./result (ripae:0.2.0)
+```
+
+The image carries `static/` (stylesheet, script, vendored fonts) next to
+the binary with `WorkingDir = "/"`, so the cwd-relative `static/` lookup
+finds it.
 
 ## Deploying to spacedock
 
@@ -42,6 +61,51 @@ the `virtualisation.oci-containers.containers.ripae` unit (image from this
 repo's `ripae` flake input, SQLite on a `/var/lib/ripae` bind-mount, bound
 to `127.0.0.1:8080`, reverse-proxied by the host). See that file's header
 comment for the one-time setup step (adding the `ripae-env` sops secret).
+Bump the image tag there to `0.2.0`.
+
+### 0.1 → 0.2: wipe and reseed
+
+0.2 starts the schema over (ruled 8 Nov 2026: no data migration). The
+migrations are new files, so the 0.2 image **cannot** boot on a 0.1
+database; the old file is moved aside and the first boot creates a fresh
+one and reseeds the accounts from `RIPAE_SEED_USERS` (make sure the var is
+still in the `ripae-env` secret).
+
+```sh
+# on spacedock, before switching to the 0.2 image:
+systemctl stop podman-ripae   # or docker-ripae, per the host unit name
+mv /var/lib/ripae/ripae.db /var/lib/ripae/ripae-0.1-final.db   # kept for a week, then deleted
+# switch the image; first boot migrates 0001-0003 and reseeds users from RIPAE_SEED_USERS
+```
+
+**Keeping the accounts' "aboard since" dates.** The service record shows
+`aboard since <users.created_at>`. A reseed stamps today's date on both
+accounts; to keep the 0.1 dates (and the 0.1 password hashes, so nobody has
+to learn a new password), copy the two `users` rows across *before* the
+first 0.2 boot. The table is identical in both schemas, so a dump of just
+that table replays cleanly, and the seed then sees a non-empty `users` and
+does nothing:
+
+```sh
+# after the mv above, still stopped:
+sqlite3 /var/lib/ripae/ripae-0.1-final.db ".dump users" > /var/lib/ripae/users-0.1.sql
+# start the 0.2 container once so it creates the schema, then stop it again
+systemctl start podman-ripae && sleep 5 && systemctl stop podman-ripae
+sqlite3 /var/lib/ripae/ripae.db "DELETE FROM users;"          # drop the freshly seeded rows
+sqlite3 /var/lib/ripae/ripae.db < /var/lib/ripae/users-0.1.sql # same ids, hashes and created_at as 0.1
+systemctl start podman-ripae
+```
+
+Or, if the reseed has already happened, just carry the dates over by
+handle:
+
+```sh
+sqlite3 /var/lib/ripae/ripae.db "ATTACH '/var/lib/ripae/ripae-0.1-final.db' AS old;
+  UPDATE users SET created_at = (SELECT o.created_at FROM old.users o WHERE o.handle = users.handle)
+  WHERE handle IN (SELECT handle FROM old.users);"
+```
+
+Promotion and the `v0.2.0` tag are `rf promote`'s job, not this branch's.
 
 ## Rotating the seed passwords
 
@@ -56,80 +120,127 @@ UPDATE users SET password_hash = '<new argon2 hash>' WHERE handle = 'lordgig';
 Generate a new hash with `ripae`'s own hasher (there's no standalone CLI
 yet -- the simplest route today is a one-off `cargo run` against a scratch
 DB that calls `db::hash_password`, or `argon2` on the command line if
-available on the host). A dedicated `ripae passwd <handle>` subcommand is a
-reasonable 0.2 addition; not built here, kept to scope.
+available on the host). A dedicated `ripae passwd <handle>` subcommand is
+still a reasonable addition; not built here, kept to scope.
 
-## Status (Definition of Done, §1)
+## Status (0.2 Definition of Done, RIPAE-0.2.md §1)
 
-Done:
-- [x] Two accounts seeded from env vars at first boot, idempotently.
-- [x] Login, log a run, edit/delete own run, see every run in a shared table.
-- [x] A run can be logged before it's sold (status, destination, stored-at);
-      Open Cargo panel lists every unsold run.
-- [x] Closing a run records where/at what price/how much it actually sold,
-      flips it to `sold`.
-- [x] Per-run profit shown on the Ledger; running totals (`committed`,
-      `realised`) shown on `/`.
-- [x] `GET /healthz` returns `200 OK` / `ok`.
-- [x] `cargo test` passes (17 tests); profit math has unit tests covering
-      ordinary sale, partial sale, total loss, the zero-cost edge case, and
-      that open runs land in `committed` not `realised`.
-- [x] This README.
-
-Open / unverified:
-- [ ] Run the Nix-built image (`docker load < result`) -- it builds, but
-      hasn't been started yet.
-- [ ] Actual spacedock deployment -- the dotfiles-side module is written
-      and pushed on its own roll branch, but nothing has been switched on
-      the real host; that's an operator action, not bundled here.
-- [ ] No password-rotation CLI (see above) -- a manual SQL UPDATE works for
-      alpha.
-
-Per §9's suggested order of work, steps 1-6 (scaffold through htmx
-edit/close/delete) are done and tested; step 7 (container image) builds via
-Nix but hasn't been run; step 8 (spacedock module + README deploy section +
-`v0.1.0` tag) is split across repos -- the dotfiles half is done, the tag
-is left for whoever graduates that roll.
+- [x] CRT terminal look on every screen: splash, ledger, leaderboard, overlays.
+- [x] Voyage → loads → crates; merge into / detach.
+- [x] Buy per SCU or per lot; both figures stored.
+- [x] Whereabouts per crate; derived load status incl. `SPLIT`; New Run stamps one status on every crate.
+- [x] Stop № and destination per load; Stowage Plan with the sc-cargo.space link.
+- [x] Glitched and lost crates; lost SCU written off and shown.
+- [x] Close per crate, price per SCU or per lot, shares by % or flat, forfeits, kept crates stay open.
+- [x] SALE banner with blackout; DELETE confirmation; HOORAY / WOMP WOMP + service record.
+- [x] Leaderboard sortable by profit / runs / SCU, org totals, recent shares.
+- [x] Splash is the login; welcome once per session; `[CLOSE]` replays; `[LOG OUT]` on rail and splash.
+- [x] No horizontal scrollbar at 1280 / 760 / 400 px; cards under ~980 px.
+- [x] `cargo test` (65 tests incl. the proptest invariants of RIPAE-ROLL7.md §6); `scripts/smoke.mjs` passes.
+- [x] `CHANGELOG.md` 0.2.0; `Cargo.toml` 0.2.0; badge reads `v0.2.0`.
+- [ ] Deployed to spacedock -- operator action (`rf promote`, dotfiles deploy with the wipe + reseed above).
 
 ## Decisions
 
-Where the brief was silent, in order of appearance:
+Where the briefs were silent, in order of appearance. 0.1 decisions that
+still hold come first.
 
 - **Trunk branch is `master`, not `main`.** Matches this author's other
-  repos (gigpkgs' stable branch is already `master`). `master` is pushed
-  alongside the branch this was actually developed on.
-- **roll-flow installed, not yet used for this landmark.** `.roll-flow.toml`
-  is in place (`stable_branch = "master"`, `rolling_branch = "rolling"`,
-  gates = `cargo test` + `cargo build --release`), matching gigpkgs' shape.
-  This initial alpha build happened directly on the working branch per the
-  brief's own §8 working agreement (written before roll-flow was adopted
-  here); `roll/` branches apply to feature work from here on, landing on
-  `rolling` → `master`.
+  repos (gigpkgs' stable branch is already `master`).
+- **roll-flow** (`.roll-flow.toml`: `stable_branch = "master"`,
+  `rolling_branch = "rolling"`; gates `cargo test` + `cargo build --release`,
+  plus `scripts/check-changelog.sh` on the way to `master`). `roll/` branches
+  land on `rolling` → `master`; promotion tags.
 - **sqlx: runtime queries, not compile-time `query!`/`query_as!` macros.**
   The compile-time macros need a live `DATABASE_URL` (or a committed
-  `.sqlx` offline cache) at build time; plain `sqlx::query`/`query_as` with
-  a hand-written `Run` row mapper (`src/runs/repo.rs`) keeps the build
+  `.sqlx` offline cache) at build time; plain `sqlx::query` with
+  hand-written row mappers (`src/stowage/repo.rs`) keeps the build
   reproducible in any sandbox with no DB present, at the cost of losing
-  compile-time SQL checking. Worth revisiting once there's a stable CI
-  environment to generate/commit the offline cache in.
+  compile-time SQL checking.
 - **One SQLite connection (`max_connections(1)`).** SQLite only allows one
   writer at a time anyway, and a pool of `>1` connections to `:memory:`
-  would each see a separate empty database in tests.
+  would each see a separate empty database in tests. Multi-row writes run
+  in a transaction on that connection.
 - **Session cookie signing key from `RIPAE_SESSION_SECRET`.** The var is
-  base64, decoded to >=64 bytes and fed to `tower_sessions::cookie::Key` via
-  `SessionManagerLayer::with_signed`, so the session id cookie is tamper-evident.
-- **`pico.css` vendored as the *classless* build** (`pico.classless.min.css`),
-  per §3's "classless" wording. A few inert utility classes from the full
-  build (`.grid`, `.secondary`, `.outline`) are used in the templates for
-  layout hints; they're harmless no-ops under classless pico today. Worth
-  switching to the full build (or dropping those classes) if the layout
-  needs real polish before 0.2.
-- **Edit form only offers `in_transit`/`stored` in its status `<select>`.**
-  Flipping a run to `sold` is the dedicated `/runs/:id/close` flow, which
-  is the only place that can populate the sale-leg columns the `sold` DB
-  CHECK constraint requires.
-- **Validation errors return `422` with the form/page re-rendered**, never
-  a bare framework error page, per §5. htmx 1.9 does not swap 4xx responses
-  unless told to, so `base.html` opts 422 back in via `htmx:beforeSwap`
-  (0.1.4); without it the inline forms swallowed every validation message.
+  base64, decoded to >=64 bytes and fed to `tower_sessions::cookie::Key`
+  via `SessionManagerLayer::with_signed`, so the session id cookie is
+  tamper-evident.
+- **Validation errors return `422` with the form re-rendered**, carrying
+  the *submitted* values and the message, never a bare framework error
+  page. htmx 1.9 does not swap 4xx responses unless told to, so `base.html`
+  opts 422 back in via `htmx:beforeSwap` (0.1.4); keep that listener.
 - **No password-rotation CLI** -- see "Rotating the seed passwords" above.
+
+0.2 "Stowage":
+
+- **`static/` is served relative to the working directory**
+  (`ServeDir::new("static")`). Start the binary from the repo root; the
+  container sets `WorkingDir = "/"` and ships `static/` there. Chosen over
+  resolving from the executable's path so the Nix image layout stays as it
+  was.
+- **The spec's `loads_status` index was dropped.** RIPAE-0.2.md §4 listed
+  `CREATE INDEX loads_status ON loads(status)` but `loads` has no status
+  column (it is derived, as the same section says). Per the brief the
+  document is the error; the line is gone from the spec and noted in
+  `migrations/0003_stowage.sql`.
+- **`loads.submitted_by` on a sold row is the member who closed it** (the
+  seller). The leaderboard's "where u sold" reads that column; whoever
+  logged the purchase is still on the kept part of a partial close, and on
+  the voyage's `logged_by`.
+- **A partial close splits the load.** The sold crates move to a new load
+  row on the same voyage with the sale leg filled in; the original keeps the
+  rest, lost crates included, and its lot price is recomputed for what's
+  left. Selling every sellable crate closes the row in place; lost crates
+  ride along on it as the ledger's write-off record.
+- **Crates define the SCU.** The New Run / Add Load forms derive SCU from
+  the boxes and let you type over it, but a figure that disagrees with the
+  boxes is refused (422) rather than silently kept -- there is nowhere to
+  store an SCU that isn't crates.
+- **Crate mixes are normalised**: `1×32, 2×32` is stored as three 32 SCU
+  crates and reads back as `3×32`; sizes are listed largest first.
+- **A ship name must be one of the 80 known hulls, or blank.** A hull needs
+  an sc-cargo.space slug and the list is the site's; "no hull yet" is a
+  first-class state (the Stowage Plan says so and offers no link).
+  Commodity and terminal names, by contrast, are suggestions: accepted as
+  typed, snapped to the list's spelling when they match.
+- **`[ALL ABOARD]` / `[ALL STORED]` and the edit form's status move live
+  crates only**; lost crates keep their last known whereabouts, sold ones
+  are untouchable.
+- **Detaching a load makes a new voyage with the same ship and date,
+  logged by whoever detached it.** A voyage left without loads is deleted
+  (on a move and on a load delete).
+- **Voyage-level merge** (`POST /voyages/:id/move`) moves every open load;
+  it backs the header's `[MERGE INTO…]` and the Suggested card's command.
+  Routes beyond RIPAE-0.2.md §5 are all of this shape: `GET
+  /voyages/:id/head`, `GET/PUT /voyages/:id/edit` (assign a hull), `GET
+  /voyages/:id/merge`, `GET /voyages/:id/loads/new`, `GET /loads/:id` (plain
+  row), `GET /loads/:id/delete` (same confirmation as a voyage).
+- **Shares:** a member can't share with themself (the remainder is already
+  theirs); percentage shares may not total more than 100; a flat fee may
+  exceed the profit (the seller agreed to it). On a loss every share pays 0
+  (ruled). "Runs closed" on the board counts voyages with every load sold in
+  which the member sold at least one load.
+- **`users.created_at` is the service record's "aboard since."** Keep it
+  across the 0.2 wipe with the steps under Deploying.
+- **Bookkeeping for a crewmate.** Whose run it is (`voyages.logged_by`,
+  `loads.submitted_by`) and who sold it (the sold row's `submitted_by`)
+  are form fields -- *Crew member* on New Run, *Bought by* on Add Load,
+  *Sold by* on the close form -- defaulting to the member logging it (and,
+  for a sale, to the load's buyer). The member recording it is not stored;
+  the SALE banner names them only when they differ from the seller.
+- **Fragments mix `<tbody>` rows with out-of-band `<section>`s**, which the
+  HTML parser only keeps under template parsing:
+  `htmx.config.useTemplateFragments = true` (the `htmx-config` meta tag in
+  `base.html`). The Open Cargo table has one `<tbody>` per voyage header
+  and one per load, so a crate change re-renders its load, a header change
+  its header, and anything that moves loads re-renders `#open-cargo`;
+  totals and the Stowage Plan ride along out of band on every change.
+- **Raster hooks on `htmx:load`, `htmx:afterSwap` and `htmx:oobAfterSwap`**
+  with a queued marker so a line is painted once whichever fires first; the
+  `.ras` / `.rs` hiding rules are scoped to `html.js` so a page without the
+  script still shows everything.
+- **Fonts are vendored** (`static/fonts/`, OFL 1.1) from Google's woff2
+  builds; no Google Fonts request leaves the container.
+- **`nix flake check` in a sandbox that blocks GitHub tarballs**: override
+  the inputs to their `git+https://…?rev=…&shallow=1` forms; nothing in the
+  flake itself changes.

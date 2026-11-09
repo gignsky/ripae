@@ -16,6 +16,9 @@
 <label>Buy terminal<input name="terminal" type="text" list="pick-terminals" data-pick autocomplete="off" value="{{ f.terminal }}" placeholder="Shubin Mining Facility SCD-1" required /></label>
 <label>Stop №<input name="stop_no" type="number" value="{{ f.stop_no }}" min="1" /></label>
 <label>Bound for<input name="destination" type="text" list="pick-terminals" data-pick autocomplete="off" placeholder="undecided" value="{{ f.destination }}" /></label>
+{% if !f.users.is_empty() %}
+<label>Bought by<select name="bought_by" title="Whose load this is; you may just be keeping the books">{% for u in f.users %}<option value="{{ u.id }}"{% if f.bought_by == u.id.to_string() %} selected{% endif %}>{{ u.display_name|upper }}</option>{% endfor %}</select></label>
+{% endif %}
 {% if f.show_status %}
 <label>Status<select name="status" data-status>
   <option value=""{% if f.status == "" %} selected{% endif %}>— leave crates as they are</option>

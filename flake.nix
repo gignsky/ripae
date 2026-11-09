@@ -58,7 +58,7 @@
         # `dockerTools.buildLayeredImage` -- the Nix path from §6.
         container = pkgs.dockerTools.buildLayeredImage {
           name = "ripae";
-          tag = "0.1.0";
+          tag = "0.2.0";
           contents = [
             ripae
             pkgs.cacert

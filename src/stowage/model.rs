@@ -173,16 +173,6 @@ pub enum LoadStatus {
 }
 
 impl LoadStatus {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            LoadStatus::AwaitingPickup => "awaiting_pickup",
-            LoadStatus::InTransit => "in_transit",
-            LoadStatus::Stored => "stored",
-            LoadStatus::Split => "split",
-            LoadStatus::Sold => "sold",
-        }
-    }
-
     /// Chip text, as the mock spells it.
     pub fn label(&self) -> &'static str {
         match self {
@@ -415,11 +405,6 @@ impl Load {
     /// Σ size over sold crates.
     pub fn scu_sold(&self) -> u32 {
         self.crates.iter().filter(|c| c.is_sold()).map(|c| c.size_scu).sum()
-    }
-
-    /// Σ size over crates still sellable (sound or glitched).
-    pub fn scu_live(&self) -> u32 {
-        self.crates.iter().filter(|c| c.is_live()).map(|c| c.size_scu).sum()
     }
 
     /// `cost = scu(all crates incl. lost) × buy_price_scu`.

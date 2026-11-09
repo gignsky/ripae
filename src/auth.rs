@@ -20,6 +20,9 @@ const SESSION_SPLASH_SEEN: &str = "splash_seen";
 #[derive(Debug, Clone)]
 pub struct CurrentUser {
     pub id: i64,
+    /// The handle lives on the leaderboard, not the rail; kept here for
+    /// the Discord OAuth roster. // TODO(0.3): org roster / OAuth identity
+    #[allow(dead_code)]
     pub handle: String,
     pub display_name: String,
 }

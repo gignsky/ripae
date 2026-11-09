@@ -3,7 +3,7 @@
 //! `{% for %}`; nothing is computed in a template.
 
 use super::model::{
-    cluster_unassigned, format_boxes, sc_cargo_link, standings, stowage_order, Crate, Depth, Load,
+    cluster_unassigned, format_boxes, sc_cargo_link, standings, stowage_order, Crate, Load,
     LoadStatus, ServiceRecord, Share, SortKey, Standing, Totals, User, Voyage, Whereabouts,
 };
 use crate::templates::fmt_auec;
@@ -55,15 +55,6 @@ pub fn short_terminal(name: &str) -> String {
     name.replace("Mining Facility ", "").replace("Mining Area ", "")
 }
 
-/// Whereabouts as a form value / CSS hook.
-pub fn where_value(w: Whereabouts) -> &'static str {
-    match w {
-        Whereabouts::AwaitingPickup => "awaiting_pickup",
-        Whereabouts::Aboard => "aboard",
-        Whereabouts::Stored => "stored",
-    }
-}
-
 fn where_css(w: Whereabouts) -> &'static str {
     match w {
         Whereabouts::AwaitingPickup => "pickup",
@@ -98,12 +89,10 @@ pub struct CrateView {
     pub is_glitched: bool,
     pub is_stored: bool,
     pub sellable: bool,
-    /// Ticked in the close picker (sound by default; glitched by hand).
-    pub selected: bool,
 }
 
 impl CrateView {
-    pub fn new(n: usize, c: &Crate, selected: bool) -> Self {
+    pub fn new(n: usize, c: &Crate) -> Self {
         Self {
             id: c.id,
             n,
@@ -117,7 +106,6 @@ impl CrateView {
             is_glitched: c.condition == super::model::Condition::Glitched,
             is_stored: c.whereabouts == Whereabouts::Stored,
             sellable: c.is_sellable(),
-            selected,
         }
     }
 }
@@ -169,46 +157,36 @@ pub enum LoadExtra {
 pub struct LoadView {
     pub id: i64,
     pub voyage_id: i64,
-    pub commodity: String,
     pub commodity_upper: String,
     pub scu: u32,
     pub scu_lost: u32,
     pub boxes: Vec<(u32, u32)>,
-    pub boxes_text: String,
     pub lost_count: usize,
     pub glitched_count: usize,
     pub buy_terminal: String,
     pub buy_terminal_short: String,
     pub status_label: &'static str,
     pub status_css: &'static str,
-    pub is_open: bool,
     pub stop_no: u32,
-    pub destination: String,
     pub destination_label: String,
     pub where_now: String,
     pub cost_fmt: String,
     pub written_off_fmt: String,
     pub has_write_off: bool,
-    pub by_name: String,
     pub by_upper: String,
-    pub price_mode: &'static str,
     pub buy_price_scu_fmt: String,
-    pub buy_price_lot_fmt: String,
     pub notes: String,
     /// First station any crate is stored at, for pre-filling forms.
     pub stored_at: String,
     pub crates: Vec<CrateView>,
     // sale leg
-    pub sold_at: String,
     pub sold_at_short: String,
-    pub sell_terminal: String,
     pub sell_terminal_short: String,
     pub sell_price_scu_fmt: String,
     pub scu_sold: u32,
     pub profit_fmt: String,
     pub profit_neg: bool,
     pub margin_fmt: String,
-    pub seller_keeps_fmt: String,
     pub shares: Vec<ShareView>,
     pub extra: LoadExtra,
 }
@@ -224,21 +202,17 @@ impl LoadView {
         Self {
             id: l.id,
             voyage_id: l.voyage_id,
-            commodity: l.commodity.clone(),
             commodity_upper: l.commodity.to_uppercase(),
             scu: l.scu(),
             scu_lost: l.scu_lost(),
             boxes: l.boxes(),
-            boxes_text: format_boxes(&l.boxes()),
             lost_count: l.lost_count(),
             glitched_count: l.glitched_count(),
             buy_terminal: l.buy_terminal.clone(),
             buy_terminal_short: short_terminal(&l.buy_terminal),
             status_label: status.label(),
             status_css: status.css(),
-            is_open: status.is_open(),
             stop_no: l.stop_no,
-            destination: l.destination.clone().unwrap_or_default(),
             destination_label: l
                 .destination
                 .clone()
@@ -248,29 +222,23 @@ impl LoadView {
             cost_fmt: fmt_auec(l.cost()),
             written_off_fmt: fmt_auec(l.written_off()),
             has_write_off: l.scu_lost() > 0,
-            by_name: l.submitted_by_name.clone(),
             by_upper: l.submitted_by_name.to_uppercase(),
-            price_mode: l.price_mode.as_str(),
             buy_price_scu_fmt: fmt_price(l.buy_price_scu),
-            buy_price_lot_fmt: fmt_auec(l.buy_price_lot.unwrap_or(l.buy_price_scu * l.scu_all() as f64)),
             notes: l.notes.clone().unwrap_or_default(),
             stored_at,
             crates: l
                 .crates
                 .iter()
                 .enumerate()
-                .map(|(i, c)| CrateView::new(i + 1, c, c.default_selected()))
+                .map(|(i, c)| CrateView::new(i + 1, c))
                 .collect(),
-            sold_at: l.sold_at.clone().unwrap_or_default(),
             sold_at_short: l.sold_at.as_deref().map(short_date).unwrap_or_default(),
-            sell_terminal: l.sell_terminal.clone().unwrap_or_default(),
             sell_terminal_short: l.sell_terminal.as_deref().map(short_terminal).unwrap_or_default(),
             sell_price_scu_fmt: l.sell_price_scu.map(fmt_price).unwrap_or_default(),
             scu_sold: l.scu_sold(),
             profit_fmt: l.profit().map(fmt_signed).unwrap_or_default(),
             profit_neg: l.profit().map_or(false, |p| p < 0.0),
             margin_fmt: l.margin().map(fmt_margin).unwrap_or_default(),
-            seller_keeps_fmt: l.seller_keeps().map(fmt_auec).unwrap_or_default(),
             shares: l.shares.iter().map(ShareView::new).collect(),
             extra: LoadExtra::None,
         }
@@ -294,17 +262,11 @@ pub struct MergeChoice {
 pub struct VoyageView {
     pub id: i64,
     pub label: String,
-    pub bought_at: String,
     pub date_short: String,
-    pub has_ship: bool,
     pub ship_name: String,
-    pub hull_label: String,
-    pub logged_by_name: String,
     pub logged_by_upper: String,
     pub load_count: usize,
     pub stop_count: usize,
-    pub scu: u32,
-    pub committed_fmt: String,
     pub notes: String,
     /// Open loads only (sold ones live on the Ledger).
     pub loads: Vec<LoadView>,
@@ -318,17 +280,11 @@ impl VoyageView {
         Self {
             id: v.id,
             label: format!("Voyage {}", v.id),
-            bought_at: v.bought_at.clone(),
             date_short: short_date(&v.bought_at),
-            has_ship: v.ship.is_some(),
             ship_name: v.ship.as_ref().map(|s| s.name.clone()).unwrap_or_else(|| "—".into()),
-            hull_label: hull.clone().unwrap_or_else(|| "no hull yet".into()),
-            logged_by_name: v.logged_by_name.clone(),
             logged_by_upper: v.logged_by_name.to_uppercase(),
             load_count: open.len(),
             stop_count: v.stop_count(),
-            scu: open.iter().map(|l| l.scu()).sum(),
-            committed_fmt: fmt_auec(open.iter().map(|l| l.cost() - l.written_off()).sum()),
             notes: v.notes.clone().unwrap_or_default(),
             loads: open.iter().map(|l| LoadView::new(l, hull.as_deref())).collect(),
             extra: VoyageExtra::None,
@@ -358,6 +314,9 @@ pub struct LoadFormView {
     /// Render the status / stored-at fields (edit and add-load; New Run
     /// takes one status for the whole voyage).
     pub show_status: bool,
+    /// Add Load only: who bought it (user id); the crew list to pick from.
+    pub bought_by: String,
+    pub users: Vec<User>,
     pub error: Option<String>,
 }
 
@@ -393,6 +352,8 @@ impl LoadFormView {
             stored_at: l.crates.iter().find_map(|c| c.stored_at.clone()).unwrap_or_default(),
             notes: l.notes.clone().unwrap_or_default(),
             show_status: true,
+            bought_by: l.submitted_by.to_string(),
+            users: Vec::new(),
             error: None,
         }
     }
@@ -409,6 +370,11 @@ pub struct VoyageFormView {
 #[derive(Clone, Default)]
 pub struct NewRunFormView {
     pub bought_at: String,
+    /// Whose run it is (user id) -- the buyer, and the default seller.
+    /// Defaults to the member logging it; pick a crewmate to keep their
+    /// books for them.
+    pub logged_by: String,
+    pub users: Vec<User>,
     pub ship: String,
     pub status: String,
     pub stored_at: String,
@@ -438,7 +404,9 @@ pub struct CloseFormView {
     pub selected: Vec<i64>,
     pub shares: Vec<ShareFormRow>,
     pub users: Vec<User>,
-    pub seller_id: i64,
+    /// Who sold it (user id): the load's buyer by default, any crew member
+    /// when someone else is keeping the books.
+    pub sold_by: String,
     pub error: Option<String>,
 }
 
@@ -473,7 +441,6 @@ pub struct PlanEntryView {
     pub stop_no: u32,
     pub destination_label: String,
     pub depth: &'static str,
-    pub deepest: bool,
 }
 
 pub struct PlanCard {
@@ -522,7 +489,6 @@ fn entries_of(loads: &[&Load]) -> (Vec<PlanEntryView>, String) {
                 .filter(|d| !d.trim().is_empty())
                 .unwrap_or_else(|| "undecided".into()),
             depth: e.depth.label(),
-            deepest: e.depth == Depth::Deepest,
         })
         .collect();
     let summary = format!(

@@ -305,7 +305,6 @@ struct LoadParts {
     stop_no: u32,
     destination: Option<String>,
     boxes: model::BoxMix,
-    scu: u32,
     whereabouts: Option<Whereabouts>,
     stored_at: Option<String>,
     notes: Option<String>,
@@ -353,7 +352,6 @@ async fn parse_load_line(state: &AppState, f: &LoadFormView, boxes_editable: boo
         stop_no,
         destination: pick_opt(state, Kind::Terminal, &f.destination).await,
         boxes,
-        scu,
         whereabouts,
         stored_at,
         notes: opt(&f.notes),
@@ -375,7 +373,25 @@ fn load_form_from(form: &FormData, i: usize) -> LoadFormView {
         stored_at: form.nth("stored_at", i).into(),
         notes: form.nth("notes", i).into(),
         show_status: false,
+        bought_by: form.nth("bought_by", i).into(),
+        users: Vec::new(),
         error: None,
+    }
+}
+
+/// A crew member picked on a form (`logged_by`, `bought_by`, `sold_by`):
+/// blank means the member filling it in; anything else must be a real id.
+fn pick_member(raw: &str, fallback: i64, users: &[User], what: &str) -> Result<i64, String> {
+    match opt(raw) {
+        None => Ok(fallback),
+        Some(v) => {
+            let id: i64 = v.parse().map_err(|_| format!("{what}: pick a crew member."))?;
+            if users.iter().any(|u| u.id == id) {
+                Ok(id)
+            } else {
+                Err(format!("{what}: that crew member doesn't exist."))
+            }
+        }
     }
 }
 
@@ -406,13 +422,15 @@ async fn render_index(state: &AppState, user: &CurrentUser, mode: SplashMode, ne
     } else {
         StatusCode::OK
     };
-    let new_run = new_run.unwrap_or_else(|| NewRunFormView {
+    let mut new_run = new_run.unwrap_or_else(|| NewRunFormView {
         bought_at: today().to_string(),
+        logged_by: user.id.to_string(),
         ship: default_ship,
         status: "aboard".into(),
         loads: vec![LoadFormView::blank(&default_terminal)],
         ..Default::default()
     });
+    new_run.users = l.users.clone();
     html(
         status,
         render_str(&IndexTemplate {
@@ -438,6 +456,8 @@ pub async fn create_voyage(State(state): State<AppState>, user: CurrentUser, bod
     let n = form.count("commodity").max(1);
     let mut view = NewRunFormView {
         bought_at: form.get("bought_at").into(),
+        logged_by: form.get("logged_by").into(),
+        users: Vec::new(),
         ship: form.get("ship").into(),
         status: form.get("voyage_status").into(),
         stored_at: form.get("voyage_stored_at").into(),
@@ -446,9 +466,17 @@ pub async fn create_voyage(State(state): State<AppState>, user: CurrentUser, bod
         error: None,
         open: true,
     };
+    let users = repo::list_users(&state.pool).await.unwrap_or_default();
+    let owner = match pick_member(&view.logged_by, user.id, &users, "Crew member") {
+        Ok(id) => id,
+        Err(e) => {
+            view.error = Some(e);
+            return render_index(&state, &user, SplashMode::Hidden, Some(view)).await;
+        }
+    };
     match parse_new_run(&state, &view).await {
         Ok((voyage, loads)) => {
-            if let Err(e) = repo::create_voyage(&state.pool, user.id, &voyage, &loads).await {
+            if let Err(e) = repo::create_voyage(&state.pool, owner, &voyage, &loads).await {
                 tracing::error!(error = %e, "failed to create voyage");
                 view.error = Some("Could not save that run.".into());
                 return render_index(&state, &user, SplashMode::Hidden, Some(view)).await;
@@ -624,6 +652,8 @@ pub async fn add_load_form(State(state): State<AppState>, _user: CurrentUser, Pa
                 .unwrap_or_default();
             let mut form = LoadFormView::blank(&terminal);
             form.show_status = true;
+            form.bought_by = v.logged_by.to_string();
+            form.users = repo::list_users(&state.pool).await.unwrap_or_default();
             head_with(&v, VoyageExtra::AddLoad(form), StatusCode::OK)
         }
         Err(r) => r,
@@ -631,7 +661,7 @@ pub async fn add_load_form(State(state): State<AppState>, _user: CurrentUser, Pa
 }
 
 /// `POST /voyages/:id/loads`.
-pub async fn add_load(State(state): State<AppState>, user: CurrentUser, Path(id): Path<i64>, body: String) -> Response {
+pub async fn add_load(State(state): State<AppState>, _user: CurrentUser, Path(id): Path<i64>, body: String) -> Response {
     let v = match find_voyage(&state, id).await {
         Ok(v) => v,
         Err(r) => return r,
@@ -639,6 +669,14 @@ pub async fn add_load(State(state): State<AppState>, user: CurrentUser, Path(id)
     let form = FormData::parse(&body);
     let mut f = load_form_from(&form, 0);
     f.show_status = true;
+    f.users = repo::list_users(&state.pool).await.unwrap_or_default();
+    let buyer = match pick_member(&f.bought_by, v.logged_by, &f.users, "Bought by") {
+        Ok(id) => id,
+        Err(e) => {
+            f.error = Some(e);
+            return head_with(&v, VoyageExtra::AddLoad(f), StatusCode::UNPROCESSABLE_ENTITY);
+        }
+    };
     match parse_load_line(&state, &f, true, 0).await {
         Err(e) => {
             f.error = Some(e);
@@ -658,7 +696,7 @@ pub async fn add_load(State(state): State<AppState>, user: CurrentUser, Path(id)
                 stored_at: p.stored_at,
                 notes: p.notes,
             };
-            if let Err(e) = repo::add_load(&state.pool, id, user.id, &new).await {
+            if let Err(e) = repo::add_load(&state.pool, id, buyer, &new).await {
                 tracing::error!(error = %e, "failed to add load");
                 f.error = Some("Could not save that load.".into());
                 return head_with(&v, VoyageExtra::AddLoad(f), StatusCode::UNPROCESSABLE_ENTITY);
@@ -935,7 +973,7 @@ pub async fn load_where(State(state): State<AppState>, _user: CurrentUser, Path(
 // close
 // ---------------------------------------------------------------------------
 
-fn blank_close(load: &Load, users: Vec<User>, seller_id: i64) -> CloseFormView {
+fn blank_close(load: &Load, users: Vec<User>) -> CloseFormView {
     CloseFormView {
         sold_at: today().to_string(),
         sell_terminal: load.destination.clone().unwrap_or_default(),
@@ -945,13 +983,13 @@ fn blank_close(load: &Load, users: Vec<User>, seller_id: i64) -> CloseFormView {
         selected: load.crates.iter().filter(|c| c.default_selected()).map(|c| c.id).collect(),
         shares: Vec::new(),
         users,
-        seller_id,
+        sold_by: load.submitted_by.to_string(),
         error: None,
     }
 }
 
 /// `GET /loads/:id/close`.
-pub async fn close_form(State(state): State<AppState>, user: CurrentUser, Path(id): Path<i64>) -> Response {
+pub async fn close_form(State(state): State<AppState>, _user: CurrentUser, Path(id): Path<i64>) -> Response {
     let load = match find_load(&state, id).await {
         Ok(l) => l,
         Err(r) => return r,
@@ -960,10 +998,10 @@ pub async fn close_form(State(state): State<AppState>, user: CurrentUser, Path(i
         return (StatusCode::CONFLICT, "That load is already sold.").into_response();
     }
     let users = repo::list_users(&state.pool).await.unwrap_or_default();
-    load_response(&state, id, LoadExtra::Close(blank_close(&load, users, user.id)), StatusCode::OK).await
+    load_response(&state, id, LoadExtra::Close(blank_close(&load, users)), StatusCode::OK).await
 }
 
-fn close_form_from(form: &FormData, users: Vec<User>, seller_id: i64) -> CloseFormView {
+fn close_form_from(form: &FormData, users: Vec<User>) -> CloseFormView {
     let n = form.count("share_to");
     CloseFormView {
         sold_at: form.get("sold_at").into(),
@@ -982,7 +1020,7 @@ fn close_form_from(form: &FormData, users: Vec<User>, seller_id: i64) -> CloseFo
             })
             .collect(),
         users,
-        seller_id,
+        sold_by: form.get("sold_by").into(),
         error: None,
     }
 }
@@ -998,7 +1036,14 @@ pub async fn close_load(State(state): State<AppState>, user: CurrentUser, Path(i
     }
     let users = repo::list_users(&state.pool).await.unwrap_or_default();
     let form = FormData::parse(&body);
-    let mut f = close_form_from(&form, users.clone(), user.id);
+    let mut f = close_form_from(&form, users.clone());
+    let seller = match pick_member(&f.sold_by, load.submitted_by, &users, "Sold by") {
+        Ok(id) => id,
+        Err(e) => {
+            f.error = Some(e);
+            return load_response(&state, id, LoadExtra::Close(f), StatusCode::UNPROCESSABLE_ENTITY).await;
+        }
+    };
 
     let parsed: Result<(String, String, SaleInput), String> = async {
         let sold_at = parse_date(&f.sold_at, today()).map_err(|e| format!("Sold on: {e}"))?;
@@ -1015,8 +1060,8 @@ pub async fn close_load(State(state): State<AppState>, user: CurrentUser, Path(i
             if !users.iter().any(|u| u.id == to_user) {
                 return Err(format!("Share {}: that crew member doesn't exist.", i + 1));
             }
-            if to_user == user.id {
-                return Err(format!("Share {}: you can't share with yourself -- the remainder is already yours.", i + 1));
+            if to_user == seller {
+                return Err(format!("Share {}: the seller can't share with themself -- the remainder is already theirs.", i + 1));
             }
             let paid_to = match opt(&s.paid_to) {
                 None => None,
@@ -1053,7 +1098,7 @@ pub async fn close_load(State(state): State<AppState>, user: CurrentUser, Path(i
             return load_response(&state, id, LoadExtra::Close(f), StatusCode::UNPROCESSABLE_ENTITY).await;
         }
     };
-    let sold_id = match repo::close_load(&state.pool, id, user.id, &sale, &sold_at, &sell_terminal).await {
+    let sold_id = match repo::close_load(&state.pool, id, seller, &sale, &sold_at, &sell_terminal).await {
         Ok(id) => id,
         Err(e) => {
             tracing::error!(error = %e, "failed to close load");
@@ -1069,8 +1114,10 @@ pub async fn close_load(State(state): State<AppState>, user: CurrentUser, Path(i
         return not_found("sale");
     };
     let kept_scu: u32 = sale.kept.iter().filter(|c| c.is_live()).map(|c| c.size_scu).sum();
+    let seller_name = users.iter().find(|u| u.id == seller).map(|u| u.display_name.clone()).unwrap_or_default();
     let banner = SaleFrag {
-        who_upper: user.display_name.to_uppercase(),
+        who_upper: seller_name.to_uppercase(),
+        kept_by_upper: (seller != user.id).then(|| user.display_name.to_uppercase()),
         profit_fmt: views::fmt_signed(sale.profit),
         profit_neg: sale.profit < 0.0,
         commodity_upper: sold.commodity.to_uppercase(),

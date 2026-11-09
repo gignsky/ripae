@@ -2,6 +2,7 @@
 //! 0.2 they are *suggestions, not gates* (ruled 8 Nov 2026): a name on the
 //! list is stored with the list's spelling, any other name is stored as
 //! typed (trimmed). The 0.4 UEX import is where names get reconciled.
+//! // TODO(0.4): UEX import fills `uex_id` and reconciles off-list names.
 
 use anyhow::Result;
 use sqlx::SqlitePool;

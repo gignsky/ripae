@@ -316,23 +316,6 @@ pub async fn list_users(pool: &SqlitePool) -> Result<Vec<User>> {
         .collect()
 }
 
-pub async fn find_user(pool: &SqlitePool, id: i64) -> Result<Option<User>> {
-    Ok(list_users(pool).await?.into_iter().find(|u| u.id == id))
-}
-
-pub async fn list_ships(pool: &SqlitePool) -> Result<Vec<Ship>> {
-    let rows = sqlx::query(
-        "SELECT id AS ship_id, manufacturer AS ship_manufacturer, name AS ship_name, short AS ship_short,
-         sc_cargo_slug AS ship_sc_cargo_slug, capacity_scu AS ship_capacity_scu, concept AS ship_concept
-         FROM ships ORDER BY name",
-    )
-    .fetch_all(pool)
-    .await?;
-    rows.iter()
-        .map(|r| row_to_ship(r, "ship_").map(|s| s.expect("ships.id is NOT NULL")))
-        .collect()
-}
-
 /// Case-insensitive lookup by the CSV spelling (`Hull-C`), trimmed.
 pub async fn find_ship_by_name(pool: &SqlitePool, name: &str) -> Result<Option<Ship>> {
     let row = sqlx::query(
@@ -792,7 +775,6 @@ mod tests {
         let hull = find_ship_by_name(&pool, "hull-c").await.unwrap().unwrap();
         assert_eq!(hull.name, "Hull-C");
         assert_eq!(hull.sc_cargo_slug, "hull-c");
-        assert_eq!(list_ships(&pool).await.unwrap().len(), 80);
 
         let id = create_voyage(
             &pool,
@@ -982,6 +964,28 @@ mod tests {
         let v = find_voyage(&pool, v.id).await.unwrap().unwrap();
         assert!(v.is_fully_sold());
         assert_eq!(v.loads.iter().find(|l| l.id == kept.id).unwrap().profit(), Some(-200.0));
+    }
+
+    #[tokio::test]
+    async fn a_run_kept_for_a_crewmate_is_theirs_to_buy_and_sell() {
+        // Gig does the bookkeeping; the voyage, its load and the sale are JT's.
+        let (pool, gig, jt) = test_pool().await;
+        let v = create_voyage(&pool, jt, &new_voyage(None), &[new_load("Laranite", vec![(1, 32)], None)])
+            .await
+            .unwrap();
+        let voyage = find_voyage(&pool, v).await.unwrap().unwrap();
+        assert_eq!(voyage.logged_by, jt);
+        let load = &voyage.loads[0];
+        assert_eq!(load.submitted_by, jt);
+        let sale = settle(
+            load,
+            &SaleInput { crate_ids: vec![load.crates[0].id], price_mode: PriceMode::Scu, price: 20.0, shares: vec![] },
+        )
+        .unwrap();
+        close_load(&pool, load.id, jt, &sale, "2026-11-09", "Area18 TDD").await.unwrap();
+        let all = list_voyages(&pool).await.unwrap();
+        assert_eq!(crate::stowage::model::board_credit(jt, &all), 320.0);
+        assert_eq!(crate::stowage::model::board_credit(gig, &all), 0.0);
     }
 
     #[tokio::test]

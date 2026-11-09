@@ -157,6 +157,8 @@ pub struct LedgerFrag {
 #[template(path = "partials/sale.html")]
 pub struct SaleFrag {
     pub who_upper: String,
+    /// The bookkeeper, when someone other than the seller recorded it.
+    pub kept_by_upper: Option<String>,
     pub profit_fmt: String,
     pub profit_neg: bool,
     pub commodity_upper: String,

@@ -1,6 +1,6 @@
 <tbody class="vhead ras" id="vhead-{{ v.id }}"{% if head_oob %} hx-swap-oob="true"{% endif %}>
   <tr class="voyage"><td colspan="10">
-    <span class="vmeta"><span><b>{{ v.label }}</b> · {{ v.date_short }}</span><span>Ship <b>{{ v.ship_name }}</b></span><span>Loads <b>{{ v.load_count }}</b></span><span>Stops <b>{{ v.stop_count }}</b></span><span>Logged by <b class="who">{{ v.logged_by_upper }}</b></span>
+    <span class="vmeta"><span{% if v.notes != "" %} title="{{ v.notes }}"{% endif %}><b>{{ v.label }}</b> · {{ v.date_short }}</span><span>Ship <b>{{ v.ship_name }}</b></span><span>Loads <b>{{ v.load_count }}</b></span><span>Stops <b>{{ v.stop_count }}</b></span><span>Logged by <b class="who">{{ v.logged_by_upper }}</b></span>
     <span class="actions">
       <button class="cmd" type="button" hx-get="/voyages/{{ v.id }}/edit" hx-target="#vhead-{{ v.id }}" hx-swap="outerHTML">Edit</button>
       <button class="cmd" type="button" title="Buy another commodity into this voyage" hx-get="/voyages/{{ v.id }}/loads/new" hx-target="#vhead-{{ v.id }}" hx-swap="outerHTML">Add load</button>
