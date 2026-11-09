@@ -292,6 +292,9 @@ pub struct Load {
     pub voyage_id: i64,
     pub submitted_by: i64,
     pub submitted_by_name: String,
+    /// Who bought it; unlike `submitted_by` it doesn't become the seller at close.
+    pub bought_by: i64,
+    pub bought_by_name: String,
     pub kind: LoadKind,
     pub commodity: String,
     /// The pickup, on a haul.
@@ -1384,6 +1387,8 @@ pub(crate) mod fixtures {
             voyage_id: 1,
             submitted_by: GIG,
             submitted_by_name: name_of(GIG),
+            bought_by: GIG,
+            bought_by_name: name_of(GIG),
             commodity: "Laranite".into(),
             kind: LoadKind::Trade,
             buy_terminal: "ArcCorp Mining Area 141".into(),

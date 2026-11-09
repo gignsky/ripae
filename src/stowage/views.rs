@@ -383,7 +383,7 @@ impl LoadFormView {
             stored_at: l.crates.iter().find_map(|c| c.stored_at.clone()).unwrap_or_default(),
             notes: l.notes.clone().unwrap_or_default(),
             show_status: true,
-            bought_by: l.submitted_by.to_string(),
+            bought_by: l.bought_by.to_string(),
             users: Vec::new(),
             error: None,
         }
@@ -403,6 +403,8 @@ pub struct VoyageFormView {
     /// Whose run it is (user id): they keep the remainder, so they hold no
     /// share and a new share row picks someone else.
     pub owner: String,
+    /// Also move the old owner's unsold loads to a new owner.
+    pub move_loads: bool,
     pub error: Option<String>,
 }
 
@@ -452,6 +454,8 @@ pub struct CloseFormView {
     /// Who sold it (user id): the load's buyer by default, any crew member
     /// when someone else is keeping the books.
     pub sold_by: String,
+    /// Who bought it (user id); only the sale editor offers it.
+    pub bought_by: String,
     pub error: Option<String>,
 }
 
