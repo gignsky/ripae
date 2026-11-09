@@ -45,6 +45,7 @@
         <label>Bought on<input type="date" name="bought_at" value="{{ f.bought_at }}" required /></label>
         <label>Ship<input type="text" name="ship" list="pick-ships" data-pick autocomplete="off" value="{{ f.ship }}" placeholder="no hull yet" /></label>
         <label>Notes<input type="text" name="notes" value="{{ f.notes }}" /></label>
+        <label>Logged by<select name="entered_by" title="Who typed this run in -- the bookkeeper, not necessarily whose run it is">{% for u in f.users %}<option value="{{ u.id }}"{% if f.entered_by == u.id.to_string() %} selected{% endif %}>{{ u.display_name|upper }}</option>{% endfor %}</select></label>
       </div>
       <span class="actions">
         <button class="cmd boxed" type="submit">Save</button>

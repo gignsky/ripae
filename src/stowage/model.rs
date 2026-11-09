@@ -294,6 +294,10 @@ pub struct Voyage {
     pub id: i64,
     pub logged_by: i64,
     pub logged_by_name: String,
+    /// Who typed it in (the bookkeeper), shown as "Logged by"; `logged_by`
+    /// is whose run it is.
+    pub entered_by: i64,
+    pub entered_by_name: String,
     pub ship: Option<Ship>,
     pub bought_at: String,
     pub notes: Option<String>,
@@ -1338,6 +1342,8 @@ pub(crate) mod fixtures {
             id,
             logged_by: owner,
             logged_by_name: name_of(owner),
+            entered_by: owner,
+            entered_by_name: name_of(owner),
             ship,
             bought_at: "2026-11-08".into(),
             notes: None,

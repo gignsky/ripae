@@ -19,6 +19,13 @@ version badge in the corner of the site shows.
   (or a sale that lowers it) is refused as probably swapped. The balances
   aren't kept; the load stores the lot price as usual.
 
+### Fixed
+- **"Logged by" names whoever typed the run in.** Keeping the books for a
+  crewmate used to mark the whole voyage as logged by them. Now the
+  voyage header shows the bookkeeper, and the loads' *By* column still
+  shows whose cargo it is. Voyages logged before this show their owner;
+  pick the right name under *Logged by* in the voyage's Edit form.
+
 ## 0.2.2
 
 ### Fixed
