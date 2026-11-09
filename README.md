@@ -140,5 +140,7 @@ Where the brief was silent, in order of appearance:
   is the only place that can populate the sale-leg columns the `sold` DB
   CHECK constraint requires.
 - **Validation errors return `422` with the form/page re-rendered**, never
-  a bare framework error page, per §5.
+  a bare framework error page, per §5. htmx 1.9 does not swap 4xx responses
+  unless told to, so `base.html` opts 422 back in via `htmx:beforeSwap`
+  (0.1.4); without it the inline forms swallowed every validation message.
 - **No password-rotation CLI** -- see "Rotating the seed passwords" above.
