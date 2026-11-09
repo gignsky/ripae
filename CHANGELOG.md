@@ -3,6 +3,27 @@
 Every notable change to Ripae. Newest first. This file is also what the
 version badge in the corner of the site shows.
 
+## 0.3.0
+
+### Added
+- **Sign in with Discord.** The splash's gate is now *Sign in with
+  Discord*: anyone in the NISC Discord server can get in, and the first
+  time you do, Ripae makes your account. There's no password to remember
+  and none to ask an officer for.
+- **Your Discord name and face.** Every time you sign in, your profile is
+  brought up to date from Discord: your Discord username is your handle,
+  your nickname in the NISC server (or your Discord display name, if you
+  haven't set one) is the name on the ledger and the leaderboard, and your
+  avatar sits on your service record, in phosphor green like everything
+  else.
+
+### Changed
+- **Accounts from before Discord are claimed once.** If you had a Ripae
+  account with a handle and password, open *Crew from before Discord?
+  Claim your account* on the gate and enter them once; Discord then links
+  that account to you, with all its voyages and standings. After that you
+  sign in with Discord, and the old password no longer works.
+
 ## 0.2.9
 
 ### Added
