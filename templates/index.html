@@ -44,7 +44,7 @@
         <input type="text" name="bought_at" placeholder="2954-01-15" required />
       </label>
       <label>Commodity
-        <input type="text" name="commodity" placeholder="Laranite" required />
+        <input type="text" name="commodity" list="pick-commodities" data-pick autocomplete="off" placeholder="Laranite" required />
       </label>
       <label>SCU
         <input type="number" step="0.01" min="0.01" name="scu" required />
@@ -55,13 +55,13 @@
     </div>
     <div class="grid">
       <label>Buy terminal
-        <input type="text" name="buy_terminal" placeholder="ArcCorp Mining Area 141" required />
+        <input type="text" name="buy_terminal" list="pick-terminals" data-pick autocomplete="off" value="{{ default_buy_terminal }}" placeholder="ArcCorp Mining Area 141" required />
       </label>
       <label>Destination (optional)
-        <input type="text" name="destination" />
+        <input type="text" name="destination" list="pick-terminals" data-pick autocomplete="off" />
       </label>
       <label>Ship (optional)
-        <input type="text" name="ship" />
+        <input type="text" name="ship" list="pick-ships" data-pick autocomplete="off" value="{{ default_ship }}" />
       </label>
     </div>
     <button type="submit">Log run</button>
@@ -96,4 +96,17 @@
     </tbody>
   </table>
 </section>
+
+{# Pick-lists for every data-pick input on the page, including htmx-swapped
+   edit/close rows. Native suggestions without JS; static/picker.js upgrades
+   them to a fuzzy-search dropdown. #}
+<datalist id="pick-commodities">
+  {% for name in commodities %}<option value="{{ name }}"></option>{% endfor %}
+</datalist>
+<datalist id="pick-terminals">
+  {% for name in terminals %}<option value="{{ name }}"></option>{% endfor %}
+</datalist>
+<datalist id="pick-ships">
+  {% for name in ships %}<option value="{{ name }}"></option>{% endfor %}
+</datalist>
 {% endblock %}

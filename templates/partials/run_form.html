@@ -15,7 +15,7 @@
           <input type="text" name="bought_at" value="{{ run.bought_at }}" required />
         </label>
         <label>Commodity
-          <input type="text" name="commodity" value="{{ run.commodity }}" required />
+          <input type="text" name="commodity" list="pick-commodities" data-pick autocomplete="off" value="{{ run.commodity }}" required />
         </label>
         <label>SCU
           <input type="number" step="0.01" min="0.01" name="scu" value="{{ run.scu }}" required />
@@ -23,21 +23,21 @@
       </div>
       <div class="grid">
         <label>Buy terminal
-          <input type="text" name="buy_terminal" value="{{ run.buy_terminal }}" required />
+          <input type="text" name="buy_terminal" list="pick-terminals" data-pick autocomplete="off" value="{{ run.buy_terminal }}" required />
         </label>
         <label>Buy price / SCU
           <input type="number" step="0.01" min="0" name="buy_price_scu" value="{{ run.buy_price_scu }}" required />
         </label>
         <label>Destination
-          <input type="text" name="destination" value="{{ run.destination_input }}" />
+          <input type="text" name="destination" list="pick-terminals" data-pick autocomplete="off" value="{{ run.destination_input }}" />
         </label>
         <label>Stored at
-          <input type="text" name="stored_at" value="{{ run.stored_at_input }}" />
+          <input type="text" name="stored_at" list="pick-terminals" data-pick autocomplete="off" value="{{ run.stored_at_input }}" />
         </label>
       </div>
       <div class="grid">
         <label>Ship
-          <input type="text" name="ship" value="{{ run.ship_input }}" />
+          <input type="text" name="ship" list="pick-ships" data-pick autocomplete="off" value="{{ run.ship_input }}" />
         </label>
         <label>Notes
           <input type="text" name="notes" value="{{ run.notes_input }}" />
