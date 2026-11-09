@@ -185,6 +185,18 @@ fn ledger_frag(l: &Ledger, oob: bool) -> String {
     render_str(&LedgerFrag { rows: ledger_rows(&l.voyages), oob })
 }
 
+/// `GET /live/panels` -- every live panel of the ledger screen, refetched
+/// when another crew member changes something (see `crate::live`).
+pub async fn live_panels(State(state): State<AppState>, _user: CurrentUser) -> Response {
+    match ledger(&state).await {
+        Ok(l) => html(
+            StatusCode::OK,
+            [totals_frag(&l, false), open_cargo_frag(&l, false), plans_frag(&l, false), ledger_frag(&l, false)].concat(),
+        ),
+        Err(r) => r,
+    }
+}
+
 fn head_frag(v: VoyageView, head_oob: bool) -> String {
     render_str(&VoyageHeadFrag { v, head_oob })
 }
