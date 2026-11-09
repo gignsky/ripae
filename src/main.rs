@@ -1,6 +1,8 @@
 mod auth;
+mod changelog;
 mod config;
 mod db;
+mod lookups;
 mod runs;
 mod templates;
 
@@ -42,6 +44,7 @@ async fn main() -> anyhow::Result<()> {
 
     let app = Router::new()
         .route("/healthz", get(healthz))
+        .route("/changelog", get(changelog::changelog))
         .route("/login", get(auth::login_form).post(auth::login))
         .route("/logout", post(auth::logout))
         .route("/", get(runs::index))

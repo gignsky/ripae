@@ -34,11 +34,11 @@ pub fn fmt_auec(amount: f64) -> String {
 }
 
 /// Flat, template-friendly view of a `Run` -- all display formatting
-/// (aUEC amounts, ownership) is resolved in Rust so the templates only ever
-/// do plain field access and `{% if %}` on booleans/options.
+/// (aUEC amounts, submitter name) is resolved in Rust so the templates only
+/// ever do plain field access and `{% if %}` on booleans/options.
 pub struct RunView {
     pub id: i64,
-    pub is_owner: bool,
+    pub submitted_by_name: String,
     pub status_label: &'static str,
     pub bought_at: String,
     pub commodity: String,
@@ -65,10 +65,10 @@ pub struct RunView {
 }
 
 impl RunView {
-    pub fn new(run: &Run, current_user_id: i64) -> Self {
+    pub fn new(run: &Run) -> Self {
         Self {
             id: run.id,
-            is_owner: run.submitted_by == current_user_id,
+            submitted_by_name: run.submitted_by_name.clone(),
             status_label: run.status.as_str(),
             bought_at: run.bought_at.clone(),
             commodity: run.commodity.clone(),
@@ -110,6 +110,21 @@ pub struct IndexTemplate {
     pub committed_fmt: String,
     pub realised_fmt: String,
     pub form_error: Option<String>,
+    /// Pick-lists, rendered once as `<datalist>`s that every form on the
+    /// page (including htmx-swapped edit/close rows) draws from.
+    pub commodities: Vec<String>,
+    pub terminals: Vec<String>,
+    pub ships: Vec<String>,
+    /// New-run defaults: the crew's last delivery point and last ship.
+    pub default_buy_terminal: String,
+    pub default_ship: String,
+}
+
+#[derive(Template)]
+#[template(path = "changelog.html")]
+pub struct ChangelogTemplate {
+    /// Rendered from our own CHANGELOG.md, so it's trusted HTML.
+    pub body: &'static str,
 }
 
 #[derive(Template)]

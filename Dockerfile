@@ -3,7 +3,7 @@
 # in this sandbox -- see flake.nix and README.md "Status".
 FROM rust:1-slim-bookworm AS builder
 WORKDIR /build
-COPY Cargo.toml Cargo.lock ./
+COPY Cargo.toml Cargo.lock build.rs CHANGELOG.md ./
 COPY src ./src
 COPY migrations ./migrations
 COPY templates ./templates
