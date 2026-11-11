@@ -6,8 +6,8 @@
     <label>Bought on<input type="date" name="bought_at" value="{{ new_run.bought_at }}" data-today required /></label>
     <label>Ship<input type="text" name="ship" list="pick-ships" data-pick autocomplete="off" value="{{ new_run.ship }}" placeholder="no hull yet" /></label>
     <label>Status<select name="voyage_status">
-      <option value="awaiting_pickup"{% if new_run.status == "awaiting_pickup" %} selected{% endif %}>Awaiting pickup</option>
-      <option value="aboard"{% if new_run.status == "aboard" || new_run.status == "" %} selected{% endif %}>In transit</option>
+      <option value="awaiting_pickup"{% if new_run.status == "awaiting_pickup" || new_run.status == "" %} selected{% endif %}>Awaiting pickup</option>
+      <option value="aboard"{% if new_run.status == "aboard" %} selected{% endif %}>In transit</option>
       <option value="stored"{% if new_run.status == "stored" %} selected{% endif %}>Stored</option>
     </select></label>
     <label>Stored at<input type="text" name="voyage_stored_at" list="pick-terminals" data-pick autocomplete="off" placeholder="—" value="{{ new_run.stored_at }}" /></label>

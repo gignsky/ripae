@@ -346,16 +346,10 @@ struct LoadParts {
 async fn parse_load_line(state: &AppState, f: &LoadFormView, boxes_editable: bool, existing_scu: u32) -> Result<LoadParts, String> {
     let commodity = opt(&f.commodity).ok_or("Commodity is required.")?;
     let (boxes, scu) = if boxes_editable {
+        // Crates define the SCU: it is always the boxes' total. Any `scu`
+        // field a client posts is ignored.
         let boxes = parse_boxes(&f.boxes).map_err(|e| format!("Boxes: {e}"))?;
         let total: u32 = boxes.iter().map(|(n, s)| n * s).sum();
-        if let Some(typed) = opt(&f.scu) {
-            let typed: f64 = typed.parse().map_err(|_| format!("SCU: \"{typed}\" isn't a number."))?;
-            if (typed - total as f64).abs() > 1e-9 {
-                return Err(format!(
-                    "SCU says {} but the boxes add up to {total} -- fix one or the other (crates define the SCU)."
-                , views::trim_num(typed)));
-            }
-        }
         (boxes, total)
     } else {
         (Vec::new(), existing_scu)
@@ -412,7 +406,8 @@ fn load_form_from(form: &FormData, i: usize) -> LoadFormView {
         reward: form.nth("reward", i).into(),
         commodity: form.nth("commodity", i).into(),
         boxes: form.nth("boxes", i).into(),
-        scu: form.nth("scu", i).into(),
+        // derived from the boxes, never read back from the post
+        scu: views::scu_from_boxes(form.nth("boxes", i)),
         price_mode: form.nth("price_mode", i).into(),
         price_scu: form.nth("price_scu", i).into(),
         price_lot: form.nth("price_lot", i).into(),
@@ -478,7 +473,8 @@ async fn render_index(state: &AppState, user: &CurrentUser, mode: SplashMode, ne
         bought_at: today().to_string(),
         logged_by: user.id.to_string(),
         ship: default_ship,
-        status: "aboard".into(),
+        // a run being logged at the terminal hasn't been loaded yet
+        status: "awaiting_pickup".into(),
         loads: vec![LoadFormView::blank(&default_terminal)],
         ..Default::default()
     });
@@ -1136,7 +1132,8 @@ pub async fn crate_where(State(state): State<AppState>, _user: CurrentUser, Path
     }
 }
 
-/// `POST /loads/:id/where` -- `[ALL ABOARD]` / `[ALL STORED]`.
+/// `POST /loads/:id/where` -- `[ALL ABOARD]` / `[ALL STORED]`, and the row's
+/// `[LOADED]` (`view=row`).
 pub async fn load_where(State(state): State<AppState>, _user: CurrentUser, Path(id): Path<i64>, body: String) -> Response {
     if let Err(r) = find_load(&state, id).await {
         return r;
@@ -1149,7 +1146,10 @@ pub async fn load_where(State(state): State<AppState>, _user: CurrentUser, Path(
                 tracing::error!(error = %e, "failed to move crates");
                 return (StatusCode::INTERNAL_SERVER_ERROR, "could not update crates").into_response();
             }
-            load_response(&state, id, LoadExtra::Manifest, StatusCode::OK).await
+            // the row's own [LOADED] button answers with the plain row; the
+            // manifest's buttons keep the manifest open
+            let extra = if form.get("view") == "row" { LoadExtra::None } else { LoadExtra::Manifest };
+            load_response(&state, id, extra, StatusCode::OK).await
         }
     }
 }
@@ -1543,6 +1543,14 @@ mod tests {
         assert_eq!(f.get("ship"), "Hull-C");
         assert_eq!(f.get("missing"), "");
         assert_eq!(f.nth("boxes", 5), "");
+    }
+
+    #[test]
+    fn a_posted_scu_is_ignored_for_the_boxes_total() {
+        let f = FormData::parse("boxes=2x32%2C+4x8&scu=999&boxes=3x8&boxes=bogus");
+        assert_eq!(load_form_from(&f, 0).scu, "96");
+        assert_eq!(load_form_from(&f, 1).scu, "24");
+        assert_eq!(load_form_from(&f, 2).scu, "");
     }
 
     #[test]

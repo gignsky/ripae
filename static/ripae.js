@@ -101,8 +101,10 @@
   /* ---- label every cell with its column header, so narrow screens can stack rows as cards ---- */
   function labelCards(root) {
     (root.matches && root.matches("table.cards") ? [root] : Array.prototype.slice.call(root.querySelectorAll ? root.querySelectorAll("table.cards") : [])).forEach(function (t) {
-      if (!t.tHead) return;
-      var hs = Array.prototype.map.call(t.tHead.rows[0].cells, function (c) { return c.textContent.trim(); });
+      // a table-wide thead, or (Open Cargo) the column-header row each voyage carries
+      var hr = t.tHead ? t.tHead.rows[0] : t.querySelector("tr.colhead");
+      if (!hr) return;
+      var hs = Array.prototype.map.call(hr.cells, function (c) { return c.textContent.trim(); });
       Array.prototype.forEach.call(t.tBodies, function (tb) {
         Array.prototype.forEach.call(tb.rows, function (r) {
           if (r.cells.length < hs.length) return;
@@ -196,18 +198,18 @@
     var bb = fields.querySelector("[name=balance_before]"), ba = fields.querySelector("[name=balance_after]");
     var boxes = fields.querySelector("[data-boxes]"), bcalc = fields.querySelector(".boxes-calc");
     if (!mode || !p || !l) return; // the close form has its own wiring
-    var scuTouched = !!(scu && scu.value);
+    // SCU is generated from the boxes (crates define it): a read-only figure
+    // the server derives again, so it is never typed or posted.
+    var scuVal = parseFloat(scu && scu.textContent) || 0;
     function recalcBoxes() {
       if (!boxes) return;
       var bs = parseBoxes(boxes.value); var tot = 0, cnt = 0; bs.forEach(function (b) { tot += b.n * b.size; cnt += b.n; });
-      if (!bs.length) { bcalc.textContent = "= —"; bcalc.classList.remove("bad"); return; }
-      if (!scuTouched || !scu.value) scu.value = tot;
-      var q = parseFloat(scu.value) || 0;
-      bcalc.innerHTML = "= <b>" + tot + "</b> SCU · " + cnt + " box" + (cnt === 1 ? "" : "es") + (q && q !== tot ? " · SCU field says " + q + " -- crates define the SCU" : "");
-      bcalc.classList.toggle("bad", !!q && q !== tot);
+      scuVal = tot;
+      if (scu) scu.textContent = bs.length ? String(tot) : "—";
+      bcalc.innerHTML = bs.length ? "= <b>" + tot + "</b> SCU · " + cnt + " box" + (cnt === 1 ? "" : "es") : "= —";
     }
     function recalcPrice() {
-      var q = parseFloat(scu && scu.value) || 0;
+      var q = scuVal;
       if (scuL) scuL.hidden = mode.value !== "scu"; if (lotL) lotL.hidden = mode.value !== "lot";
       balL.forEach(function (b) { b.hidden = mode.value !== "balance"; });
       if (mode.value === "scu" && scuL) { var per = parseFloat(p.value) || 0; scuL.querySelector(".calc").innerHTML = q && per ? "lot = <b>" + fmt(per * q) + "</b> · " + q + " SCU" : "lot = —"; }
@@ -220,7 +222,6 @@
       }
       else if (lotL) { var tot = parseFloat(l.value) || 0; lotL.querySelector(".calc").innerHTML = q && tot ? "per SCU = <b>" + fmt(tot / q) + "</b> · " + q + " SCU" : "per SCU = —"; }
     }
-    if (scu) scu.addEventListener("input", function () { scuTouched = true; recalcBoxes(); recalcPrice(); });
     if (boxes) boxes.addEventListener("input", function () { recalcBoxes(); recalcPrice(); });
     [mode, p, l, bb, ba].forEach(function (el) { if (el) { el.addEventListener("input", recalcPrice); el.addEventListener("change", recalcPrice); } });
     var status = fields.querySelector("[data-status]"), storedAt = fields.querySelector("[name=stored_at]");
@@ -235,6 +236,56 @@
     root.querySelectorAll(".fields").forEach(function (f) { if (f.querySelector("[data-mode]")) wireLine(f); });
   }
   document.addEventListener("htmx:load", function (e) { wireLines(e.detail && e.detail.elt); });
+
+  /* ---- keyboard flow: focus the first field of a form that opens, and put focus somewhere
+          sensible when an htmx swap takes away the element that had it ---- */
+  var FIELDS = "input:not([type=hidden]):not([readonly]):not([disabled]):not([tabindex='-1']), select:not([disabled]), textarea:not([disabled])";
+  function visible(el) { return !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length); }
+  function firstField(root) { return Array.prototype.filter.call(root.querySelectorAll(FIELDS), visible)[0] || null; }
+  // a swapped-in line is visibility:hidden until the raster lights it, and hidden things refuse focus
+  function focusSoon(el, tries) {
+    if (!el || !el.isConnected) return;
+    var a = document.activeElement;
+    if (tries && a && a !== document.body && a.isConnected) return; // the user has moved on
+    el.focus({ preventScroll: true });
+    if (document.activeElement !== el && (tries || 0) < 20) setTimeout(function () { focusSoon(el, (tries || 0) + 1); }, 60);
+  }
+  function focusFirstField(root) { var f = firstField(root); if (f) focusSoon(f); return !!f; }
+  function buttonsIn(root) { return Array.prototype.filter.call(root.querySelectorAll("button:not([disabled])"), visible); }
+  var lastTrigger = null, openers = {};
+  document.addEventListener("htmx:beforeRequest", function (e) {
+    var elt = e.detail && e.detail.elt, t = e.detail && e.detail.target;
+    if (!elt || !t || !t.id || t.id === "overlay") { lastTrigger = null; return; }
+    if (elt.tagName === "BUTTON" && !elt.closest("form")) {
+      var scope = document.getElementById(t.id);
+      lastTrigger = { scope: t.id, label: elt.textContent.trim(), index: scope ? buttonsIn(scope).indexOf(elt) : -1 };
+    } else lastTrigger = { scope: t.id, fromForm: true };
+  });
+  document.addEventListener("htmx:afterSettle", function (e) {
+    var trig = lastTrigger; lastTrigger = null;
+    if (!trig) return;
+    var a = document.activeElement;
+    var lost = !a || a === document.body || !a.isConnected;
+    var t = e.detail && e.detail.target, el = t && t.id ? document.getElementById(t.id) : null;
+    if (!el) return;
+    var form = el.querySelector("form");
+    if (form) {
+      // a form opened (or came back with an error): remember who opened it, start on its first field
+      if (!trig.fromForm) openers[trig.scope] = trig;
+      if (lost || !trig.fromForm || form.querySelector(".form-error")) focusFirstField(form);
+      return;
+    }
+    if (!lost) return;
+    // the form closed (saved or cancelled) or the trigger was replaced: back to the button that
+    // opened it, else the same button again, else the row's first command
+    var back = trig.fromForm ? openers[trig.scope] : trig;
+    delete openers[trig.scope];
+    var scope = (back && document.getElementById(back.scope)) || el;
+    var bs = buttonsIn(scope);
+    var hit = back && (bs.filter(function (b) { return b.textContent.trim() === back.label; })[0] || (back.index >= 0 && bs[back.index]));
+    var first = hit || scope.querySelector(".cmd:not([disabled])") || bs[0];
+    if (first) focusSoon(first);
+  });
 
   /* ---- New Run panel: [NEW RUN]/[CLOSE], add / remove load lines ---- */
   var panel = document.getElementById("newrun");
@@ -266,13 +317,14 @@
       // let the picker, the date default and the price wiring see the new line
       document.dispatchEvent(new CustomEvent("htmx:load", { detail: { elt: line } }));
       raster([line], true);
+      focusFirstField(line);
     }
     Array.prototype.forEach.call(loads.children, wireRemove); renumber();
     function open() {
       clear(); panel.classList.remove("collapsed"); body.hidden = false;
       toggle.setAttribute("aria-expanded", "true"); toggle.textContent = "Close";
       var lines = allLines(); lines.forEach(function (l) { l.classList.remove("lit", "flash"); });
-      timers = raster(lines, true, function () { var f = panel.querySelector("input"); if (f) f.focus({ preventScroll: true }); });
+      timers = raster(lines, true, function () { focusFirstField(panel); });
     }
     function close() {
       clear(); toggle.setAttribute("aria-expanded", "false"); toggle.textContent = "New run";

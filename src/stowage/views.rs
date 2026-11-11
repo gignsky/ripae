@@ -3,7 +3,7 @@
 //! `{% for %}`; nothing is computed in a template.
 
 use super::model::{
-    cluster_unassigned, format_boxes, sc_cargo_link, standings, stowage_order, Crate, Load,
+    cluster_unassigned, format_boxes, parse_boxes, sc_cargo_link, standings, stowage_order, Crate, Load,
     LoadStatus, ServiceRecord, Share, SortKey, Standing, Totals, User, Voyage, Whereabouts,
 };
 use crate::templates::fmt_auec;
@@ -11,6 +11,16 @@ use crate::templates::fmt_auec;
 // ---------------------------------------------------------------------------
 // formatting helpers
 // ---------------------------------------------------------------------------
+
+/// The SCU a typed crate mix adds up to, for the read-only SCU field of a
+/// load form; empty while the boxes don't parse. Crates define the SCU, so
+/// this is the only place the field's value comes from.
+pub fn scu_from_boxes(raw: &str) -> String {
+    match parse_boxes(raw) {
+        Ok(b) => b.iter().map(|(n, s)| n * s).sum::<u32>().to_string(),
+        Err(_) => String::new(),
+    }
+}
 
 /// `+748,800` / `−118,400` (typographic minus, as the mock has it).
 pub fn fmt_signed(amount: f64) -> String {
@@ -165,6 +175,9 @@ pub struct LoadView {
     pub is_haul: bool,
     /// A haul's promised payout, signed; empty when not given.
     pub reward_fmt: String,
+    /// The "Cost / reward" column for a haul: the contract reward, or what
+    /// the delivery paid when no reward was noted; empty when neither.
+    pub haul_reward_fmt: String,
     pub commodity_upper: String,
     pub scu: u32,
     pub scu_lost: u32,
@@ -183,6 +196,8 @@ pub struct LoadView {
     pub has_write_off: bool,
     /// Its voyage has other open loads, so `[DETACH]` means something.
     pub can_detach: bool,
+    /// Some live crate isn't aboard yet, so the row offers `[LOADED]`.
+    pub can_load: bool,
     pub by_upper: String,
     pub buy_price_scu_fmt: String,
     pub notes: String,
@@ -214,6 +229,7 @@ impl LoadView {
             voyage_id: l.voyage_id,
             is_haul: l.is_haul(),
             reward_fmt: l.reward.map(fmt_signed).unwrap_or_default(),
+            haul_reward_fmt: if l.is_haul() { l.reward.or_else(|| l.revenue()).map(fmt_signed).unwrap_or_default() } else { String::new() },
             commodity_upper: l.commodity.to_uppercase(),
             scu: l.scu(),
             scu_lost: l.scu_lost(),
@@ -235,6 +251,7 @@ impl LoadView {
             written_off_fmt: fmt_auec(l.written_off()),
             has_write_off: l.scu_lost() > 0,
             can_detach: false,
+            can_load: l.crates.iter().any(|c| c.is_live() && c.whereabouts != Whereabouts::Aboard),
             by_upper: l.submitted_by_name.to_uppercase(),
             buy_price_scu_fmt: fmt_price(l.buy_price_scu),
             notes: l.notes.clone().unwrap_or_default(),
@@ -351,7 +368,8 @@ impl LoadFormView {
             price_mode: "scu".into(),
             stop_no: "1".into(),
             terminal: terminal.into(),
-            status: "aboard".into(),
+            // bought cargo, or a contract just taken, still sits at the terminal
+            status: "awaiting_pickup".into(),
             ..Default::default()
         }
     }
@@ -887,6 +905,51 @@ mod tests {
         let f = LoadFormView::from_load(&l);
         assert_eq!(f.price_scu, "333.33");
         assert_eq!(f.price_lot, "1000");
+    }
+
+    #[test]
+    fn the_scu_field_is_the_boxes_total() {
+        assert_eq!(scu_from_boxes("2×32, 4x8"), "96");
+        assert_eq!(scu_from_boxes("1x32 2x32"), "96");
+        assert_eq!(scu_from_boxes(""), "");
+        assert_eq!(scu_from_boxes("2x12"), "");
+    }
+
+    #[test]
+    fn a_haul_shows_its_reward_in_the_cost_column() {
+        use crate::stowage::model::fixtures::{load, sold_load, sound};
+        use crate::stowage::model::LoadKind;
+        let trade = LoadView::new(&load(1, 10.0, vec![sound(1, 32)]), None);
+        assert_eq!(trade.haul_reward_fmt, "");
+        let mut h = load(2, 0.0, vec![sound(2, 32)]);
+        h.kind = LoadKind::Haul;
+        h.reward = Some(45_000.0);
+        assert_eq!(LoadView::new(&h, None).haul_reward_fmt, "+45,000");
+        h.reward = None;
+        assert_eq!(LoadView::new(&h, None).haul_reward_fmt, "");
+        // a delivered haul with no reward noted shows what the delivery paid
+        let mut d = sold_load(3, 1, 0.0, 1000.0, &[8], vec![]);
+        d.kind = LoadKind::Haul;
+        assert_eq!(LoadView::new(&d, None).haul_reward_fmt, "+8,000");
+    }
+
+    #[test]
+    fn a_new_load_waits_at_its_pickup_until_loaded() {
+        use crate::stowage::model::fixtures::{load, sound};
+        use crate::stowage::model::{Condition, Crate};
+        assert_eq!(LoadFormView::blank("Levski").status, "awaiting_pickup");
+        let waiting = |c: Crate| Crate { whereabouts: Whereabouts::AwaitingPickup, ..c };
+        let mut l = load(1, 10.0, vec![waiting(sound(1, 8)), waiting(sound(2, 8))]);
+        let v = LoadView::new(&l, Some("Hull-C"));
+        assert!(v.can_load);
+        assert_eq!(v.where_now, "awaiting pickup at ArcCorp Mining Area 141");
+        // where-now is derived from the buy / pickup terminal, so it follows an edit
+        l.buy_terminal = "Levski".into();
+        assert_eq!(LoadView::new(&l, None).where_now, "awaiting pickup at Levski");
+        // all aboard (a lost crate doesn't count): nothing left to load
+        l.crates[0].whereabouts = Whereabouts::Aboard;
+        l.crates[1].condition = Condition::Lost;
+        assert!(!LoadView::new(&l, None).can_load);
     }
 
     #[test]

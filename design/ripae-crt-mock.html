@@ -260,7 +260,7 @@ tr.manifest td{padding:.6rem 1.9rem .8rem;background:rgba(125,255,138,.03)}
   <section class="panel rs">
     <header><h2>Open Cargo</h2><span class="hint">Bought, not yet sold, grouped by voyage. Oldest first. Stop № is the order you mean to sell. Loads move between voyages with Merge and Detach.</span></header>
     <div class="tbl"><table class="cards">
-      <thead><tr><th>Voyage / commodity</th><th class="num">SCU</th><th>Boxes</th><th>Bought at</th><th>Status</th><th>Stop · bound for</th><th>Where now</th><th class="num">Cost</th><th>By</th><th>Cmd</th></tr></thead>
+      <thead><tr><th>Voyage / commodity</th><th class="num">SCU</th><th>Boxes</th><th>Bought at / pickup</th><th>Status</th><th>Stop · bound for</th><th>Where now</th><th class="num">Cost / reward</th><th>By</th><th>Cmd</th></tr></thead>
       <tbody>
         <!-- Voyage 1 -->
         <tr class="voyage" id="v7"><td colspan="10">
@@ -974,7 +974,7 @@ tr.manifest td{padding:.6rem 1.9rem .8rem;background:rgba(125,255,138,.03)}
       var ship=v.querySelectorAll('.vmeta > span > b')[1].textContent, who=v.querySelector('.vmeta .who').textContent;
       var row=document.createElement('tr'); row.className='line ras';
       row.innerHTML='<td>'+name+'</td><td class="num">'+q+'</td><td class="boxes">'+bs.map(function(x){return '<b>'+x.n+'</b>×'+x.size;}).join(' ')+'</td><td class="where" title="'+term+'">'+term.replace('Mining Facility ','').replace('Mining Area ','')+'</td><td><span class="status transit">In transit</span></td><td><span class="stop">'+stop+'</span>'+dest+'</td><td class="where">'+(ship==='—'?'— unassigned':"aboard "+who+"'s "+ship)+'</td><td class="num">'+fmt0(per*q)+'</td><td class="who">GIG</td><td><span class="actions"><button class="cmd" type="button">Edit</button><button class="cmd close-load" type="button">Close</button><button class="cmd crates" type="button">Crates</button><button class="cmd detach" type="button">Detach</button></span></td>';
-      var hs=['Voyage / commodity','SCU','Boxes','Bought at','Status','Stop · bound for','Where now','Cost','By','Cmd']; Array.prototype.forEach.call(row.cells,function(c,i){c.setAttribute('data-l',hs[i]);});
+      var hs=['Voyage / commodity','SCU','Boxes','Bought at / pickup','Status','Stop · bound for','Where now','Cost / reward','By','Cmd']; Array.prototype.forEach.call(row.cells,function(c,i){c.setAttribute('data-l',hs[i]);});
       var anchor=v.nextElementSibling; while(anchor&&!anchor.classList.contains('voyage'))anchor=anchor.nextElementSibling;
       window.raster([tr],false,function(){tr.remove(); v.parentNode.insertBefore(row,anchor); window.raster([row],true);
         var ls=[],n=v.nextElementSibling;while(n&&!n.classList.contains('voyage')){if(n.classList.contains('line'))ls.push(n);n=n.nextElementSibling;}
