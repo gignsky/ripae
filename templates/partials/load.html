@@ -3,14 +3,17 @@
     <td{% if l.notes != "" %} title="{{ l.notes }}"{% endif %}>{{ l.commodity_upper }}{% if l.is_haul %}<span class="kind-tag" title="Hauling contract">Haul</span>{% endif %}</td>
     <td class="num">{{ l.scu }}</td>
     <td class="boxes">{% for b in l.boxes %}<b>{{ b.0 }}</b>×{{ b.1 }} {% endfor %}{% if l.glitched_count > 0 %}<span class="glitch">· {{ l.glitched_count }} glitched</span>{% endif %}{% if l.lost_count > 0 %} <span class="loss">· {{ l.lost_count }} lost</span>{% endif %}</td>
-    <td class="where" title="{{ l.buy_terminal }}">{{ l.buy_terminal_short }}</td>
+    <td class="where" title="{% if l.pickup_stop > 0 %}Picked up at stop {{ l.pickup_stop }} · {% endif %}{{ l.buy_terminal }}">{% if l.pickup_stop > 0 %}<span class="stop">{{ l.pickup_stop }}</span>{% endif %}{{ l.buy_terminal_short }}</td>
     <td><span class="status {{ l.status_css }}">{{ l.status_label }}</span></td>
-    <td><span class="stop">{{ l.stop_no }}</span>{{ l.destination_label }}</td>
+    <td><span class="stop">{{ l.drop_label }}</span>{{ l.destination_label }}</td>
     <td class="where">{{ l.where_now }}</td>
-    {% if l.is_haul %}<td class="num pos" title="Contract reward, paid on delivery">{% if l.reward_fmt != "" %}{{ l.reward_fmt }}{% else %}—{% endif %}</td>{% else %}<td class="num">{{ l.cost_fmt }}<small class="per-scu">{{ l.buy_price_scu_fmt }} / SCU</small></td>{% endif %}
+    {% if l.is_haul %}<td class="num pos" title="Contract reward, paid on delivery">{% if l.haul_reward_fmt != "" %}{{ l.haul_reward_fmt }}{% else %}—{% endif %}<small class="per-scu">reward</small></td>{% else %}<td class="num">{{ l.cost_fmt }}<small class="per-scu">{{ l.buy_price_scu_fmt }} / SCU</small></td>{% endif %}
     <td class="who">{{ l.by_upper }}</td>
     <td><span class="actions">
       <button class="cmd" type="button" hx-get="/loads/{{ l.id }}/edit" hx-target="#load-{{ l.id }}" hx-swap="outerHTML">Edit</button>
+      {% if l.can_load %}
+      <button class="cmd" type="button" title="Every crate of this load is aboard now" hx-post="/loads/{{ l.id }}/where" hx-vals='{"whereabouts": "aboard", "view": "row"}' hx-target="#load-{{ l.id }}" hx-swap="outerHTML">Loaded</button>
+      {% endif %}
       <button class="cmd" type="button" hx-get="/loads/{{ l.id }}/close" hx-target="#load-{{ l.id }}" hx-swap="outerHTML">{% if l.is_haul %}Deliver{% else %}Close{% endif %}</button>
       {% if let crate::stowage::views::LoadExtra::Manifest = l.extra %}
       <button class="cmd on" type="button" hx-get="/loads/{{ l.id }}" hx-target="#load-{{ l.id }}" hx-swap="outerHTML">Crates</button>
@@ -96,7 +99,7 @@
       {% if l.glitched_count > 0 %}
       <label class="ras inline-label write-off"><input type="checkbox" name="write_off_glitched" value="1"{% if f.write_off_glitched %} checked{% endif %} /> Write off glitched crates I'm not selling -- they're marked lost instead of staying open on the voyage</label>
       {% endif %}
-      {% include "partials/sale_shares.html" %}
+      {% include "partials/sale_split.html" %}
       <div class="ras formfoot">
         <span class="actions"><button class="cmd boxed record" type="submit">{% if l.is_haul %}Record delivery{% else %}Record sale{% endif %}</button><button class="cmd cancel-close" type="button" hx-get="/loads/{{ l.id }}" hx-target="#load-{{ l.id }}" hx-swap="outerHTML">Cancel</button></span>
         <span class="note preview">profit = — · seller keeps —</span>

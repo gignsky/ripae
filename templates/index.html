@@ -2,26 +2,37 @@
 {% block content %}
 {{ totals_html|safe }}
 
-<section class="panel" id="open-cargo-panel">
-  <header><h2>Open Cargo</h2><span class="hint">Bought, not yet sold, grouped by voyage. Oldest first. Stop № is the order you mean to sell. Loads move between voyages with Merge and Detach.</span></header>
+{# The four panels start folded to their title bar (static/ripae.js). The
+   fold state lives on the <section>, which no swap replaces; htmx swaps
+   land inside .body. data-fold: "stay" opens on hover / focus / tap and
+   stays open until [HIDE]; "peek" (New Run) folds again when the pointer
+   leaves, unless it was clicked or typed into. #}
+<section class="panel fold" id="open-cargo-panel" data-fold="stay">
+  <header><h2><button class="bar" type="button" id="open-cargo-bar" aria-expanded="true" aria-controls="open-cargo-body">Open Cargo</button></h2><span class="hint">Bought, not yet sold, grouped by voyage. Oldest first. Each voyage flies a route; the numbers are the stops a load comes aboard (when not the start) and comes off at. [Next stop] moves a voyage along it. Loads move between voyages with Merge and Detach.</span><button class="cmd fold-hide" type="button" aria-controls="open-cargo-body">Hide</button></header>
+  <div class="body" id="open-cargo-body">
   {{ open_cargo_html|safe }}
+  </div>
 </section>
 
-<section class="panel" id="plans-panel">
-  <header><h2>Stowage Plan</h2><span class="hint">Live, from Open Cargo. Last stop loads first, deepest in the hold. Unassigned voyages bound the same way are offered as one.</span></header>
+<section class="panel fold" id="plans-panel" data-fold="stay">
+  <header><h2><button class="bar" type="button" id="plans-bar" aria-expanded="true" aria-controls="plans-body">Stowage Plan</button></h2><span class="hint">Live, from Open Cargo, leg by leg along each route. What comes off first sits by the door; what boards later goes on top of what is already aboard. Unassigned voyages bound the same way are offered as one.</span><button class="cmd fold-hide" type="button" aria-controls="plans-body">Hide</button></header>
+  <div class="body" id="plans-body">
   {{ plans_html|safe }}
+  </div>
 </section>
 
-<section class="panel{% if !new_run.open %} collapsed{% endif %}" id="newrun">
-  <header><h2>New Run</h2><button class="cmd" type="button" id="newrun-toggle" aria-expanded="{% if new_run.open %}true{% else %}false{% endif %}" aria-controls="newrun-body">{% if new_run.open %}Close{% else %}New run{% endif %}</button></header>
-  <div class="body" id="newrun-body"{% if !new_run.open %} hidden{% endif %}>
+<section class="panel fold{% if new_run.open %} pinned{% endif %}" id="newrun" data-fold="peek">
+  <header><h2><button class="bar" type="button" id="newrun-toggle" aria-expanded="true" aria-controls="newrun-body">New Run</button></h2><span class="hint">Hover to look, click to start a run.</span><button class="cmd fold-hide" type="button" aria-controls="newrun-body">Hide</button></header>
+  <div class="body" id="newrun-body">
     {% include "partials/new_run_form.html" %}
   </div>
 </section>
 
-<section class="panel" id="ledger-panel">
-  <header><h2>Ledger</h2><span class="hint">Sold loads, newest first. Route is buy terminal → sell terminal. aUEC throughout.</span></header>
+<section class="panel fold" id="ledger-panel" data-fold="stay">
+  <header><h2><button class="bar" type="button" id="ledger-bar" aria-expanded="true" aria-controls="ledger-body">Ledger</button></h2><span class="hint">Sold loads, newest first. Route is buy terminal → sell terminal. aUEC throughout.</span><button class="cmd fold-hide" type="button" aria-controls="ledger-body">Hide</button></header>
+  <div class="body" id="ledger-body">
   {{ ledger_html|safe }}
+  </div>
 </section>
 
 {# Pick-lists for every data-pick input on the page, including htmx-swapped

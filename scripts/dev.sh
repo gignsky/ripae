@@ -10,7 +10,9 @@
 # Sign in with handle + password. clean: lordgig / firstofficer; live: any
 # existing handle, every account's password is rewritten to the dev password
 # (the copy's Discord links are dropped, so no Discord set-up is needed).
-# Both are "changeme" unless RIPAE_DEV_PASSWORD says otherwise.
+# Both are "changeme" unless RIPAE_DEV_PASSWORD says otherwise. Either way
+# the gate also lists every account as a one-click sign-in
+# (RIPAE_DEV_QUICK_LOGIN), so the password is rarely needed.
 #
 # Other knobs: RIPAE_BIND (default 127.0.0.1:8080), RIPAE_DEV_HOST (ssh host
 # holding the live data, default spacedock).
@@ -22,7 +24,7 @@ while [ $# -gt 0 ]; do
   case $1 in
     clean|live) mode=$1 ;;
     --reset|--refresh) reset=1 ;;
-    -h|--help) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "dev.sh: unknown argument: $1 (try --help)" >&2; exit 2 ;;
   esac
   shift
@@ -63,6 +65,7 @@ unset RIPAE_DISCORD_CLIENT_ID RIPAE_DISCORD_CLIENT_SECRET RIPAE_DISCORD_GUILD_ID
 export RIPAE_BIND=${RIPAE_BIND:-127.0.0.1:8080}
 export RIPAE_DB_PATH=$db
 export RIPAE_COOKIE_SECURE=0
+export RIPAE_DEV_QUICK_LOGIN=1
 export RIPAE_SESSION_SECRET=$(head -c 64 /dev/urandom | base64 | tr -d '\n')
 if [ "$mode" = live ]; then
   export RIPAE_DEV_RESET_LOGINS=$password
