@@ -225,7 +225,7 @@ const run = async () => {
   check("JT's row carries his profit", (await page.textContent("#board tbody tr >> nth=0")).includes("+70,400"));
   check("recent shares shows the forfeit", (await page.textContent("#view-board")).includes("JT → LORD GIG"));
   const jtRow = () => page.locator("#board tbody tr", { hasText: "firstofficer" });
-  check("profit and collected differ by JT's forfeit", (await jtRow().locator("td.collected").textContent()).includes("+67,200"));
+  check("collected is what JT's sale took in, before cargo costs (48 × 9,000)", (await jtRow().locator("td.collected").textContent()).includes("+432,000"));
   check("JT's row shows what he forfeited", (await jtRow().locator("td.collected .forfeit").textContent()).includes("−3,200 forfeited"));
   check("Gig's row shows what was forfeited to him", (await page.locator("#board tbody tr", { hasText: "lordgig" }).locator(".forfeit-in").textContent()).includes("+3,200 from forfeits"));
   check("Profit and Collected headers explain themselves", (await page.getAttribute("#board th:has-text('Collected')", "title")).includes("Forfeited shares go to someone else"));

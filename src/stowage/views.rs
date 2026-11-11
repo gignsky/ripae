@@ -860,10 +860,10 @@ pub fn record_view(rec: &ServiceRecord, seed: u64) -> RecordView {
     };
     let txt = |label: &'static str, value: String| StatView { label, value, unit: String::new(), txt: true };
     let dash = || "—".to_string();
-    let mut stats = vec![fig("Lifetime profit", fmt_signed(rec.board_credit), "aUEC")];
-    if (rec.cash - rec.board_credit).abs() > 0.5 {
-        stats.push(fig("Cash position", fmt_signed(rec.cash), "aUEC"));
-    }
+    let mut stats = vec![
+        fig("Lifetime profit", fmt_signed(rec.board_credit), "aUEC"),
+        fig("Collected", fmt_signed(rec.cash), "aUEC"),
+    ];
     stats.extend([
         fig("Runs closed", rec.runs_closed.to_string(), ""),
         fig("Loads sold", rec.loads_sold.to_string(), ""),
@@ -977,7 +977,7 @@ mod tests {
         assert_eq!((gig.rank, gig.profit_fmt.as_str(), gig.cash_fmt.as_str()), (1, "+640", "0"));
         assert_eq!((gig.forfeited_fmt.as_str(), gig.pct_label.as_str(), gig.pct), ("−640 forfeited", "100%", 100));
         let jt = b.rows.iter().find(|r| r.user_id == JT).unwrap();
-        assert_eq!((jt.profit_fmt.as_str(), jt.cash_fmt.as_str(), jt.forfeits_in_fmt.as_str()), ("0", "+640", "+640 from forfeits"));
+        assert_eq!((jt.profit_fmt.as_str(), jt.cash_fmt.as_str(), jt.forfeits_in_fmt.as_str()), ("0", "+960", "+640 from forfeits"));
         assert!(!jt.dim, "a member who sold isn't idle even at 0 profit");
         let by_runs = board_view(&users(), &vs, SortKey::Runs);
         assert_eq!(by_runs.share_head, "Share of org runs");

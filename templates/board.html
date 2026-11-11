@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
 <section class="panel rs">
-  <header><h2>Crew Standings</h2><span class="hint">Closed sales only. Profit: credit for the run, net of shares. Collected: aUEC actually received. A forfeited share is profit for whoever earned it, collected by whoever got it.</span>
+  <header><h2>Crew Standings</h2><span class="hint">Closed sales only. Profit: credit for the run, net of shares. Collected: aUEC actually received, before cargo costs. A forfeited share is profit for whoever earned it, collected by whoever got it.</span>
     <nav class="actions sortby" aria-label="Sort crew standings">
       {% for k in board.sorts %}<a class="cmd{% if k.on %} on{% endif %}" href="/board?sort={{ k.key }}" data-go="board"{% if k.on %} aria-current="true"{% endif %}>{{ k.label }}</a>
       {% endfor %}</nav></header>
@@ -11,7 +11,7 @@
       <th scope="col">#</th>
       <th scope="col">Crew</th>
       <th scope="col" class="num{% if board.sort == "profit" %} sorted{% endif %}"{% if board.sort == "profit" %} aria-sort="descending"{% endif %} title="Credit for the run: kept as seller plus every share earned, forfeited or not, less lost cargo."><a href="/board?sort=profit" data-go="board">Profit</a></th>
-      <th scope="col" class="num{% if board.sort == "collected" %} sorted{% endif %}"{% if board.sort == "collected" %} aria-sort="descending"{% endif %} title="aUEC actually received: kept as seller plus shares paid to them, less lost cargo. Forfeited shares go to someone else."><a href="/board?sort=collected" data-go="board">Collected</a></th>
+      <th scope="col" class="num{% if board.sort == "collected" %} sorted{% endif %}"{% if board.sort == "collected" %} aria-sort="descending"{% endif %} title="aUEC actually received: sale takings as seller, less shares paid out, plus shares paid to them. Cargo costs and lost cargo don't come off it. Forfeited shares go to someone else."><a href="/board?sort=collected" data-go="board">Collected</a></th>
       <th scope="col" class="num{% if board.sort == "runs" %} sorted{% endif %}"{% if board.sort == "runs" %} aria-sort="descending"{% endif %} title="Voyages with every load sold that the member sold on or held a share of."><a href="/board?sort=runs" data-go="board">Runs</a></th>
       <th scope="col" class="num" title="Sold loads the member sold or held a share of.">Loads</th>
       <th scope="col" class="num{% if board.sort == "scu" %} sorted{% endif %}"{% if board.sort == "scu" %} aria-sort="descending"{% endif %} title="SCU sold on those loads."><a href="/board?sort=scu" data-go="board">SCU hauled</a></th>
