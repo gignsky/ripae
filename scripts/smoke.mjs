@@ -15,7 +15,9 @@
 // the profit → leaderboard → a crew name → service record → delete the
 // second voyage through the confirmation → gone. Then asserts no
 // horizontal scroll at 1280 / 760 / 400 px. Motion is reduced so the run is
-// deterministic; the raster itself has to be eyeballed.
+// deterministic; the raster itself has to be eyeballed. Opening / lands on
+// the splash (Continue as ...) and the ledger's panels start folded, so the
+// walk enters through it and hovers panels open before using them.
 
 import { createRequire } from "node:module";
 import { spawn } from "node:child_process";
@@ -92,17 +94,39 @@ async function fillLoadLine(line, f) {
   await line.locator("[name=destination]").fill(f.dest);
 }
 
+// Opening the site with a session lands on the splash; [CONTINUE AS ...] lets you in.
+async function enter(page) {
+  await page.waitForSelector("#g-continue", { state: "visible" });
+  await page.click("#g-continue");
+  await page.waitForSelector("#splash", { state: "hidden" });
+}
+
+// The ledger's panels start folded; hovering a title bar opens it (and Open Cargo,
+// Stowage Plan and Ledger stay open).
+async function openPanel(page, id) {
+  await page.hover(`#${id} > header .bar`);
+  await page.waitForSelector(`#${id}.open > .body`, { state: "visible" });
+}
+async function openPanels(page) {
+  for (const id of ["open-cargo-panel", "plans-panel", "ledger-panel"]) await openPanel(page, id);
+}
+
 async function newRun(page, ship, loads, crew) {
   await page.goto(base + "/");
+  await enter(page);
+  await openPanel(page, "open-cargo-panel");
   await page.click("#newrun-toggle");
-  await page.waitForSelector("#newrun-body:not([hidden])");
+  await page.waitForSelector("#newrun.open #newrun-body", { state: "visible" });
   if (crew) await page.selectOption("#newrun-form [name=logged_by]", { label: crew });
   await page.fill("#newrun-form [name=ship]", ship);
   for (let i = 1; i < loads.length; i++) await page.click("#add-load");
   const lines = page.locator("#loads .cargo-line");
   for (let i = 0; i < loads.length; i++) await fillLoadLine(lines.nth(i), loads[i]);
   await Promise.all([page.waitForURL(base + "/"), page.click("#newrun-form button[type=submit]")]);
-  await page.waitForSelector("#open-cargo");
+  await page.waitForSelector("#open-cargo", { state: "attached" });
+  check("Open Cargo stays open across the post-redirect reload", await page.isVisible("#open-cargo-panel.open #open-cargo"));
+  check("no splash after logging a run", await page.isHidden("#splash"));
+  await openPanels(page);
 }
 
 const run = async () => {
@@ -127,9 +151,43 @@ const run = async () => {
   await page.fill("#g-handle", GIG.handle);
   await page.fill("#g-pass", GIG.pw);
   await Promise.all([page.waitForURL(base + "/"), page.click("#g-enter")]);
-  await page.waitForSelector("#open-cargo");
+  await page.waitForSelector("#open-cargo", { state: "attached" });
   check("ledger visible after login", await page.isVisible("#open-cargo-panel"));
   check("rail names the crew member", (await page.textContent("#rail")).includes("LORD GIG"));
+  check("no splash straight after signing in at the gate", await page.isHidden("#splash"));
+  check("panels start folded to their title bar", !(await page.isVisible("#open-cargo")) && !(await page.isVisible("#newrun-form")) && !(await page.isVisible("#ledger")) && !(await page.isVisible("#plans")));
+  check("title bars are disclosure buttons", (await page.getAttribute("#open-cargo-bar", "aria-expanded")) === "false" && (await page.getAttribute("#open-cargo-bar", "aria-controls")) === "open-cargo-body");
+
+  // -- opening the site with a session lands on the splash --
+  await page.goto(base + "/");
+  await page.waitForSelector("#g-continue", { state: "visible" });
+  check("landing on / shows the splash with Continue", (await page.textContent("#g-continue")).includes("Continue as LORD GIG"));
+  await enter(page);
+  await page.goto(base + "/board");
+  check("a deep link skips the splash", await page.isHidden("#splash"));
+  await page.click("a[data-go=ledger]");
+  await page.waitForURL(base + "/");
+  check("the rail's Ledger link skips the splash", await page.isHidden("#splash"));
+
+  // -- hover: Open Cargo stays open; New Run peeks, and stays only once clicked --
+  await openPanel(page, "open-cargo-panel");
+  await page.mouse.move(5, 5);
+  check("Open Cargo stays open after the pointer leaves", await page.isVisible("#open-cargo"));
+  check("its bar says expanded", (await page.getAttribute("#open-cargo-bar", "aria-expanded")) === "true");
+  await page.hover("#newrun > header");
+  await page.waitForSelector("#newrun-form", { state: "visible" });
+  await page.mouse.move(5, 5);
+  await page.waitForSelector("#newrun-form", { state: "hidden" });
+  check("New Run folds again when the pointer leaves", true);
+  await page.click("#newrun-toggle");
+  await page.mouse.move(5, 5);
+  check("New Run stays open once clicked", await page.isVisible("#newrun-form"));
+  await page.click("#newrun .fold-hide");
+  check("[HIDE] folds New Run", !(await page.isVisible("#newrun-form")));
+  await page.click("#open-cargo-panel .fold-hide");
+  check("[HIDE] folds Open Cargo", !(await page.isVisible("#open-cargo")));
+  await page.focus("#ledger-bar");
+  check("focusing a bar opens it", await page.isVisible("#ledger"));
 
   // -- new run with two loads, one per lot --
   await newRun(page, "Hull-C", [
@@ -191,6 +249,7 @@ const run = async () => {
   await page.click("#overlay [data-dismiss]");
   await page.waitForSelector("#overlay", { state: "hidden" });
   check("ledger gained the sale", (await page.textContent("#ledger")).includes("+12,800"));
+  check("panels stay open through htmx swaps", (await page.isVisible("#open-cargo")) && (await page.isVisible("#ledger")) && (await page.isVisible("#plans")));
   check("first load left Open Cargo (lost crate rides along)", (await page.locator(`#${firstId}`).count()) === 0);
 
   // -- sell JT's load on JT's behalf: the close form defaults to the buyer --

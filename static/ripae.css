@@ -330,3 +330,15 @@ body::before{content:"";position:fixed;left:0;right:0;top:0;height:22vh;pointer-
 @media (prefers-reduced-motion:reduce){.scan,pre.scan{animation:none}body::after,.screen{animation:none}body::before{display:none}}
 /* ledger: eleven columns leave no room for side-by-side commands -- stack them so the Cmd column stays inside the panel */
 #ledger .actions{flex-direction:column;align-items:flex-start;gap:.2rem}
+/* folding panels (ledger screen): the title bar is a button; a folded panel is just its bar. Hovering, focusing
+   or tapping the bar flashes the body open -- a fast stepped wipe with a phosphor flare, no easing. */
+.panel>header .bar{all:unset;cursor:pointer;font:inherit;letter-spacing:inherit;text-transform:inherit}
+.panel>header .bar:focus-visible{background:var(--fg);color:var(--bg);text-shadow:none}
+.panel.fold>header .fold-hide{margin-left:auto}
+.panel.fold:not(.open)>header{border-bottom:0;cursor:pointer}
+.panel.fold:not(.open)>header .fold-hide{display:none}
+.panel.fold:not(.open)>header:hover{background:rgba(125,255,138,.06)}
+.js .panel.fold:not(.open)>.body{display:none}
+.panel.fold>.body.unfold{animation:unfold .26s steps(6,end)}
+@keyframes unfold{0%{clip-path:inset(0 0 100% 0);filter:brightness(2.4)}50%{filter:brightness(1.6)}70%{filter:brightness(.7)}100%{clip-path:inset(0);filter:none}}
+@media (prefers-reduced-motion:reduce){.panel.fold>.body.unfold{animation:none}}

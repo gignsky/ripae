@@ -74,6 +74,8 @@
     return out.filter(function (l) {
       if (l.classList.contains("lit") || l.hasAttribute("data-queued")) return false;
       if (l.closest("#splash, #overlay, template")) return false; // overlays run their own sequence
+      // a folded panel's lines are lit at once; unfolding has its own quick flash
+      if (l.closest(".panel.fold:not(.open) > .body")) { l.classList.add("lit"); return false; }
       // nested lines (e.g. .ras inside a .ras tbody) light with their parent
       var p = l.parentElement && l.parentElement.closest(SEL);
       if (p && out.indexOf(p) >= 0) { l.classList.add("lit"); return false; }
@@ -162,7 +164,7 @@
   /* ---- every panel header gets [HIDE]/[SHOW]; the body rasters out and in ---- */
   document.querySelectorAll(".panel > header").forEach(function (h) {
     var panel = h.parentNode;
-    if (panel.id === "newrun" || panel.classList.contains("record")) return;
+    if (panel.classList.contains("fold") || panel.classList.contains("record")) return;
     var b = document.createElement("button"); b.type = "button"; b.className = "cmd minbtn"; b.textContent = "Hide"; b.setAttribute("aria-expanded", "true"); h.appendChild(b);
     b.addEventListener("click", function () {
       var body = Array.prototype.slice.call(panel.children).filter(function (c) { return c !== h; });
@@ -236,14 +238,70 @@
   }
   document.addEventListener("htmx:load", function (e) { wireLines(e.detail && e.detail.elt); });
 
-  /* ---- New Run panel: [NEW RUN]/[CLOSE], add / remove load lines ---- */
+  /* ---- folding panels (the ledger screen): every panel starts as its title bar. Hover (a mouse), focus or a
+          tap on the bar flashes it open. data-fold="stay" panels stay open until [HIDE]; "peek" (New Run) folds
+          again when the pointer leaves unless it was clicked, focused into or typed into -- and never while one of
+          its fields has focus. State is a class on the <section>, which no htmx swap replaces. Open "stay"
+          panels are remembered for the tab (sessionStorage) and forgotten on entering through the splash. ---- */
+  var FOLD_KEY = "ripae.panels.open";
+  var folds = Array.prototype.slice.call(document.querySelectorAll(".panel.fold"));
+  function foldLoad() { try { return JSON.parse(sessionStorage.getItem(FOLD_KEY) || "[]"); } catch (e) { return []; } }
+  function foldSave() {
+    var ids = folds.filter(function (p) { return p.dataset.fold === "stay" && p.classList.contains("open"); }).map(function (p) { return p.id; });
+    try { sessionStorage.setItem(FOLD_KEY, JSON.stringify(ids)); } catch (e) {}
+  }
+  function setFold(p, on, animate) {
+    if (!on) p.classList.remove("pinned");
+    if (p.classList.contains("open") === on) return;
+    p.classList.toggle("open", on);
+    var bar = p.querySelector(".bar"); if (bar) bar.setAttribute("aria-expanded", on ? "true" : "false");
+    var body = p.querySelector(".body");
+    if (on && body && animate !== false && !reduce) { body.classList.remove("unfold"); void body.offsetWidth; body.classList.add("unfold"); }
+    if (p.dataset.fold === "stay") foldSave();
+  }
+  function foldAll() { folds.forEach(function (p) { setFold(p, false); }); }
+  function fieldFocused(p) { var a = document.activeElement; return !!(a && p.contains(a) && a.matches("input, select, textarea")); }
+  function peekClose(p) {
+    if (p.dataset.fold !== "peek" || p.classList.contains("pinned") || fieldFocused(p)) return;
+    setFold(p, false);
+  }
+  var hushFocus = false; // moving focus to the bar after [HIDE] must not unfold it again
+  var splashMode0 = (document.getElementById("splash") || { dataset: {} }).dataset.mode;
+  var keep = splashMode0 === "hidden" ? foldLoad() : []; // a landing (gate or welcome) starts folded
+  folds.forEach(function (p) {
+    var head = p.querySelector(":scope > header"), bar = p.querySelector(".bar"), hide = p.querySelector(".fold-hide");
+    var peek = p.dataset.fold === "peek";
+    p.classList.remove("open");
+    if (bar) bar.setAttribute("aria-expanded", "false");
+    if (keep.indexOf(p.id) >= 0 || p.classList.contains("pinned")) setFold(p, true, false);
+    head.addEventListener("pointerenter", function (e) { if (e.pointerType !== "touch") setFold(p, true); });
+    p.addEventListener("pointerleave", function (e) { if (e.pointerType !== "touch") peekClose(p); });
+    p.addEventListener("focusin", function (e) {
+      if (hushFocus) return;
+      setFold(p, true);
+      if (peek && e.target !== bar && e.target !== hide) p.classList.add("pinned");
+    });
+    p.addEventListener("focusout", function (e) {
+      if (peek && !(e.relatedTarget && p.contains(e.relatedTarget)) && !p.matches(":hover")) peekClose(p);
+    });
+    // a click (or tap) anywhere in it keeps it; typing in New Run does too
+    p.addEventListener("click", function (e) {
+      if (e.target.closest(".fold-hide, #newrun-cancel")) return;
+      setFold(p, true); p.classList.add("pinned");
+      if (peek && bar && e.target === bar) { var f = p.querySelector(".body input, .body select"); if (f) f.focus({ preventScroll: true }); }
+    });
+    p.addEventListener("input", function () { p.classList.add("pinned"); });
+    function hideIt() { setFold(p, false); if (bar && p.contains(document.activeElement)) { hushFocus = true; bar.focus({ preventScroll: true }); hushFocus = false; } }
+    if (hide) hide.addEventListener("click", hideIt);
+    var cancel = peek && p.querySelector("#newrun-cancel");
+    if (cancel) cancel.addEventListener("click", hideIt);
+  });
+  window.ripaeFoldAll = foldAll;
+
+  /* ---- New Run panel: add / remove load lines ---- */
   var panel = document.getElementById("newrun");
   if (panel) {
-    var toggle = document.getElementById("newrun-toggle"), cancel = document.getElementById("newrun-cancel");
-    var body = document.getElementById("newrun-body"), loads = document.getElementById("loads"), tpl = document.getElementById("load-tpl");
-    var timers = [];
-    function clear() { timers.forEach(clearTimeout); timers = []; }
-    function allLines() { return Array.prototype.slice.call(panel.querySelectorAll(".ras")); }
+    var loads = document.getElementById("loads"), tpl = document.getElementById("load-tpl");
     function renumber() {
       Array.prototype.forEach.call(loads.children, function (c, i) {
         c.querySelector(".ln").textContent = i + 1;
@@ -268,20 +326,7 @@
       raster([line], true);
     }
     Array.prototype.forEach.call(loads.children, wireRemove); renumber();
-    function open() {
-      clear(); panel.classList.remove("collapsed"); body.hidden = false;
-      toggle.setAttribute("aria-expanded", "true"); toggle.textContent = "Close";
-      var lines = allLines(); lines.forEach(function (l) { l.classList.remove("lit", "flash"); });
-      timers = raster(lines, true, function () { var f = panel.querySelector("input"); if (f) f.focus({ preventScroll: true }); });
-    }
-    function close() {
-      clear(); toggle.setAttribute("aria-expanded", "false"); toggle.textContent = "New run";
-      timers = raster(allLines(), false, function () { panel.classList.add("collapsed"); body.hidden = true; });
-    }
-    toggle.addEventListener("click", function () { panel.classList.contains("collapsed") ? open() : close(); });
-    if (cancel) cancel.addEventListener("click", close);
     var add = document.getElementById("add-load"); if (add) add.addEventListener("click", addLoad);
-    if (!panel.classList.contains("collapsed")) { allLines().forEach(function (l) { l.classList.add("lit"); }); }
   }
 
   /* ---- close form: crate picker, live preview, shares ---- */
@@ -488,19 +533,25 @@
         var t = 0;
         lines.forEach(function (l, i) { t += (reduce || instant) ? 0 : (i === lines.length - 1 ? 420 : 160); splashTimers.push(setTimeout(function () { boot.textContent += l + "\n"; }, t)); });
         splashTimers.push(setTimeout(function () {
-          raster(ps.slice(3), true, function () { var h = document.getElementById("g-discord") || document.getElementById("g-handle"); if (h && gate) h.focus({ preventScroll: true }); armed = true; });
+          raster(ps.slice(3), true, function () { var h = gate ? document.getElementById("g-discord") || document.getElementById("g-handle") : cont; if (h) h.focus({ preventScroll: true }); armed = true; });
         }, t + 150));
       });
     }
+    // entering (again) through the splash starts the ledger's panels folded
     function dismiss() {
       if (!armed) return; armed = false;
+      foldAll();
       raster(parts(), false, function () { splash.hidden = true; });
     }
+    var cont = document.getElementById("g-continue");
+    if (cont) cont.addEventListener("click", function (e) {
+      e.stopPropagation(); splashTimers.forEach(clearTimeout); splashTimers = []; armed = true; dismiss();
+    });
     // with a session, any key or click lets you through; without one, only the gate does
     ["click", "touchstart"].forEach(function (ev) {
       splash.addEventListener(ev, function (e) { if (mode0 !== "gate" && !e.target.closest(".cmd, button, a, input")) dismiss(); });
     });
-    document.addEventListener("keydown", function (e) { if (!splash.hidden && mode0 !== "gate" && e.key !== "Tab") dismiss(); });
+    document.addEventListener("keydown", function (e) { if (!splash.hidden && mode0 !== "gate" && e.key !== "Tab" && e.target.id !== "g-continue") dismiss(); });
     var replay = document.getElementById("replay-splash");
     // blur first: a Space/Enter on the still-focused button would otherwise re-run the splash on keyup
     if (replay) replay.addEventListener("click", function (e) { e.stopPropagation(); replay.blur(); runSplash(mode0 === "gate"); });
