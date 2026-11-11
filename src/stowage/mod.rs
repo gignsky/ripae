@@ -14,12 +14,12 @@ pub mod repo;
 pub mod views;
 
 use axum::extract::{Path, Query};
-use axum::http::{HeaderValue, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Redirect, Response};
 use serde::Deserialize;
 use tower_sessions::Session;
 
-use crate::auth::{take_splash_mode, CurrentUser, SplashMode};
+use crate::auth::{is_landing, take_splash_mode, CurrentUser, SplashMode};
 use crate::lookups::{self, Kind};
 use crate::templates::{
     render_str, BoardTemplate, ConfirmFrag, ConfirmLine, ConfirmWriteOffFrag, SaleOverlayFrag, VoyageOverlayFrag, IndexTemplate, LedgerFrag, LoadFrag,
@@ -520,8 +520,8 @@ fn pick_member(raw: &str, fallback: i64, users: &[User], what: &str) -> Result<i
 // GET /  -- the ledger terminal
 // ---------------------------------------------------------------------------
 
-pub async fn index(Db(state): Db, user: CurrentUser, session: Session) -> Response {
-    let mode = take_splash_mode(&session, &user).await;
+pub async fn index(Db(state): Db, user: CurrentUser, session: Session, headers: HeaderMap) -> Response {
+    let mode = take_splash_mode(&session, &user, is_landing(&headers)).await;
     render_index(&state, &user, mode, None).await
 }
 

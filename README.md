@@ -242,7 +242,7 @@ still a reasonable addition; not built here, kept to scope.
 - [x] Close per crate, price per SCU or per lot, shares by % or flat, forfeits, kept crates stay open.
 - [x] SALE banner with blackout; DELETE confirmation; HOORAY / WOMP WOMP + service record.
 - [x] Leaderboard sortable by profit / collected / runs / SCU, org totals, recent shares.
-- [x] Splash is the login; welcome once per session; `[CLOSE]` replays; `[LOG OUT]` on rail and splash.
+- [x] Splash is the login; opening the site lands on it (`[CONTINUE AS ...]`); `[CLOSE]` replays; `[LOG OUT]` on rail and splash.
 - [x] No horizontal scrollbar at 1280 / 760 / 400 px; cards under ~980 px.
 - [x] `cargo test` (65 tests incl. the proptest invariants of RIPAE-ROLL7.md §6); `scripts/smoke.mjs` passes.
 - [x] `CHANGELOG.md` 0.2.0; `Cargo.toml` 0.2.0; badge reads `v0.2.0`.
@@ -409,6 +409,25 @@ still hold come first.
   with a queued marker so a line is painted once whichever fires first; the
   `.ras` / `.rs` hiding rules are scoped to `html.js` so a page without the
   script still shows everything.
+- **Opening the site always lands on the splash** (0.3.1 roll 6). A `GET /`
+  that is a *landing* -- `Sec-Fetch-Site` other than `same-origin` (typed,
+  bookmarked, a link from Discord), or, without that header, no same-host
+  `Referer` -- plays the welcome splash with `[CONTINUE AS <NAME>]` (or any
+  key). Moves inside the site (the rail's nav, the redirect after a form
+  post) keep the old once-per-session rule, and the redirect straight after
+  signing in at the gate (Discord's included, via a one-shot session flag)
+  doesn't play it again. Deep links (`/board`) and htmx partials never show it.
+- **The ledger's four panels start folded** to their title bar on entering.
+  The bar is a `<button aria-expanded aria-controls>`; resting on it (mouse or
+  pen) for 200 ms, focusing it or tapping it unfolds the panel with a quick stepped wipe
+  (instant under reduced motion). Open Cargo, Stowage Plan and Ledger then
+  stay open until `[HIDE]`; New Run folds again 600 ms after the pointer leaves
+  unless it was clicked, focused into or typed into, and never while one of
+  its fields has focus. The bar never folds a panel (a hover-then-click
+  would otherwise shut it); `[HIDE]` does. State is a class on the
+  `<section>`, outside every htmx target, so swaps keep it; open panels are
+  remembered for the tab in `sessionStorage` (so the full reload after
+  logging a run keeps them) and forgotten whenever the splash is entered.
 - **Fonts are vendored** (`static/fonts/`, OFL 1.1) from Google's woff2
   builds; no Google Fonts request leaves the container.
 - **`nix flake check` in a sandbox that blocks GitHub tarballs**: override
