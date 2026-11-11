@@ -10,11 +10,13 @@
 </select></label>
 <label>Commodity<input name="commodity" type="text" list="pick-commodities" data-pick autocomplete="off" placeholder="LARANITE" value="{{ f.commodity }}" required /></label>
 {% if f.show_status && f.boxes != "" && f.status != "" || f.show_status && f.boxes != "" && f.status == "" %}
-<label>Boxes<input name="boxes" type="text" value="{{ f.boxes }}" readonly title="Change crates from the manifest" /><span class="calc boxes-calc">crates set from the manifest</span></label>
+<label>Boxes<input name="boxes" type="text" value="{{ f.boxes }}" readonly tabindex="-1" title="Change crates from the manifest" /><span class="calc boxes-calc">crates set from the manifest</span></label>
 {% else %}
 <label>Boxes<input name="boxes" type="text" placeholder="2×32, 4×8" value="{{ f.boxes }}" data-boxes required /><span class="calc boxes-calc">= —</span></label>
 {% endif %}
-<label>SCU<input name="scu" type="number" placeholder="0" value="{{ f.scu }}" data-scu /></label>
+{# Crates define the SCU: a generated, read-only figure with no name, so
+   it is never posted (the server derives it from the boxes) and no tab stop. #}
+<label>SCU · from boxes<output class="derived" data-scu aria-live="polite">{% if f.scu != "" %}{{ f.scu }}{% else %}—{% endif %}</output></label>
 <label class="trade-only">Price as<select name="price_mode" class="mode" data-mode>
   <option value="scu"{% if f.price_mode != "lot" && f.price_mode != "balance" %} selected{% endif %}>Per SCU</option>
   <option value="lot"{% if f.price_mode == "lot" %} selected{% endif %}>Per lot</option>

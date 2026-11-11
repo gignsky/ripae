@@ -92,6 +92,11 @@ function check(name, ok, detail = "") {
 async function fillLoadLine(line, f) {
   await line.locator("[name=commodity]").fill(f.commodity);
   await line.locator("[name=boxes]").fill(f.boxes);
+  if (f.scu) {
+    // SCU is generated from the boxes: read-only, never posted, no tab stop
+    check(`SCU reads ${f.scu} from boxes ${f.boxes}`, (await line.locator("[data-scu]").textContent()).trim() === f.scu);
+    check("SCU is not a form field", (await line.locator("[name=scu]").count()) === 0);
+  }
   await line.locator("[name=price_mode]").selectOption(f.mode);
   if (f.mode === "lot") await line.locator("[name=price_lot]").fill(f.price);
   else await line.locator("[name=price_scu]").fill(f.price);
@@ -158,6 +163,19 @@ const run = async () => {
   const loadRows = page.locator("#open-cargo tbody.load");
   check("two loads on the voyage", (await loadRows.count()) === 2, `${await loadRows.count()} rows`);
   check("per-lot buy stored and shown", (await page.textContent("#open-cargo")).includes("1,612,800"));
+  check("no table-wide header on Open Cargo", (await page.locator("#open-cargo thead").count()) === 0);
+  const colhead = page.locator("#open-cargo tbody.vhead tr.colhead").first();
+  const colText = (await colhead.textContent()).replace(/\s+/g, " ");
+  check("each voyage carries its own column headers", colText.includes("Bought at / pickup") && colText.includes("Cost / reward"), colText);
+  check("a new trade load waits at its buy terminal", (await loadRows.first().locator(".status").textContent()).trim() === "Awaiting pickup"
+    && (await loadRows.first().locator("td.where").nth(1).textContent()).includes("awaiting pickup at ArcCorp Mining Area 141"));
+  // [LOADED] on the Laranite, which boards at the start: every crate aboard in one click, no manifest
+  const laraId = await loadRows.first().getAttribute("id");
+  await page.locator(`#${laraId} .cmd`, { hasText: "Loaded" }).click();
+  await page.waitForSelector(`#${laraId} .status.transit`);
+  check("[LOADED] puts the load aboard", (await page.textContent(`#${laraId} td.where >> nth=1`)).includes("Hull-C") && !(await page.textContent(`#${laraId} td.where >> nth=1`)).includes("pickup")
+    && (await page.locator(`#${laraId} .cmd`, { hasText: "Loaded" }).count()) === 0
+    && (await page.locator(`#${laraId} tr.manifest`).count()) === 0, (await page.textContent(`#${laraId}`)).replace(/\s+/g, " "));
   check("stowage plan links sc-cargo.space for the hull", (await page.getAttribute("#plans a[href*='sc-cargo.space']", "href")).includes("hull-c-official"));
   check("the voyage header shows its route", (await page.textContent("#open-cargo tbody.vhead .vroute")).includes("Area18 TDD → Lorville TDD"));
   check("cargo picked up later waits for its stop", (await loadRows.nth(1).locator(".status").textContent()).trim() === "Awaiting pickup");
@@ -187,6 +205,44 @@ const run = async () => {
   check("run kept for JT is logged by its bookkeeper, Gig", (await jtHead.textContent()).includes("Logged by LORD GIG"));
   const jtLoad = page.locator("#open-cargo tbody.load").nth(2);
   check("its load says JT bought it", (await jtLoad.locator("td.who").textContent()).trim() === "JT");
+
+  // -- keyboard only: add a load to JT's voyage, Tab from field to field, Enter submits --
+  const jtHeadId = await jtHead.getAttribute("id");
+  const focused = () => page.evaluate(() => { const a = document.activeElement; return a ? a.getAttribute("name") || a.textContent.trim() : ""; });
+  await page.locator(`#${jtHeadId} .cmd`, { hasText: "Add load" }).focus();
+  await page.keyboard.press("Enter");
+  await page.waitForSelector(`#${jtHeadId} form`);
+  await page.waitForFunction(() => document.activeElement && document.activeElement.name === "kind");
+  check("add-load form opens on its first field", (await focused()) === "kind");
+  const order = [];
+  const tab = async (text) => { await page.keyboard.press("Tab"); order.push(await focused()); if (text) await page.keyboard.type(text); };
+  await tab("Gold");
+  await tab("2x8");
+  check("SCU follows the boxes as they are typed", (await page.textContent(`#${jtHeadId} [data-scu]`)).trim() === "16");
+  await tab();
+  await tab("5000");
+  // pickup, drop, buyer and status keep their defaults: the start, the last
+  // stop, the one logging it, awaiting pickup (stored-at shows only when stored)
+  await tab();
+  await tab();
+  await tab();
+  await tab();
+  await tab("keyboard only"); // notes, a text field: Enter submits from here
+  check("tab order follows the form, skipping the generated SCU", order.join(",") === "commodity,boxes,price_mode,price_scu,pickup,drop,bought_by,status,notes", order.join(","));
+  const before = await page.locator("#open-cargo tbody.load").count();
+  await page.keyboard.press("Enter");
+  await page.waitForFunction((n) => document.querySelectorAll("#open-cargo tbody.load").length === n + 1, before);
+  const gold = page.locator(`#open-cargo tbody.load`, { hasText: "GOLD" });
+  check("keyboard-entered load saved", (await gold.locator("td.num").first().textContent()).trim() === "16" && (await gold.textContent()).includes("80,000"));
+  await page.waitForFunction((id) => { const a = document.activeElement; return a && a.closest("#" + id) && a.textContent.trim() === "Add load"; }, jtHeadId);
+  check("focus returns to [ADD LOAD] after the save", true);
+  // delete it again, so JT's run can close and count on the board
+  const goldId = await gold.getAttribute("id");
+  await gold.locator(".cmd", { hasText: "Edit" }).click();
+  await page.locator(`#${goldId} .cmd`, { hasText: "Del load" }).click();
+  await page.waitForSelector("#overlay .cmd:has-text('Delete load')");
+  await page.locator("#overlay .cmd", { hasText: "Delete load" }).click();
+  await page.waitForSelector(`#${goldId}`, { state: "detached" });
 
   // -- crate manifest on the first load: one lost, one stored → SPLIT --
   const first = page.locator("#open-cargo tbody.load").first();
@@ -274,7 +330,7 @@ const run = async () => {
     await page.waitForSelector("#board");
     check(`by ${sort}: bar header follows the sort`, (await page.textContent("#board th.bar")).trim() === head);
     check(`by ${sort}: its sort command is lit`, (await page.getAttribute(".sortby a.on", "href")) === `/board?sort=${sort}` && (await page.getAttribute(".sortby a.on", "aria-current")) === "true");
-    if (sort === "runs") check("by runs: someone on every closed run reads 100%", (await page.textContent("#board tbody tr >> nth=0")).includes("100%"));
+    if (sort === "runs") check("by runs: someone on every closed run reads 100%", (await page.textContent("#board tbody tr >> nth=0")).includes("100%"), (await page.textContent("#board tbody")).replace(/\s+/g, " "));
     for (const w of [1280, 760, 400]) {
       await page.setViewportSize({ width: w, height: 900 });
       await page.waitForTimeout(100);

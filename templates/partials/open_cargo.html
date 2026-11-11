@@ -1,6 +1,8 @@
 <div class="tbl" id="open-cargo"{% if oob %} hx-swap-oob="true"{% endif %}>
   <table class="cards" id="open-cargo-table">
-    <thead><tr><th>Voyage / commodity</th><th class="num">SCU</th><th>Boxes</th><th>Bought at</th><th>Status</th><th>Stop · bound for</th><th>Where now</th><th class="num">Cost</th><th>By</th><th>Cmd</th></tr></thead>
+    {# No table-wide thead: every voyage's tbody (voyage_head.html) ends in
+       its own column-header row, so each voyage reads as one block and a
+       swap of #vhead-{id} re-renders its headers with it. #}
     {% for v in voyages %}
     {% include "partials/voyage_head.html" %}
     {% for l in v.loads %}

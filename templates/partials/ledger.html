@@ -1,6 +1,6 @@
 <div class="tbl" id="ledger"{% if oob %} hx-swap-oob="true"{% endif %}>
   <table class="cards">
-    <thead><tr><th>Commodity</th><th class="num">SCU sold</th><th>Route</th><th>Sold</th><th class="num">Sell / SCU</th><th class="num">Cost</th><th class="num">Profit</th><th class="num">Margin</th><th>Shares</th><th>By</th><th>Cmd</th></tr></thead>
+    <thead><tr><th>Commodity</th><th class="num">SCU sold</th><th>Route</th><th>Sold</th><th class="num">Sell / SCU</th><th class="num">Cost / reward</th><th class="num">Profit</th><th class="num">Margin</th><th>Shares</th><th>By</th><th>Cmd</th></tr></thead>
     <tbody>
       {% for r in rows %}
       <tr class="ras">
@@ -9,7 +9,7 @@
         <td class="route">{{ r.load.buy_terminal_short }}<span class="arr">→</span>{{ r.load.sell_terminal_short }}</td>
         <td>{{ r.load.sold_at_short }}</td>
         <td class="num">{{ r.load.sell_price_scu_fmt }}</td>
-        <td class="num">{{ r.load.cost_fmt }}</td>
+        {% if r.load.is_haul %}<td class="num pos" title="Contract reward, paid on delivery">{% if r.load.haul_reward_fmt != "" %}{{ r.load.haul_reward_fmt }}{% else %}—{% endif %}<small class="per-scu">reward</small></td>{% else %}<td class="num">{{ r.load.cost_fmt }}</td>{% endif %}
         <td class="num {% if r.load.profit_neg %}neg{% else %}pos{% endif %}">{{ r.load.profit_fmt }}</td>
         <td class="num {% if r.load.profit_neg %}neg{% else %}pos{% endif %}">{{ r.load.margin_fmt }}</td>
         <td class="who">{% for s in r.load.shares %}→ {{ s.to_name }} {{ s.paid_fmt }}{% if s.forfeited %} (to {{ s.paid_to_name }}){% endif %}{% if !loop.last %} · {% endif %}{% else %}—{% endfor %}</td>

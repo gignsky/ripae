@@ -7,10 +7,13 @@
     <td><span class="status {{ l.status_css }}">{{ l.status_label }}</span></td>
     <td><span class="stop">{{ l.drop_label }}</span>{{ l.destination_label }}</td>
     <td class="where">{{ l.where_now }}</td>
-    {% if l.is_haul %}<td class="num pos" title="Contract reward, paid on delivery">{% if l.reward_fmt != "" %}{{ l.reward_fmt }}{% else %}—{% endif %}</td>{% else %}<td class="num">{{ l.cost_fmt }}<small class="per-scu">{{ l.buy_price_scu_fmt }} / SCU</small></td>{% endif %}
+    {% if l.is_haul %}<td class="num pos" title="Contract reward, paid on delivery">{% if l.haul_reward_fmt != "" %}{{ l.haul_reward_fmt }}{% else %}—{% endif %}<small class="per-scu">reward</small></td>{% else %}<td class="num">{{ l.cost_fmt }}<small class="per-scu">{{ l.buy_price_scu_fmt }} / SCU</small></td>{% endif %}
     <td class="who">{{ l.by_upper }}</td>
     <td><span class="actions">
       <button class="cmd" type="button" hx-get="/loads/{{ l.id }}/edit" hx-target="#load-{{ l.id }}" hx-swap="outerHTML">Edit</button>
+      {% if l.can_load %}
+      <button class="cmd" type="button" title="Every crate of this load is aboard now" hx-post="/loads/{{ l.id }}/where" hx-vals='{"whereabouts": "aboard", "view": "row"}' hx-target="#load-{{ l.id }}" hx-swap="outerHTML">Loaded</button>
+      {% endif %}
       <button class="cmd" type="button" hx-get="/loads/{{ l.id }}/close" hx-target="#load-{{ l.id }}" hx-swap="outerHTML">{% if l.is_haul %}Deliver{% else %}Close{% endif %}</button>
       {% if let crate::stowage::views::LoadExtra::Manifest = l.extra %}
       <button class="cmd on" type="button" hx-get="/loads/{{ l.id }}" hx-target="#load-{{ l.id }}" hx-swap="outerHTML">Crates</button>
