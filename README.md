@@ -76,6 +76,10 @@ gives every account that password, drops its Discord link and clears stored
 sessions at boot, so you needn't set Discord up. The app refuses to start
 with it set alongside Discord sign-in.
 
+`RIPAE_DEV_QUICK_LOGIN=1` (which `dev.sh` always sets) adds a row of
+one-click sign-ins under the gate, one per account, no password. It too is
+refused alongside Discord sign-in.
+
 **One-time spacedock setup.** `/var/lib/ripae` is root-only, so the pull goes
 through a single sudo command that takes a consistent `sqlite3 .backup` into
 `~/.cache/ripae-snapshot.db` (`scripts/spacedock-snapshot.sh`). In the

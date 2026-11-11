@@ -161,6 +161,27 @@ pub async fn login(
     }
 }
 
+#[derive(Debug, Deserialize)]
+pub struct DevLoginForm {
+    pub user_id: i64,
+}
+
+/// `POST /login/dev` -- a one-click sign-in from the gate's account list.
+/// Only answers with `RIPAE_DEV_QUICK_LOGIN=1` (local dev).
+pub async fn dev_login(
+    State(state): State<AppState>,
+    session: Session,
+    Form(form): Form<DevLoginForm>,
+) -> Response {
+    if !state.dev_quick_login {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    match find_user_by_id(&state.pool, form.user_id).await {
+        Ok(Some(user)) => start_session(&state, &session, user.id).await,
+        _ => gate(&state, Some(DOOR_SHUT), StatusCode::UNAUTHORIZED).await,
+    }
+}
+
 /// Signs `user_id` in on a fresh session id and goes to the ledger.
 async fn start_session(state: &AppState, session: &Session, user_id: i64) -> Response {
     // a new id on sign-in, so a session id planted before it is worthless

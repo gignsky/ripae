@@ -67,6 +67,9 @@ pub struct Shell {
     /// This session is in test mode: the TEST banner shows, and the rail
     /// offers no `[ENTER TEST MODE]`.
     pub test_mode: bool,
+    /// `(id, handle, display name)` of every account, for the gate's
+    /// one-click sign-in; empty unless `RIPAE_DEV_QUICK_LOGIN=1`.
+    pub dev_logins: Vec<(i64, String, String)>,
 }
 
 // ---------------------------------------------------------------------------

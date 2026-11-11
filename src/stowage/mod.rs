@@ -109,6 +109,14 @@ pub async fn shell(
         },
         None => "RESTRICTED".to_string(),
     };
+    let dev_logins = if state.dev_quick_login && user.is_none() {
+        sqlx::query_as("SELECT id, handle, display_name FROM users ORDER BY id")
+            .fetch_all(&state.pool)
+            .await
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     let lines = [
         format!("RIPAE INTERFACE v{} ........ ONLINE", crate::changelog::VERSION),
         "LEDGER STORE ................... MOUNTED".to_string(),
@@ -127,6 +135,7 @@ pub async fn shell(
         gate_error,
         discord: state.discord.is_some(),
         test_mode: state.sandbox.is_some(),
+        dev_logins,
     }
 }
 

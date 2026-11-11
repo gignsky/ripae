@@ -33,6 +33,8 @@ pub struct AppState {
     /// The sandbox this request reads and writes, when `pool` is one
     /// (set by the `sandbox::Db` extractor; `None` on the router's state).
     pub sandbox: Option<String>,
+    /// One-click sign-in on the gate (see `Config::dev_quick_login`).
+    pub dev_quick_login: bool,
 }
 
 #[tokio::main]
@@ -72,12 +74,23 @@ async fn main() -> anyhow::Result<()> {
     };
     let sandboxes = Arc::new(sandbox::Sandboxes::new(sandbox::Sandboxes::dir_for(&config.db_path))?);
     sandboxes.spawn_sweeper(); // its first tick is the boot sweep
-    let state = AppState { pool, live: live::channel(), discord, sandboxes, sandbox: None };
+    if config.dev_quick_login {
+        tracing::warn!("RIPAE_DEV_QUICK_LOGIN is on: the gate signs anyone in without a password");
+    }
+    let state = AppState {
+        pool,
+        live: live::channel(),
+        discord,
+        sandboxes,
+        sandbox: None,
+        dev_quick_login: config.dev_quick_login,
+    };
 
     let app = Router::new()
         .route("/healthz", get(healthz))
         .route("/changelog", get(changelog::changelog))
         .route("/login", get(auth::login_form).post(auth::login))
+        .route("/login/dev", post(auth::dev_login))
         .route("/logout", post(auth::logout))
         .route("/auth/discord", get(auth::discord_start))
         .route("/auth/discord/callback", get(auth::discord_callback))

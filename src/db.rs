@@ -120,6 +120,7 @@ mod tests {
             cookie_secure: true,
             discord: None,
             dev_reset_logins: None,
+            dev_quick_login: false,
         }
     }
 

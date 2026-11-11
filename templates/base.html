@@ -120,6 +120,10 @@
           </div>
           {% if let Some(err) = shell.gate_error %}<p class="gate-err neg" id="g-err">{{ err }}</p>{% endif %}
           <p class="any"><button class="cmd boxed" type="submit" id="g-enter">Enter</button></p>
+          {% if !shell.dev_logins.is_empty() %}
+          {# RIPAE_DEV_QUICK_LOGIN (local dev): one click per account, no password #}
+          <p class="any" id="g-dev">Dev sign-in:{% for (id, handle, name) in shell.dev_logins %} <button class="cmd" type="submit" formaction="/login/dev" formnovalidate name="user_id" value="{{ id }}" title="{{ handle }}">{{ name }}</button>{% endfor %}</p>
+          {% endif %}
         </form>
         {% endif %}
         <div class="ras any" id="g-known"{% if shell.splash_mode == "gate" %} hidden{% endif %}>Welcome back, <b id="g-who">{{ shell.splash_who }}</b> · Press any key<span class="cursor"></span> · <form method="post" action="/logout" class="inline"><button class="cmd" type="submit" id="g-logout">Log out</button></form></div>
