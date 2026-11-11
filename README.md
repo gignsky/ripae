@@ -172,7 +172,7 @@ still a reasonable addition; not built here, kept to scope.
 - [x] Voyage → loads → crates; merge into / detach.
 - [x] Buy per SCU or per lot; both figures stored.
 - [x] Whereabouts per crate; derived load status incl. `SPLIT`; New Run stamps one status on every crate.
-- [x] Stop № and destination per load; Stowage Plan with the sc-cargo.space link.
+- [x] Stop № and destination per load; Stowage Plan with the sc-cargo.space link. (Since roll 4: a route per voyage, pickup and drop stops per load, the plan leg by leg.)
 - [x] Glitched and lost crates; lost SCU written off and shown.
 - [x] Close per crate, price per SCU or per lot, shares by % or flat, forfeits, kept crates stay open.
 - [x] SALE banner with blackout; DELETE confirmation; HOORAY / WOMP WOMP + service record.
@@ -299,3 +299,61 @@ still hold come first.
 - **`nix flake check` in a sandbox that blocks GitHub tarballs**: override
   the inputs to their `git+https://…?rev=…&shallow=1` forms; nothing in the
   flake itself changes.
+
+Routes (roll 4, migration 0011):
+
+- **A voyage flies a route**: a start (stop 0) and an ordered list of stops,
+  each a terminal (`voyage_stops`). Every load comes aboard at one stop
+  (`loads.pickup_stop`) and comes off at a later one (`loads.drop_stop`,
+  `NULL` = undecided: it rides to the end of the route). Stop № is gone from
+  the forms; `loads.stop_no` is kept in the table but no longer read.
+- **The route is the truth; `buy_terminal` / `destination` follow it.** The
+  forms pick stops, and the server writes the stop's terminal into the
+  load's `buy_terminal` / `destination` (what the ledger, the board and the
+  clustering read). Renaming a stop in Edit voyage renames it on every load
+  of the voyage, sold ones included.
+- **Voyages from before routes derive theirs on boot**
+  (`repo::backfill_routes`, run by `db::migrate` after the SQL migrations;
+  idempotent, only voyages with no stops). Start = the first load's buy
+  terminal; then any other buy terminal no load is bound for (picked up on
+  the way out, in load order); then the destinations by their old stop №.
+  A load boards at the first stop carrying its buy terminal before its
+  drop -- so cargo bought where other cargo is sold boards there -- and the
+  voyage is put at the furthest stop anything was already sold at. No
+  column is rewritten. Done in Rust rather than SQL so the rule is unit
+  tested (`model::derive_route`).
+- **The New Run start defaults to the crew's last delivery point** (what
+  the buy terminal used to default to) and the first load boards there; it
+  is editable, and any load, the main one included, may board at a later
+  stop. The New Run status applies to what boards at the start; a load
+  picked up at a later stop is stored as awaiting pickup.
+- **Stowage follows the route, leg by leg** (`model::stowage_legs`). The
+  hold is a stack. At each stop, cargo dropped there comes off first; cargo
+  boarding there goes **on top** of whatever is still aboard (it never
+  slides under cargo already aboard); loads boarding together go in
+  last-off first, larger crates first (the 0.2 `stowage_order`). If boarding
+  cargo comes off *after* something it now sits on, the plan doesn't pretend
+  otherwise: the leg shows a restow warning and the buried load is marked.
+  Depth labels per leg: the bottom entry is Deepest, the entries that come
+  off next Door side, the rest Mid hold. Each leg of a hulled voyage gets
+  its own sc-cargo.space link; the card's link is the leg the voyage is on.
+  Suggested (unmerged) cards stay a flat list -- their routes differ until
+  merged.
+- **`voyages.at_stop` is where the voyage is**; `[NEXT STOP ▸ …]` on the
+  header moves it on and puts aboard every open load picked up at or
+  before that stop that is still awaiting pickup. Edit voyage can set it
+  directly. Where-now reads the route: `… · 2 stops to go`, `… · unload
+  here`, `… · past its stop`, `awaiting pickup at … · 1 stop ahead`. Crate
+  whereabouts (aboard / stored / awaiting pickup) are still per crate --
+  stored and split cargo need them.
+- **Merging a load into another voyage places it on that voyage's route by
+  terminal**, adding its pickup and drop at the end when the route doesn't
+  reach them (`model::place_on_route`). Detaching copies the route, so the
+  load keeps its stops. Add Load and Edit load pick from the voyage's route;
+  a new stop is added in Edit voyage. A stop a sold load used can't be
+  removed or reordered past its pickup (422).
+- **Not built (yet):** splitting a load to sell parts at different stops
+  before it's sold -- a partial close already sells some crates at one
+  terminal and leaves the rest open for another. Ship tracking (whose ship,
+  where it's parked) is its own roll; `voyages.at_stop` and the route are
+  the groundwork for "where is this ship now".
