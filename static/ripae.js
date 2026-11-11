@@ -236,6 +236,78 @@
   }
   document.addEventListener("htmx:load", function (e) { wireLines(e.detail && e.detail.elt); });
 
+  /* ---- route editor (New Run, Edit voyage): stops, and every stop pick-list in step ---- */
+  var stopSeq = 0;
+  function shortTerminal(t) { return t.replace("Mining Facility ", "").replace("Mining Area ", ""); }
+  function routeRows(ed) { return Array.prototype.slice.call(ed.querySelectorAll(".route-stops > .route-stop")); }
+  // every row as {key, label}, start first -- labelled as views::stop_option_label spells it
+  function routeOptions(ed) {
+    return routeRows(ed).map(function (li, i) {
+      var t = (li.querySelector("[name=stop_terminal]").value || "").trim();
+      var name = t ? shortTerminal(t) : "—";
+      return { key: li.querySelector("[name=stop_key]").value, label: (i === 0 ? "Start · " : "Stop " + i + " · ") + name };
+    });
+  }
+  function fillPick(sel, opts) {
+    var kind = sel.getAttribute("data-stop-pick");
+    var want = sel.value || sel.getAttribute("data-sel") || "";
+    var list = kind === "drop" ? opts.slice(1) : opts;
+    var keys = list.map(function (o) { return o.key; });
+    sel.innerHTML = "";
+    if (kind === "drop") sel.appendChild(new Option("undecided", ""));
+    list.forEach(function (o) { sel.appendChild(new Option(o.label, o.key)); });
+    if (kind === "drop" && want === "" && sel.hasAttribute("data-fresh")) want = keys.length ? keys[keys.length - 1] : "";
+    if (want !== "" && keys.indexOf(want) < 0) want = kind === "drop" ? (keys.length ? keys[keys.length - 1] : "") : (keys[0] || "");
+    if (want === "" && kind !== "drop") want = keys[0] || "";
+    sel.value = want; sel.removeAttribute("data-fresh"); sel.setAttribute("data-sel", want);
+  }
+  function refreshRoute(ed) {
+    var rows = routeRows(ed);
+    rows.forEach(function (li, i) {
+      li.querySelector(".ln").textContent = i === 0 ? "Start" : i;
+      var inp = li.querySelector("[name=stop_terminal]");
+      inp.placeholder = i === 0 ? "where you start" : "terminal";
+      inp.setAttribute("aria-label", i === 0 ? "Start" : "Stop " + i);
+      var up = li.querySelector(".up"), rm = li.querySelector(".rm-stop");
+      if (up) up.hidden = i === 0; if (rm) rm.hidden = i === 0;
+    });
+    var form = ed.closest("form") || ed.parentNode, opts = routeOptions(ed);
+    form.querySelectorAll("select[data-stop-pick]").forEach(function (sel) { fillPick(sel, opts); });
+  }
+  function wireRoute(ed) {
+    if (ed.dataset.wired) { refreshRoute(ed); return; } ed.dataset.wired = "1";
+    var list = ed.querySelector(".route-stops"), tpl = ed.querySelector(".stop-tpl");
+    ed.addEventListener("click", function (e) {
+      var b = e.target.closest("button"); if (!b || !ed.contains(b)) return;
+      var li = b.closest(".route-stop");
+      if (b.hasAttribute("data-add-stop")) {
+        var row = tpl.content.firstElementChild.cloneNode(true);
+        row.querySelector("[name=stop_key]").value = "n" + Date.now().toString(36) + (stopSeq++);
+        row.classList.add("lit"); list.appendChild(row);
+        document.dispatchEvent(new CustomEvent("htmx:load", { detail: { elt: row } }));
+        refreshRoute(ed); row.querySelector("[name=stop_terminal]").focus();
+      } else if (b.classList.contains("rm-stop") && li && li.previousElementSibling) {
+        li.remove(); refreshRoute(ed);
+      } else if (b.classList.contains("up") && li && li.previousElementSibling) {
+        list.insertBefore(li, li.previousElementSibling); refreshRoute(ed);
+      }
+    });
+    // keep the labels in step with the terminals as they're typed or picked
+    ed.addEventListener("input", function (e) { if (e.target.name === "stop_terminal") refreshRoute(ed); });
+    ed.addEventListener("change", function (e) { if (e.target.name === "stop_terminal") refreshRoute(ed); });
+    refreshRoute(ed);
+  }
+  function wireRoutes(root) {
+    if (!root || !root.querySelectorAll) return;
+    var eds = Array.prototype.slice.call(root.querySelectorAll("[data-route]"));
+    // a load line added to a form that has a route: fill its pick-lists
+    var form = root.closest && root.closest("form");
+    var own = form && form.querySelector("[data-route]");
+    if (own && eds.indexOf(own) < 0) eds.push(own);
+    eds.forEach(wireRoute);
+  }
+  document.addEventListener("htmx:load", function (e) { wireRoutes(e.detail && e.detail.elt); });
+
   /* ---- New Run panel: [NEW RUN]/[CLOSE], add / remove load lines ---- */
   var panel = document.getElementById("newrun");
   if (panel) {
@@ -259,9 +331,8 @@
     }
     function addLoad() {
       var line = tpl.content.firstElementChild.cloneNode(true);
-      // the new line inherits the previous line's terminal
-      var prev = loads.lastElementChild;
-      if (prev) { var t = prev.querySelector("[name=terminal]"); var nt = line.querySelector("[name=terminal]"); if (t && nt) nt.value = t.value; }
+      // a new line is picked up at the start and dropped at the last stop (static/ripae.js route editor)
+      var dsel = line.querySelector("select[data-stop-pick=drop]"); if (dsel) dsel.setAttribute("data-fresh", "1");
       loads.appendChild(line); wireRemove(line); renumber();
       // let the picker, the date default and the price wiring see the new line
       document.dispatchEvent(new CustomEvent("htmx:load", { detail: { elt: line } }));

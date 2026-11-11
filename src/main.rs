@@ -88,6 +88,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/voyages/{id}/edit", get(stowage::voyage_edit_form))
         .route("/voyages/{id}/merge", get(stowage::voyage_merge_chooser))
         .route("/voyages/{id}/move", post(stowage::voyage_move))
+        .route("/voyages/{id}/advance", post(stowage::voyage_advance))
         .route("/voyages/{id}/delete", get(stowage::voyage_delete_confirm))
         .route("/voyages/{id}/loads", post(stowage::add_load))
         .route("/voyages/{id}/loads/new", get(stowage::add_load_form))
