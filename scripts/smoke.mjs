@@ -502,6 +502,12 @@ const run = async () => {
 
   // -- no horizontal scroll at any width --
   await noScroll(page, "");
+  // -- and the screen fills a wide window rather than stopping at a fixed width --
+  await page.setViewportSize({ width: 1920, height: 900 });
+  await page.waitForTimeout(150);
+  const fill = await page.evaluate(() => [document.querySelector(".screen").getBoundingClientRect().width, document.documentElement.clientWidth]);
+  check("the screen fills a 1920px window", fill[0] >= fill[1] - 2 * Math.max(16, fill[1] * 0.015) - 1, `${fill[0]} of ${fill[1]}`);
+  await page.setViewportSize({ width: 1280, height: 900 });
 
   // -- test mode: a sandbox for this session only; discard, then keep --
   await page.setViewportSize({ width: 1280, height: 900 });

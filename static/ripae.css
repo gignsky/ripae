@@ -30,13 +30,14 @@ html,body{margin:0}
 body{
   background:var(--bg);color:var(--fg);font-family:var(--mono);font-size:15px;line-height:1.4;
   padding-block:1.25rem 3rem;
-  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));
+  padding-left:max(16px,1.5vw,env(safe-area-inset-left,0px));padding-right:max(16px,1.5vw,env(safe-area-inset-right,0px));
   text-shadow:var(--glow);font-variant-numeric:tabular-nums;min-height:100%;
 }
 body::after{content:"";position:fixed;inset:0;pointer-events:none;z-index:50;
   background:repeating-linear-gradient(0deg,rgba(0,0,0,0) 0 2px,rgba(0,0,0,.22) 2px 3px),
              radial-gradient(ellipse at center,rgba(0,0,0,0) 55%,rgba(0,0,0,.55) 100%);}
-.screen{max-width:1180px;margin:0 auto;display:grid;gap:1.1rem}
+/* the screen fills the browser window at any size; the body's side padding is the only gutter */
+.screen{margin:0 auto;display:grid;gap:1.1rem}
 a{color:inherit}
 h1,h2,h3{margin:0;font-weight:400;text-wrap:balance}
 .rail{display:flex;flex-wrap:wrap;justify-content:space-between;gap:.4rem 1.5rem;border-bottom:1px solid var(--fg-dim);padding-bottom:.5rem;text-transform:uppercase;letter-spacing:.08em}
