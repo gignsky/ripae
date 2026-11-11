@@ -1,5 +1,5 @@
 <section class="totals rs" id="totals" aria-label="Totals"{% if oob %} hx-swap-oob="true"{% endif %}>
   <div class="tile"><div class="lbl">Committed · afloat</div><div class="val">{{ t.committed_fmt }}<small>aUEC</small></div></div>
-  <div class="tile"><div class="lbl">Realised · net of losses</div><div class="val">{{ t.realised_fmt }}<small>aUEC</small></div></div>
+  <div class="tile"><div class="lbl">Realised · net of losses</div><div class="val{% if t.realised_neg %} neg{% endif %}">{{ t.realised_fmt }}<small>aUEC</small></div></div>
   <div class="tile sub"><div class="lbl">Open voyages · loads</div><div class="val">{{ t.open_voyages }} <small>· {{ t.open_loads }} load{% if t.open_loads != 1 %}s{% endif %} · {{ t.open_scu }} SCU</small></div></div>
 </section>

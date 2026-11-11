@@ -466,6 +466,9 @@ pub struct CloseFormView {
 pub struct TotalsView {
     pub committed_fmt: String,
     pub realised_fmt: String,
+    /// Realised is a net loss: shown in red, the one exception to the
+    /// green-on-black rule on the totals tiles.
+    pub realised_neg: bool,
     pub open_voyages: usize,
     pub open_loads: usize,
     pub open_scu: u32,
@@ -476,6 +479,7 @@ impl TotalsView {
         Self {
             committed_fmt: fmt_auec(t.committed),
             realised_fmt: fmt_auec(t.realised),
+            realised_neg: t.realised.round() < 0.0,
             open_voyages: t.open_voyages,
             open_loads: t.open_loads,
             open_scu: t.open_scu,
