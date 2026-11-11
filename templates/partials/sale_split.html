@@ -1,0 +1,25 @@
+{# How a sale splits, read-only: the voyage crew's terms (set on the voyage,
+   [EDIT CREW] opens it) less the seller's own, which the live preview
+   skips as the seller changes. The sale editor also shows the shares as
+   recorded and offers to re-split by the crew instead. Expects `f:
+   CloseFormView`; static/ripae.js pays the lines out in the preview. #}
+<div class="ras sub-h"><span>Split · voyage crew <button class="cmd" type="button" hx-get="/voyages/{{ f.voyage_id }}/details" hx-target="#overlay" hx-swap="innerHTML" title="Who's aboard and their cut of every sale is set on the voyage">Edit crew</button></span><span>The seller keeps the remainder; their own cut doesn't apply. Nothing is owed on a loss.</span></div>
+{% if f.editing %}
+<div class="ras sale-shares split-lines recorded"{% if f.resplit %} hidden{% endif %}>
+  {% for s in f.recorded %}
+  <div class="split-line" data-user="{{ s.user_id }}" data-pct="{{ s.pct }}" data-flat="{{ s.flat }}"><span>→ {{ s.name_upper }} <span class="who">{{ s.terms }}{% if s.reason != "" %} · {{ s.reason }}{% endif %}{% if s.forfeit_upper != "" %} · forfeited to {{ s.forfeit_upper }}{% endif %}</span></span><span class="who">as recorded</span></div>
+  {% else %}
+  <div><span class="who">No shares were paid on this sale.</span></div>
+  {% endfor %}
+</div>
+{% endif %}
+<div class="ras sale-shares split-lines crew-split" data-skip-seller="1"{% if f.editing && !f.resplit %} hidden{% endif %}>
+  {% for s in f.crew %}
+  <div class="split-line" data-user="{{ s.user_id }}" data-pct="{{ s.pct }}" data-flat="{{ s.flat }}"><span>→ {{ s.name_upper }} <span class="who">{{ s.terms }}{% if s.reason != "" %} · {{ s.reason }}{% endif %}{% if s.forfeit_upper != "" %} · forfeited to {{ s.forfeit_upper }}{% endif %}</span></span><span class="who seller-tag" hidden>sells · keeps the rest</span></div>
+  {% else %}
+  <div><span class="who">No crew on this voyage yet.</span></div>
+  {% endfor %}
+</div>
+{% if f.editing %}
+<label class="ras inline-label"><input type="checkbox" name="resplit" value="1" class="resplit"{% if f.resplit %} checked{% endif %} /> Re-split this sale by the voyage crew's terms as they stand now (otherwise its own shares are paid again on the corrected profit)</label>
+{% endif %}

@@ -10,9 +10,9 @@
 //
 // Walks the whole 0.2 story: gate login → ledger → new run with two loads
 // (one priced per lot) → a second run → crate manifest: one crate lost, one
-// stored → status reads SPLIT → close the first load selling two crates
-// with a 25 % share forfeited to the other crew member → SALE banner shows
-// the profit → leaderboard → a crew name → service record → delete the
+// stored → status reads SPLIT → put the other crew member on the voyage's
+// crew on 25 %, forfeited back to the owner → close the first load selling
+// two crates under that split → SALE banner shows the profit → leaderboard → a crew name → service record → delete the
 // second voyage through the confirmation → gone. Then asserts no
 // horizontal scroll at 1280 / 760 / 400 px. Motion is reduced so the run is
 // deterministic; the raster itself has to be eyeballed.
@@ -168,7 +168,22 @@ const run = async () => {
   check("status reads SPLIT", (await page.textContent(`#${firstId} .status`)).trim() === "Split");
   check("where-now lists both groups", (await page.textContent(`#${firstId} td.where >> nth=1`)).includes("stored at Everus Harbor"));
 
-  // -- close the first load: two crates, 25 % share to JT forfeited to Gig --
+  // -- the voyage's crew: JT aboard on 25 % of every sale, forfeited to Gig --
+  const firstHead = await page.locator("#open-cargo tbody.vhead").first().getAttribute("id");
+  await page.locator(`#${firstHead} .cmd`, { hasText: "Edit" }).click();
+  await page.waitForSelector(`#${firstHead} form.crew-form`);
+  check("the owner is on the crew from the start", (await page.locator(`#${firstHead} .crew-row`).count()) === 1);
+  await page.click(`#${firstHead} .add-crew`);
+  const jtRow = page.locator(`#${firstHead} .crew-rows .crew-row`).nth(1);
+  await jtRow.locator("[name=crew_user]").selectOption({ label: "JT" });
+  await jtRow.locator("[name=crew_pct]").fill("25");
+  await jtRow.locator("[name=crew_paid_to]").selectOption({ label: "LORD GIG" });
+  await page.click(`#${firstHead} form.crew-form button[type=submit]`);
+  await page.waitForSelector(`#${firstHead} .crew-line`);
+  await page.waitForFunction((id) => !document.querySelector(`#${id} form.crew-form`), firstHead);
+  check("voyage header lists the crew and the split", (await page.textContent(`#${firstHead} .crew-line`)).includes("JT 25% → LORD GIG"));
+
+  // -- close the first load: two crates, split by the crew --
   await page.locator(`#${firstId} .cmd`, { hasText: "Close" }).click();
   await page.waitForSelector(`#${firstId} form.close-form`);
   const picks = page.locator(`#${firstId} label.crate input`);
@@ -176,12 +191,11 @@ const run = async () => {
   check("two sound crates pre-selected", (await picks.nth(1).isChecked()) && (await picks.nth(2).isChecked()));
   await page.fill(`#${firstId} [name=sell_terminal]`, "Area18 TDD");
   await page.fill(`#${firstId} [name=sell_scu]`, "3600");
-  await page.click(`#${firstId} .add-share`);
-  await page.waitForSelector(`#${firstId} .share`);
-  await page.selectOption(`#${firstId} [name=share_to]`, { label: "JT" });
-  await page.fill(`#${firstId} [name=share_amount]`, "25");
-  await page.selectOption(`#${firstId} [name=share_paid_to]`, { label: "LORD GIG" });
-  check("live preview computes the profit", (await page.textContent(`#${firstId} .preview`)).includes("+12,800"));
+  const split = await page.textContent(`#${firstId} .crew-split`);
+  check("close form shows the crew's split", split.includes("JT") && split.includes("25% of profit") && split.includes("forfeited to LORD GIG"));
+  check("no per-sale share editor any more", (await page.locator(`#${firstId} [name=share_to], #${firstId} .add-share`).count()) === 0);
+  const preview = await page.textContent(`#${firstId} .preview`);
+  check("live preview computes the profit and the crew's cut", preview.includes("+12,800") && preview.includes("shares 3,200") && preview.includes("9,600"), preview);
   await page.click(`#${firstId} form.close-form button[type=submit]`);
   await page.waitForSelector("#overlay:not([hidden]) #sale-profit");
   const banner = await page.textContent("#overlay");

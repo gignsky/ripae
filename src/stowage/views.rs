@@ -3,7 +3,7 @@
 //! `{% for %}`; nothing is computed in a template.
 
 use super::model::{
-    cluster_unassigned, format_boxes, sc_cargo_link, standings, stowage_order, Crate, Load,
+    cluster_unassigned, format_boxes, sc_cargo_link, standings, stowage_order, Crate, CrewMember, CrewTerms, Load,
     LoadStatus, ServiceRecord, Share, SortKey, Standing, Totals, User, Voyage, Whereabouts,
 };
 use crate::templates::fmt_auec;
@@ -282,6 +282,8 @@ pub struct VoyageView {
     pub load_count: usize,
     pub stop_count: usize,
     pub notes: String,
+    /// `LORD GIG · JT 25%`: who's aboard and who holds a share.
+    pub crew_line: String,
     /// Open loads only (sold ones live on the Ledger).
     pub loads: Vec<LoadView>,
     pub extra: VoyageExtra,
@@ -300,6 +302,7 @@ impl VoyageView {
             load_count: open.len(),
             stop_count: v.stop_count(),
             notes: v.notes.clone().unwrap_or_default(),
+            crew_line: crew_line(v),
             loads: open
                 .iter()
                 .map(|l| LoadView { can_detach: open.len() > 1, ..LoadView::new(l, hull.as_deref()) })
@@ -307,6 +310,28 @@ impl VoyageView {
             extra: VoyageExtra::None,
         }
     }
+}
+
+/// The voyage's crew in one line, shares in short: `LORD GIG · JT 25%+1,000`.
+pub fn crew_line(v: &Voyage) -> String {
+    v.crew
+        .iter()
+        .map(|c| {
+            let t = &c.terms;
+            let mut s = c.name.to_uppercase();
+            match (t.pct > 0.0, t.flat > 0.0) {
+                (true, true) => s += &format!(" {}%+{}", trim_num(t.pct), fmt_auec(t.flat)),
+                (true, false) => s += &format!(" {}%", trim_num(t.pct)),
+                (false, true) => s += &format!(" {}", fmt_auec(t.flat)),
+                (false, false) => {}
+            }
+            if let Some(p) = &c.paid_to_name {
+                s += &format!(" → {}", p.to_uppercase());
+            }
+            s
+        })
+        .collect::<Vec<_>>()
+        .join(" · ")
 }
 
 // ---------------------------------------------------------------------------
@@ -398,10 +423,9 @@ pub struct VoyageFormView {
     /// Who typed the voyage in (user id), correctable here; the crew list.
     pub entered_by: String,
     pub users: Vec<User>,
-    /// Shares every load closed on the voyage starts with.
-    pub shares: Vec<ShareFormRow>,
-    /// Whose run it is (user id): they keep the remainder, so they hold no
-    /// share and a new share row picks someone else.
+    /// The voyage's crew and the terms every sale on it splits by.
+    pub crew: Vec<CrewFormRow>,
+    /// Whose run it is (user id).
     pub owner: String,
     /// Also move the old owner's unsold loads to a new owner.
     pub move_loads: bool,
@@ -426,13 +450,89 @@ pub struct NewRunFormView {
     pub open: bool,
 }
 
-#[derive(Clone, Default)]
-pub struct ShareFormRow {
-    pub to_user: String,
+/// One crew member on the voyage form, as typed or as stored.
+#[derive(Clone, Default, Debug, PartialEq)]
+pub struct CrewFormRow {
+    pub user_id: String,
+    /// Percent of each sale's profit; blank = none.
+    pub pct: String,
+    /// Flat fee per sale; blank = none.
+    pub flat: String,
     pub paid_to: String,
-    pub kind: String,
-    pub amount: String,
     pub reason: String,
+    /// The voyage names them (owner, buyer, seller, share holder), so they
+    /// stay aboard: no [REMOVE].
+    pub fixed: bool,
+}
+
+impl CrewFormRow {
+    pub fn of(t: &CrewTerms, fixed: bool) -> Self {
+        let num = |n: f64| if n > 0.0 { trim_num(n) } else { String::new() };
+        CrewFormRow {
+            user_id: t.user_id.to_string(),
+            pct: num(t.pct),
+            flat: num(t.flat),
+            paid_to: t.paid_to.map(|p| p.to_string()).unwrap_or_default(),
+            reason: t.reason.clone().unwrap_or_default(),
+            fixed,
+        }
+    }
+}
+
+/// A split line shown (read-only) on a sale form: who, on what terms, and
+/// the figures the live preview pays out from.
+#[derive(Clone, Default, Debug, PartialEq)]
+pub struct SplitLineView {
+    pub user_id: i64,
+    pub name_upper: String,
+    pub terms: String,
+    /// Plain numbers for the preview script.
+    pub pct: String,
+    pub flat: String,
+    pub forfeit_upper: String,
+    pub reason: String,
+}
+
+/// `25% of profit + 1,000 flat`, `flat 1,000`, or `no share`.
+pub fn terms_label(pct: f64, flat: f64) -> String {
+    match (pct > 0.0, flat > 0.0) {
+        (true, true) => format!("{}% of profit + {} flat", trim_num(pct), fmt_auec(flat)),
+        (true, false) => format!("{}% of profit", trim_num(pct)),
+        (false, true) => format!("{} flat", fmt_auec(flat)),
+        (false, false) => "no share".into(),
+    }
+}
+
+impl SplitLineView {
+    /// A crew member's terms on the voyage.
+    pub fn crew(c: &CrewMember) -> Self {
+        SplitLineView {
+            user_id: c.terms.user_id,
+            name_upper: c.name.to_uppercase(),
+            terms: terms_label(c.terms.pct, c.terms.flat),
+            pct: trim_num(c.terms.pct),
+            flat: trim_num(c.terms.flat),
+            forfeit_upper: c.paid_to_name.as_deref().map(str::to_uppercase).unwrap_or_default(),
+            reason: c.terms.reason.clone().unwrap_or_default(),
+        }
+    }
+
+    /// A share already settled on a sale, as its terms.
+    pub fn recorded(s: &Share) -> Self {
+        let (pct, flat) = match s.kind {
+            super::model::ShareKind::Pct => (s.amount, 0.0),
+            super::model::ShareKind::Flat => (0.0, s.amount),
+        };
+        SplitLineView {
+            user_id: s.to_user,
+            name_upper: s.to_user_name.to_uppercase(),
+            terms: terms_label(pct, flat),
+            pct: trim_num(pct),
+            flat: trim_num(flat),
+            forfeit_upper: if s.paid_to != s.to_user { s.paid_to_name.to_uppercase() } else { String::new() },
+            reason: s.reason.clone().unwrap_or_default(),
+        }
+    }
 }
 
 pub struct CloseFormView {
@@ -449,7 +549,15 @@ pub struct CloseFormView {
     /// Write off (mark lost) the glitched crates left unsold, so they don't
     /// hold the load open. On by default.
     pub write_off_glitched: bool,
-    pub shares: Vec<ShareFormRow>,
+    /// The voyage crew's terms: what a sale settles (less the seller's own).
+    pub crew: Vec<SplitLineView>,
+    /// Sale editor only: the shares as recorded on the sale, and whether to
+    /// re-split it by the crew's terms as they stand instead.
+    pub recorded: Vec<SplitLineView>,
+    pub resplit: bool,
+    /// The sale editor rather than the close form.
+    pub editing: bool,
+    pub voyage_id: i64,
     pub users: Vec<User>,
     /// Who sold it (user id): the load's buyer by default, any crew member
     /// when someone else is keeping the books.

@@ -32,8 +32,9 @@ cargo build --release
 
 `scripts/smoke.mjs` spawns `target/debug/ripae` on `127.0.0.1:18080` with a
 throwaway database, walks the whole 0.2 story (gate → new run → crate
-manifest → partial close with a forfeited share → SALE banner → leaderboard
-→ service record → delete through the confirmation) and asserts there is no
+manifest → a crewmate on the voyage's crew on 25 %, forfeited back → partial
+close split by the crew → SALE banner → leaderboard → service record →
+delete through the confirmation) and asserts there is no
 horizontal scroll at 1280 / 760 / 400 px. Set `RIPAE_URL` to run it against
 an already-running build instead. It needs `playwright` resolvable from
 Node (`npm i -g playwright && npx playwright install chromium`, or a
@@ -267,7 +268,38 @@ still hold come first.
 - **Shares:** a member can't share with themself (the remainder is already
   theirs); percentage shares may not total more than 100; a flat fee may
   exceed the profit (the seller agreed to it). On a loss every share pays 0
-  (ruled). "Runs closed" on the board counts voyages with every load sold in
+  (ruled).
+- **The voyage's crew is the one place a split is set** (0.3.1-roll7,
+  migration 0012, replacing `voyage_shares` and the per-sale share rows).
+  `voyage_crew` has one row per member: a cut of each sale's profit
+  (`pct`), a flat fee per sale (`flat`), both, or neither (crew without a
+  share), and an optional forfeit-to (`paid_to`: they get the aUEC, the
+  earner keeps the credit). Every sale on the voyage settles the crew's
+  terms for everyone **but its seller** -- their own cut doesn't apply to
+  the sale they make, so the run's owner may hold a cut of a crewmate's
+  sale. Cuts across the crew may not total more than 100 %. What a sale
+  paid is still frozen in `shares`; editing the crew changes later sales
+  only. The sale editor re-pays a sale's own shares on a corrected price,
+  or re-splits it by the crew as it stands when asked (a seller who holds
+  a share of that sale is refused, as before). No per-sale override: the
+  close form shows the split read-only with `[EDIT CREW]`.
+- **Who's on the crew.** The run's owner, every load's buyer and holder (a
+  sold row's seller), and anyone a share or a crew forfeit pays are always
+  aboard (`repo::sync_crew` after every write; the voyage form shows them
+  without `[REMOVE]`). Others are added on the voyage form. A detached
+  load's new voyage copies the crew and terms; a load merged into another
+  voyage brings its holder along, on no terms (the target's split applies,
+  as before).
+- **Migration 0012 mapping.** Voyage-level shares become the member's crew
+  terms (rows for one member summed by kind -- 25 % and a 1,000 flat stay
+  both; reasons joined with ` · `; the first forfeit kept). A member who only
+  held shares on individual sales gets the terms of their **latest** sale
+  on that voyage. Owners, buyers, sellers and forfeit recipients join
+  without terms. `shares` is untouched, so every settled amount -- and every
+  member's credit and cash -- is identical before and after (tested on a
+  fixture DB). One corner can't be expressed in the new shape: a member
+  whose % and flat parts were forfeited to different people keeps the
+  first forfeit for both on future sales. "Runs closed" on the board counts voyages with every load sold in
   which the member sold at least one load.
 - **Lost cargo is a loss.** What a lost or written-off crate cost
   (`written_off`) comes off realised (Open Cargo's totals and the board's

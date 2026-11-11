@@ -27,13 +27,13 @@ use crate::templates::{
 };
 use crate::AppState;
 use model::{
-    parse_boxes, parse_date, service_record, resettle, settle, today, Load, LoadKind, PriceMode, Sale, SaleInput, ShareInput,
-    ShareKind, SortKey, Totals, User, Voyage, Whereabouts,
+    check_crew, crew_shares, parse_boxes, parse_date, service_record, resettle, settle, today, CrewMember, CrewTerms, Load,
+    LoadKind, PriceMode, Sale, SaleInput, ShareInput, SortKey, Totals, User, Voyage, Whereabouts,
 };
 use repo::{EditLoad, EditVoyage, MoveTarget, NewLoad, NewVoyage};
 use views::{
-    board_view, ledger_rows, plan_cards, record_view, CloseFormView, LoadExtra, LoadFormView,
-    LoadView, MergeChoice, NewRunFormView, ShareFormRow, ShareView, TotalsView, VoyageExtra,
+    board_view, ledger_rows, plan_cards, record_view, CloseFormView, CrewFormRow, LoadExtra, LoadFormView,
+    LoadView, MergeChoice, NewRunFormView, ShareView, SplitLineView, TotalsView, VoyageExtra,
     VoyageFormView, VoyageView,
 };
 
@@ -618,15 +618,16 @@ pub async fn voyage_update(State(state): State<AppState>, _user: CurrentUser, Pa
     }
 }
 
-/// The voyage form filled in as the voyage stands, its shares included.
+/// The voyage form filled in as the voyage stands, its crew included.
 async fn voyage_form(state: &AppState, v: &Voyage) -> VoyageFormView {
+    let named = v.named_members();
     VoyageFormView {
         bought_at: v.bought_at.clone(),
         ship: v.ship.as_ref().map(|s| s.name.clone()).unwrap_or_default(),
         notes: v.notes.clone().unwrap_or_default(),
         entered_by: v.entered_by.to_string(),
         users: repo::list_users(&state.pool).await.unwrap_or_default(),
-        shares: share_rows_of(&repo::voyage_shares(&state.pool, v.id).await.unwrap_or_default()),
+        crew: v.crew.iter().map(|c| CrewFormRow::of(&c.terms, named.contains(&c.terms.user_id))).collect(),
         owner: v.logged_by.to_string(),
         move_loads: false,
         error: None,
@@ -634,7 +635,7 @@ async fn voyage_form(state: &AppState, v: &Voyage) -> VoyageFormView {
 }
 
 /// Validates and saves the voyage form (ship, date, notes, owner, who logged it,
-/// the voyage-wide shares); on failure hands the form back with its error
+/// the crew and their terms); on failure hands the form back with its error
 /// to re-render.
 async fn save_voyage_form(state: &AppState, v: &Voyage, body: &str) -> Result<(), VoyageFormView> {
     let form = FormData::parse(body);
@@ -644,7 +645,7 @@ async fn save_voyage_form(state: &AppState, v: &Voyage, body: &str) -> Result<()
         notes: form.get("notes").into(),
         entered_by: form.get("entered_by").into(),
         users: repo::list_users(&state.pool).await.unwrap_or_default(),
-        shares: share_rows_from(&form),
+        crew: crew_rows_from(&form, &v.named_members()),
         owner: form.get("logged_by").into(),
         move_loads: form.get("move_loads") == "1",
         error: None,
@@ -654,9 +655,8 @@ async fn save_voyage_form(state: &AppState, v: &Voyage, body: &str) -> Result<()
         let ship_id = pick_ship(state, &view.ship).await?;
         let logged_by = pick_member(&view.owner, v.logged_by, &view.users, "Crew member")?;
         let entered_by = pick_member(&view.entered_by, v.entered_by, &view.users, "Logged by")?;
-        // the run's owner sells by default and keeps the remainder
-        let shares = parse_shares(&view.shares, &view.users, logged_by, "run's owner")?;
-        Ok::<_, String>(EditVoyage { ship_id, bought_at, notes: opt(&view.notes), logged_by, move_loads: view.move_loads, entered_by, shares })
+        let crew = parse_crew(&view.crew, &view.users)?;
+        Ok::<_, String>(EditVoyage { ship_id, bought_at, notes: opt(&view.notes), logged_by, move_loads: view.move_loads, entered_by, crew: Some(crew) })
     }
     .await;
     let edit = match parsed {
@@ -1159,10 +1159,9 @@ pub async fn load_where(State(state): State<AppState>, _user: CurrentUser, Path(
 // ---------------------------------------------------------------------------
 
 /// A close form for `load`, filled in with what it most likely is: today,
-/// its destination, the sound crates, and its voyage's shares (less any
-/// share held by the load's owner, who sells it and keeps the remainder).
-fn blank_close(load: &Load, users: Vec<User>, voyage_shares: &[ShareInput]) -> CloseFormView {
-    let shares: Vec<ShareInput> = voyage_shares.iter().filter(|s| s.to_user != load.submitted_by).cloned().collect();
+/// its destination and the sound crates. The split is the voyage crew's,
+/// shown read-only (the seller's own terms don't apply to their sale).
+fn blank_close(load: &Load, users: Vec<User>, crew: &[CrewMember]) -> CloseFormView {
     CloseFormView {
         sold_at: today().to_string(),
         sell_terminal: load.destination.clone().unwrap_or_default(),
@@ -1174,7 +1173,11 @@ fn blank_close(load: &Load, users: Vec<User>, voyage_shares: &[ShareInput]) -> C
         balance_after: String::new(),
         selected: load.crates.iter().filter(|c| c.default_selected()).map(|c| c.id).collect(),
         write_off_glitched: true,
-        shares: share_rows_of(&shares),
+        crew: crew.iter().map(SplitLineView::crew).collect(),
+        recorded: Vec::new(),
+        resplit: false,
+        editing: false,
+        voyage_id: load.voyage_id,
         users,
         sold_by: load.submitted_by.to_string(),
         bought_by: load.bought_by.to_string(),
@@ -1192,11 +1195,12 @@ pub async fn close_form(State(state): State<AppState>, _user: CurrentUser, Path(
         return (StatusCode::CONFLICT, "That load is already sold.").into_response();
     }
     let users = repo::list_users(&state.pool).await.unwrap_or_default();
-    let shares = repo::voyage_shares(&state.pool, load.voyage_id).await.unwrap_or_default();
-    load_response(&state, id, LoadExtra::Close(blank_close(&load, users, &shares)), StatusCode::OK).await
+    let crew = repo::voyage_crew(&state.pool, load.voyage_id).await.unwrap_or_default();
+    load_response(&state, id, LoadExtra::Close(blank_close(&load, users, &crew)), StatusCode::OK).await
 }
 
-fn close_form_from(form: &FormData, users: Vec<User>) -> CloseFormView {
+/// The sale form as submitted; `crew` is the voyage's, shown back as is.
+fn close_form_from(form: &FormData, users: Vec<User>, voyage_id: i64, crew: &[CrewMember]) -> CloseFormView {
     CloseFormView {
         sold_at: form.get("sold_at").into(),
         sell_terminal: form.get("sell_terminal").into(),
@@ -1207,7 +1211,11 @@ fn close_form_from(form: &FormData, users: Vec<User>) -> CloseFormView {
         balance_after: form.get("sell_bal_after").into(),
         selected: form.all("crate").iter().filter_map(|v| v.parse().ok()).collect(),
         write_off_glitched: form.get("write_off_glitched") == "1",
-        shares: share_rows_from(form),
+        crew: crew.iter().map(SplitLineView::crew).collect(),
+        recorded: Vec::new(),
+        resplit: form.get("resplit") == "1",
+        editing: false,
+        voyage_id,
         users,
         sold_by: form.get("sold_by").into(),
         bought_by: form.get("bought_by").into(),
@@ -1215,14 +1223,10 @@ fn close_form_from(form: &FormData, users: Vec<User>) -> CloseFormView {
     }
 }
 
-/// The sale fields every sale form shares -- date, terminal, price (per SCU,
-/// per lot or from the balance) and shares -- validated for `seller`.
-async fn parse_sale(
-    state: &AppState,
-    f: &CloseFormView,
-    users: &[User],
-    seller: i64,
-) -> Result<(String, String, PriceMode, f64, Vec<ShareInput>), String> {
+/// The sale fields every sale form shares -- date, terminal and price (per
+/// SCU, per lot or from the balance). The split isn't one of them: it's the
+/// voyage crew's.
+async fn parse_sale(state: &AppState, f: &CloseFormView) -> Result<(String, String, PriceMode, f64), String> {
     let sold_at = parse_date(&f.sold_at, today()).map_err(|e| format!("Sold on: {e}"))?;
     let terminal = opt(&f.sell_terminal).ok_or("Sell terminal is required.")?;
     let sell_terminal = pick(state, Kind::Terminal, &terminal).await;
@@ -1233,74 +1237,57 @@ async fn parse_sale(
             PriceMode::Lot => (PriceMode::Lot, parse_money(&f.sell_lot, "Amount received for the lot")?),
         },
     };
-    let shares = parse_shares(&f.shares, users, seller, "seller")?;
-    Ok((sold_at, sell_terminal, price_mode, price, shares))
+    Ok((sold_at, sell_terminal, price_mode, price))
 }
 
-/// Share rows as submitted (`share_to`, `share_kind`, … repeated per row).
-fn share_rows_from(form: &FormData) -> Vec<ShareFormRow> {
-    (0..form.count("share_to"))
-        .map(|i| ShareFormRow {
-            to_user: form.nth("share_to", i).into(),
-            paid_to: form.nth("share_paid_to", i).into(),
-            kind: form.nth("share_kind", i).into(),
-            amount: form.nth("share_amount", i).into(),
-            reason: form.nth("share_reason", i).into(),
+/// Crew rows as submitted (`crew_user`, `crew_pct`, … repeated per row);
+/// `named` are the members the voyage itself names, who can't be removed.
+fn crew_rows_from(form: &FormData, named: &[i64]) -> Vec<CrewFormRow> {
+    (0..form.count("crew_user"))
+        .map(|i| {
+            let user_id = form.nth("crew_user", i).to_string();
+            CrewFormRow {
+                fixed: user_id.trim().parse().is_ok_and(|id: i64| named.contains(&id)),
+                user_id,
+                pct: form.nth("crew_pct", i).into(),
+                flat: form.nth("crew_flat", i).into(),
+                paid_to: form.nth("crew_paid_to", i).into(),
+                reason: form.nth("crew_reason", i).into(),
+            }
         })
         .collect()
 }
 
-/// Shares back into form rows, to fill a form in.
-fn share_rows_of(shares: &[ShareInput]) -> Vec<ShareFormRow> {
-    shares
-        .iter()
-        .map(|s| ShareFormRow {
-            to_user: s.to_user.to_string(),
-            paid_to: s.paid_to.map(|p| p.to_string()).unwrap_or_default(),
-            kind: s.kind.as_str().into(),
-            amount: views::trim_num(s.amount),
-            reason: s.reason.clone().unwrap_or_default(),
-        })
-        .collect()
-}
-
-/// Validates share rows for `seller`, who keeps the remainder and so can't
-/// hold a share; `who` names them in the error ("seller", "run's owner").
-fn parse_shares(rows: &[ShareFormRow], users: &[User], seller: i64, who: &str) -> Result<Vec<ShareInput>, String> {
-    let mut shares = Vec::new();
-    let mut pct_total = 0.0;
-    for (i, s) in rows.iter().enumerate() {
-        let to_user: i64 = s.to_user.trim().parse().map_err(|_| format!("Share {}: pick a crew member.", i + 1))?;
-        if !users.iter().any(|u| u.id == to_user) {
-            return Err(format!("Share {}: that crew member doesn't exist.", i + 1));
+/// Validates the crew rows: real members, each once; a blank cut or fee is
+/// none; cuts total no more than the whole profit (`model::check_crew`).
+fn parse_crew(rows: &[CrewFormRow], users: &[User]) -> Result<Vec<CrewTerms>, String> {
+    let name = |id: i64| users.iter().find(|u| u.id == id).map(|u| u.display_name.clone()).unwrap_or_else(|| format!("#{id}"));
+    let mut crew = Vec::new();
+    for (i, r) in rows.iter().enumerate() {
+        let user_id: i64 = r.user_id.trim().parse().map_err(|_| format!("Crew {}: pick a crew member.", i + 1))?;
+        if !users.iter().any(|u| u.id == user_id) {
+            return Err(format!("Crew {}: that crew member doesn't exist.", i + 1));
         }
-        if to_user == seller {
-            return Err(format!("Share {}: the {who} can't share with themself -- the remainder is already theirs.", i + 1));
-        }
-        let paid_to = match opt(&s.paid_to) {
+        let who = name(user_id);
+        let amount = |raw: &str, what: &str| -> Result<f64, String> {
+            if raw.trim().is_empty() { Ok(0.0) } else { parse_money(raw, &format!("{who}: {what}")) }
+        };
+        let pct = amount(&r.pct, "% of profit")?;
+        let flat = amount(&r.flat, "flat fee")?;
+        let paid_to = match opt(&r.paid_to) {
             None => None,
             Some(p) => {
-                let p: i64 = p.parse().map_err(|_| format!("Share {}: forfeit-to must be a crew member.", i + 1))?;
+                let p: i64 = p.parse().map_err(|_| format!("{who}: forfeit-to must be a crew member."))?;
                 if !users.iter().any(|u| u.id == p) {
-                    return Err(format!("Share {}: forfeit-to must be a crew member.", i + 1));
+                    return Err(format!("{who}: forfeit-to must be a crew member."));
                 }
-                (p != to_user).then_some(p)
+                (p != user_id).then_some(p)
             }
         };
-        let kind: ShareKind = s.kind.parse().unwrap_or(ShareKind::Pct);
-        let amount = parse_money(&s.amount, &format!("Share {} amount", i + 1))?;
-        if kind == ShareKind::Pct {
-            if amount > 100.0 {
-                return Err(format!("Share {}: a percentage can't exceed 100.", i + 1));
-            }
-            pct_total += amount;
-        }
-        shares.push(ShareInput { to_user, paid_to, kind, amount, reason: opt(&s.reason) });
+        crew.push(CrewTerms { user_id, pct, flat, paid_to, reason: opt(&r.reason) });
     }
-    if pct_total > 100.0 + 1e-9 {
-        return Err(format!("Percentage shares add up to {}% -- more than the whole profit.", views::trim_num(pct_total)));
-    }
-    Ok(shares)
+    check_crew(&crew, name)?;
+    Ok(crew)
 }
 
 /// `POST /loads/:id/close` -- records the sale; answers with the SALE banner.
@@ -1313,8 +1300,9 @@ pub async fn close_load(State(state): State<AppState>, user: CurrentUser, Path(i
         return (StatusCode::CONFLICT, "That load is already sold.").into_response();
     }
     let users = repo::list_users(&state.pool).await.unwrap_or_default();
+    let crew = repo::voyage_crew(&state.pool, load.voyage_id).await.unwrap_or_default();
     let form = FormData::parse(&body);
-    let mut f = close_form_from(&form, users.clone());
+    let mut f = close_form_from(&form, users.clone(), load.voyage_id, &crew);
     let seller = match pick_member(&f.sold_by, load.submitted_by, &users, "Sold by") {
         Ok(id) => id,
         Err(e) => {
@@ -1323,9 +1311,11 @@ pub async fn close_load(State(state): State<AppState>, user: CurrentUser, Path(i
         }
     };
 
-    let parsed = parse_sale(&state, &f, &users, seller)
+    // the split is the voyage crew's terms, less the seller's own
+    let shares = crew_shares(crew.iter().map(|c| &c.terms), seller);
+    let parsed = parse_sale(&state, &f)
         .await
-        .map(|(sold_at, sell_terminal, price_mode, price, shares)| {
+        .map(|(sold_at, sell_terminal, price_mode, price)| {
             (sold_at, sell_terminal, SaleInput { crate_ids: f.selected.clone(), price_mode, price, shares })
         });
 
@@ -1425,6 +1415,7 @@ pub async fn sale_edit_form(State(state): State<AppState>, _user: CurrentUser, P
         Err(r) => return r,
     };
     let users = repo::list_users(&state.pool).await.unwrap_or_default();
+    let crew = repo::voyage_crew(&state.pool, load.voyage_id).await.unwrap_or_default();
     let f = CloseFormView {
         sold_at: load.sold_at.clone().unwrap_or_default(),
         sell_terminal: load.sell_terminal.clone().unwrap_or_default(),
@@ -1435,17 +1426,11 @@ pub async fn sale_edit_form(State(state): State<AppState>, _user: CurrentUser, P
         balance_after: String::new(),
         selected: Vec::new(),
         write_off_glitched: false,
-        shares: load
-            .shares
-            .iter()
-            .map(|s| ShareFormRow {
-                to_user: s.to_user.to_string(),
-                paid_to: if s.paid_to == s.to_user { String::new() } else { s.paid_to.to_string() },
-                kind: s.kind.as_str().into(),
-                amount: views::trim_num(s.amount),
-                reason: s.reason.clone().unwrap_or_default(),
-            })
-            .collect(),
+        crew: crew.iter().map(SplitLineView::crew).collect(),
+        recorded: load.shares.iter().map(SplitLineView::recorded).collect(),
+        resplit: false,
+        editing: true,
+        voyage_id: load.voyage_id,
         users,
         sold_by: load.submitted_by.to_string(),
         bought_by: load.bought_by.to_string(),
@@ -1454,20 +1439,25 @@ pub async fn sale_edit_form(State(state): State<AppState>, _user: CurrentUser, P
     sale_overlay(&load, f, StatusCode::OK)
 }
 
-/// `PUT /loads/:id/sale` -- saves the correction: shares are paid again on
-/// the new profit. Success empties the overlay (closing it) and refreshes
-/// the ledger and totals.
+/// `PUT /loads/:id/sale` -- saves the correction: the sale's own shares are
+/// paid again on the new profit, or (`resplit`) it's split afresh by the
+/// voyage crew's terms as they stand. Success empties the overlay (closing
+/// it) and refreshes the ledger and totals.
 pub async fn sale_update(State(state): State<AppState>, _user: CurrentUser, Path(id): Path<i64>, body: String) -> Response {
     let load = match find_sale(&state, id).await {
         Ok(l) => l,
         Err(r) => return r,
     };
     let users = repo::list_users(&state.pool).await.unwrap_or_default();
-    let mut f = close_form_from(&FormData::parse(&body), users.clone());
+    let crew = repo::voyage_crew(&state.pool, load.voyage_id).await.unwrap_or_default();
+    let mut f = close_form_from(&FormData::parse(&body), users.clone(), load.voyage_id, &crew);
+    f.recorded = load.shares.iter().map(SplitLineView::recorded).collect();
+    f.editing = true;
     let parsed = async {
         let seller = pick_member(&f.sold_by, load.submitted_by, &users, "Sold by")?;
         let buyer = pick_member(&f.bought_by, load.bought_by, &users, if load.is_haul() { "Hauled by" } else { "Bought by" })?;
-        let (sold_at, sell_terminal, price_mode, price, shares) = parse_sale(&state, &f, &users, seller).await?;
+        let (sold_at, sell_terminal, price_mode, price) = parse_sale(&state, &f).await?;
+        let shares = if f.resplit { crew_shares(crew.iter().map(|c| &c.terms), seller) } else { recorded_shares(&load, seller)? };
         let resale = resettle(&load, price_mode, price, &shares)?;
         Ok::<_, String>((seller, buyer, sold_at, sell_terminal, resale))
     }
@@ -1488,6 +1478,28 @@ pub async fn sale_update(State(state): State<AppState>, _user: CurrentUser, Path
         Ok(l) => html(StatusCode::OK, format!("{}{}", oob_common(&l), ledger_frag(&l, true))),
         Err(r) => r,
     }
+}
+
+/// A recorded sale's shares as the terms they were settled on. A seller
+/// can't hold a share of their own sale, so picking one who does is refused.
+fn recorded_shares(load: &Load, seller: i64) -> Result<Vec<ShareInput>, String> {
+    if let Some(s) = load.shares.iter().find(|s| s.to_user == seller) {
+        return Err(format!(
+            "{} holds a share of this sale, so can't be its seller -- tick \"re-split by the crew\" or pick someone else.",
+            s.to_user_name
+        ));
+    }
+    Ok(load
+        .shares
+        .iter()
+        .map(|s| ShareInput {
+            to_user: s.to_user,
+            paid_to: (s.paid_to != s.to_user).then_some(s.paid_to),
+            kind: s.kind,
+            amount: s.amount,
+            reason: s.reason.clone(),
+        })
+        .collect())
 }
 
 // ---------------------------------------------------------------------------
@@ -1573,28 +1585,37 @@ mod tests {
             .collect()
     }
 
-    fn row(to: &str, kind: &str, amount: &str) -> ShareFormRow {
-        ShareFormRow { to_user: to.into(), paid_to: String::new(), kind: kind.into(), amount: amount.into(), reason: String::new() }
+    fn row(user: &str, pct: &str, flat: &str) -> CrewFormRow {
+        CrewFormRow { user_id: user.into(), pct: pct.into(), flat: flat.into(), ..Default::default() }
     }
 
     #[test]
-    fn a_close_starts_from_the_voyage_split_less_the_sellers_own_share() {
-        use model::fixtures::{load, sound};
+    fn a_close_shows_the_voyage_crew_and_settles_without_the_sellers_terms() {
+        use model::fixtures::{cut, load, sound, voyage, with_crew};
         let mut l = load(1, 10.0, vec![sound(1, 8)]);
         l.submitted_by = 2; // JT's load, on a voyage where JT holds a share
-        let voyage = parse_shares(&[row("2", "pct", "33.33"), row("3", "pct", "33.33")], &crew(), 1, "run's owner").unwrap();
-        let f = blank_close(&l, crew(), &voyage);
-        assert_eq!(f.shares.len(), 1);
-        assert_eq!((f.shares[0].to_user.as_str(), f.shares[0].amount.as_str()), ("3", "33.33"));
+        let v = with_crew(voyage(1, 1, None, vec![l.clone()]), vec![cut(2, 33.33, 0.0, None), cut(3, 33.33, 0.0, None)]);
+        let f = blank_close(&l, crew(), &v.crew);
+        assert_eq!(f.crew.len(), 3, "every crew member is shown, the owner included");
+        let shares = v.shares_for(2);
+        assert_eq!(shares.iter().map(|s| (s.to_user, s.amount)).collect::<Vec<_>>(), vec![(3, 33.33)]);
     }
 
     #[test]
-    fn voyage_shares_refuse_the_owner_and_more_than_the_whole() {
-        let err = parse_shares(&[row("1", "pct", "10")], &crew(), 1, "run's owner").unwrap_err();
-        assert!(err.contains("run's owner can't share"), "{err}");
-        let err = parse_shares(&[row("2", "pct", "60"), row("3", "pct", "50")], &crew(), 1, "run's owner").unwrap_err();
+    fn crew_rows_parse_blank_as_no_share_and_refuse_more_than_the_whole() {
+        let ok = parse_crew(&[row("1", "", ""), row("2", "25", "1,000")], &crew()).unwrap();
+        assert_eq!((ok[0].pct, ok[0].flat), (0.0, 0.0));
+        assert_eq!((ok[1].pct, ok[1].flat), (25.0, 1000.0));
+        let err = parse_crew(&[row("2", "60", ""), row("3", "50", "")], &crew()).unwrap_err();
         assert!(err.contains("110%"), "{err}");
+        let err = parse_crew(&[row("2", "1", ""), row("2", "2", "")], &crew()).unwrap_err();
+        assert!(err.contains("JT is on the crew twice"), "{err}");
+        let err = parse_crew(&[row("9", "", "")], &crew()).unwrap_err();
+        assert!(err.contains("doesn't exist"), "{err}");
         // flat fees don't count toward the 100 %
-        assert!(parse_shares(&[row("2", "pct", "100"), row("3", "flat", "5000")], &crew(), 1, "run's owner").is_ok());
+        assert!(parse_crew(&[row("2", "100", ""), row("3", "", "5000")], &crew()).is_ok());
+        // a forfeit to oneself is no forfeit
+        let me = CrewFormRow { paid_to: "2".into(), ..row("2", "5", "") };
+        assert_eq!(parse_crew(&[me], &crew()).unwrap()[0].paid_to, None);
     }
 }

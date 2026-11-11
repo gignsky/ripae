@@ -339,6 +339,9 @@ pub struct Voyage {
     pub bought_at: String,
     pub notes: Option<String>,
     pub loads: Vec<Load>,
+    /// Who flew it and on what terms the profit splits (`voyage_crew`):
+    /// the run's owner first, then in the order they joined.
+    pub crew: Vec<CrewMember>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -722,6 +725,128 @@ pub fn resettle(load: &Load, price_mode: PriceMode, price: f64, shares: &[ShareI
     let (sell_price_scu, sell_price_lot) = derive_prices(price_mode, price, scu_sold);
     let profit = sell_price_lot - scu_sold as f64 * load.buy_price_scu;
     Ok(Resale { sell_price_scu, sell_price_lot, profit, shares: settle_shares(profit, shares)? })
+}
+
+// ---------------------------------------------------------------------------
+// crew: who flew a voyage, and how every sale on it splits
+// ---------------------------------------------------------------------------
+
+/// A crew member's share terms on a voyage. A cut of each sale's profit and
+/// a flat fee per sale can both be set; neither makes them crew without a
+/// share. Every sale on the voyage settles these terms for everyone but its
+/// seller (who keeps the remainder), so the split lives in one place.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct CrewTerms {
+    pub user_id: i64,
+    /// Percent of each sale's profit, 0–100.
+    pub pct: f64,
+    /// aUEC on each sale (still nothing on a loss).
+    pub flat: f64,
+    /// Forfeit the aUEC to this member; `None` = they keep it. Credit stays
+    /// with `user_id` either way.
+    pub paid_to: Option<i64>,
+    pub reason: Option<String>,
+}
+
+impl CrewTerms {
+    /// Crew without a share.
+    pub fn member(user_id: i64) -> Self {
+        CrewTerms { user_id, ..Default::default() }
+    }
+
+    pub fn has_share(&self) -> bool {
+        self.pct > 0.0 || self.flat > 0.0
+    }
+
+    /// The share rows a sale settles for these terms: a `pct` row and a
+    /// `flat` row, each only when set.
+    pub fn share_inputs(&self) -> Vec<ShareInput> {
+        let row = |kind, amount| ShareInput {
+            to_user: self.user_id,
+            paid_to: self.paid_to.filter(|&p| p != self.user_id),
+            kind,
+            amount,
+            reason: self.reason.clone(),
+        };
+        let mut out = Vec::new();
+        if self.pct > 0.0 {
+            out.push(row(ShareKind::Pct, self.pct));
+        }
+        if self.flat > 0.0 {
+            out.push(row(ShareKind::Flat, self.flat));
+        }
+        out
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CrewMember {
+    pub terms: CrewTerms,
+    pub name: String,
+    pub paid_to_name: Option<String>,
+}
+
+/// What a sale by `seller` on a voyage with this crew pays out: everyone's
+/// terms but the seller's own (the remainder is already theirs).
+pub fn crew_shares<'a>(crew: impl IntoIterator<Item = &'a CrewTerms>, seller: i64) -> Vec<ShareInput> {
+    crew.into_iter()
+        .filter(|t| t.user_id != seller)
+        .flat_map(|t| t.share_inputs())
+        .collect()
+}
+
+/// Refuses a crew list no sale could settle: a member listed twice, a
+/// negative or non-finite figure, a cut over 100 %, or cuts that add up to
+/// more than the whole profit. `name` names a member in the message.
+pub fn check_crew(crew: &[CrewTerms], name: impl Fn(i64) -> String) -> Result<(), String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut pct_total = 0.0;
+    for t in crew {
+        if !seen.insert(t.user_id) {
+            return Err(format!("{} is on the crew twice.", name(t.user_id)));
+        }
+        if !(t.pct.is_finite() && t.flat.is_finite()) || t.pct < 0.0 || t.flat < 0.0 {
+            return Err(format!("{}: shares can't be negative.", name(t.user_id)));
+        }
+        if t.pct > 100.0 {
+            return Err(format!("{}: a percentage can't exceed 100.", name(t.user_id)));
+        }
+        pct_total += t.pct;
+    }
+    if pct_total > 100.0 + 1e-9 {
+        let total = if pct_total.fract() == 0.0 { format!("{}", pct_total as i64) } else { format!("{pct_total}") };
+        return Err(format!("The crew's cuts add up to {total}% -- more than the whole profit."));
+    }
+    Ok(())
+}
+
+impl Voyage {
+    pub fn crew_terms(&self) -> impl Iterator<Item = &CrewTerms> {
+        self.crew.iter().map(|c| &c.terms)
+    }
+
+    pub fn crew_member(&self, user_id: i64) -> Option<&CrewMember> {
+        self.crew.iter().find(|c| c.terms.user_id == user_id)
+    }
+
+    /// The shares a sale by `seller` on this voyage pays.
+    pub fn shares_for(&self, seller: i64) -> Vec<ShareInput> {
+        crew_shares(self.crew_terms(), seller)
+    }
+
+    /// Members the voyage itself names -- its owner, every load's buyer and
+    /// holder (a sold row's seller), and anyone a settled share names. They
+    /// are always on the crew (`repo::sync_crew` puts them there).
+    pub fn named_members(&self) -> Vec<i64> {
+        let mut ids = vec![self.logged_by];
+        for l in &self.loads {
+            ids.extend([l.submitted_by, l.bought_by]);
+            ids.extend(l.shares.iter().flat_map(|s| [s.to_user, s.paid_to]));
+        }
+        let mut seen = std::collections::HashSet::new();
+        ids.retain(|id| seen.insert(*id));
+        ids
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1471,6 +1596,19 @@ pub(crate) mod fixtures {
         }
     }
 
+    /// Puts `terms` on the voyage's crew (replacing that member's row).
+    pub fn with_crew(mut v: Voyage, terms: Vec<CrewTerms>) -> Voyage {
+        for t in terms {
+            v.crew.retain(|c| c.terms.user_id != t.user_id);
+            v.crew.push(CrewMember { name: name_of(t.user_id), paid_to_name: t.paid_to.map(name_of), terms: t });
+        }
+        v
+    }
+
+    pub fn cut(user_id: i64, pct: f64, flat: f64, paid_to: Option<i64>) -> CrewTerms {
+        CrewTerms { user_id, pct, flat, paid_to, reason: None }
+    }
+
     pub fn voyage(id: i64, owner: i64, ship: Option<Ship>, loads: Vec<Load>) -> Voyage {
         Voyage {
             id,
@@ -1488,6 +1626,7 @@ pub(crate) mod fixtures {
                     l
                 })
                 .collect(),
+            crew: vec![CrewMember { terms: CrewTerms::member(owner), name: name_of(owner), paid_to_name: None }],
         }
     }
 }
@@ -1789,6 +1928,43 @@ mod tests {
         assert_eq!(cash(GIG, &vs), 750.0);
         assert_eq!(cash(JT, &vs), 0.0);
         assert_eq!(cash(THIRD, &vs), 250.0);
+    }
+
+    // -- crew and the member ledger ------------------------------------------
+
+    #[test]
+    fn crew_shares_skip_the_seller_and_split_a_cut_plus_a_fee() {
+        let crew = [cut(GIG, 10.0, 0.0, None), cut(JT, 25.0, 500.0, Some(GIG)), CrewTerms::member(THIRD)];
+        let shares = crew_shares(&crew, GIG);
+        assert_eq!(shares.len(), 2, "Gig sells, keeps the remainder; Crew-03 holds no share");
+        assert_eq!((shares[0].to_user, shares[0].paid_to, shares[0].kind, shares[0].amount), (JT, Some(GIG), ShareKind::Pct, 25.0));
+        assert_eq!((shares[1].kind, shares[1].amount), (ShareKind::Flat, 500.0));
+        // JT sells: Gig's cut applies, JT's own doesn't
+        let shares = crew_shares(&crew, JT);
+        assert_eq!(shares.iter().map(|s| (s.to_user, s.amount)).collect::<Vec<_>>(), vec![(GIG, 10.0)]);
+        // a forfeit to oneself is no forfeit
+        assert_eq!(cut(JT, 5.0, 0.0, Some(JT)).share_inputs()[0].paid_to, None);
+    }
+
+    #[test]
+    fn crew_terms_settle_like_the_shares_they_replace() {
+        let l = load(1, 10.0, vec![sound(1, 32), sound(2, 32)]);
+        let crew = [cut(JT, 25.0, 0.0, Some(GIG)), cut(THIRD, 0.0, 100.0, None)];
+        let input = SaleInput { crate_ids: vec![1, 2], price_mode: PriceMode::Scu, price: 20.0, shares: crew_shares(&crew, GIG) };
+        let sale = settle(&l, &input).unwrap();
+        assert_eq!(sale.profit, 640.0);
+        assert_eq!(sale.shares.iter().map(|s| (s.to_user, s.paid_to, s.paid)).collect::<Vec<_>>(), vec![(JT, GIG, 160.0), (THIRD, THIRD, 100.0)]);
+        assert_eq!(sale.seller_keeps, 380.0);
+    }
+
+    #[test]
+    fn check_crew_refuses_twice_over_100_and_negatives() {
+        let n = |id: i64| name_of(id);
+        assert!(check_crew(&[cut(JT, 60.0, 0.0, None), cut(THIRD, 40.0, 9_999.0, None)], n).is_ok());
+        assert!(check_crew(&[cut(JT, 60.0, 0.0, None), cut(THIRD, 50.0, 0.0, None)], n).unwrap_err().contains("110%"));
+        assert!(check_crew(&[cut(JT, 1.0, 0.0, None), cut(JT, 2.0, 0.0, None)], n).unwrap_err().contains("twice"));
+        assert!(check_crew(&[cut(JT, -1.0, 0.0, None)], n).unwrap_err().contains("negative"));
+        assert!(check_crew(&[cut(JT, 101.0, 0.0, None)], n).unwrap_err().contains("exceed 100"));
     }
 
     #[test]

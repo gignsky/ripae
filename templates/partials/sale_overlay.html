@@ -1,5 +1,5 @@
 {# Correct a recorded sale from the ledger: who bought and sold it, when, where, the
-   price and the shares. The crates that sold don't change. A successful
+   price, and whether to re-split it by the voyage crew. The crates that sold don't change. A successful
    save answers with an empty overlay (static/ripae.js closes it) plus the
    ledger and totals oob. `close-form` gets it the close form's live preview;
    data-scu stands in for the crate picker. #}
@@ -14,7 +14,7 @@
       <label>Sell terminal<input name="sell_terminal" type="text" list="pick-terminals" data-pick autocomplete="off" value="{{ f.sell_terminal }}" required /></label>
       {% include "partials/sale_price_fields.html" %}
     </div>
-    {% include "partials/sale_shares.html" %}
+    {% include "partials/sale_split.html" %}
     <div class="ras formfoot">
       <span class="actions"><button class="cmd boxed" type="submit">Save sale</button><button class="cmd boxed" type="button" data-dismiss>Cancel</button></span>
       <span class="note preview">profit = — · seller keeps —</span>

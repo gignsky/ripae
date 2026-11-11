@@ -96,7 +96,7 @@
       {% if l.glitched_count > 0 %}
       <label class="ras inline-label write-off"><input type="checkbox" name="write_off_glitched" value="1"{% if f.write_off_glitched %} checked{% endif %} /> Write off glitched crates I'm not selling -- they're marked lost instead of staying open on the voyage</label>
       {% endif %}
-      {% include "partials/sale_shares.html" %}
+      {% include "partials/sale_split.html" %}
       <div class="ras formfoot">
         <span class="actions"><button class="cmd boxed record" type="submit">{% if l.is_haul %}Record delivery{% else %}Record sale{% endif %}</button><button class="cmd cancel-close" type="button" hx-get="/loads/{{ l.id }}" hx-target="#load-{{ l.id }}" hx-swap="outerHTML">Cancel</button></span>
         <span class="note preview">profit = — · seller keeps —</span>
