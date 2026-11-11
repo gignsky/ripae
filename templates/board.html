@@ -1,26 +1,38 @@
 {% extends "base.html" %}
 {% block content %}
 <section class="panel rs">
-  <header><h2>Crew Standings</h2><span class="hint">Closed sales only. Credit is net of shares; a forfeited share still counts for whoever earned it.</span>
-    <span class="actions sortby">
-      <a class="cmd{% if board.sort == "profit" %} on{% endif %}" href="/board?sort=profit" data-go="board">By profit</a>
-      <a class="cmd{% if board.sort == "runs" %} on{% endif %}" href="/board?sort=runs" data-go="board">By runs</a>
-      <a class="cmd{% if board.sort == "scu" %} on{% endif %}" href="/board?sort=scu" data-go="board">By SCU</a>
-    </span></header>
-  <div class="tbl"><table id="board" class="cards">
-    <thead><tr><th>#</th><th>Crew</th><th class="num">Profit</th><th class="num">Runs</th><th class="num">Loads</th><th class="num">SCU hauled</th><th>Best route</th><th class="bar">Share of org profit</th></tr></thead>
+  <header><h2>Crew Standings</h2><span class="hint">Closed sales only. Profit: credit for the run, net of shares. Collected: aUEC actually received. A forfeited share is profit for whoever earned it, collected by whoever got it.</span>
+    <nav class="actions sortby" aria-label="Sort crew standings">
+      {% for k in board.sorts %}<a class="cmd{% if k.on %} on{% endif %}" href="/board?sort={{ k.key }}" data-go="board"{% if k.on %} aria-current="true"{% endif %}>{{ k.label }}</a>
+      {% endfor %}</nav></header>
+  <div class="tbl"><table id="board" class="cards" data-sort="{{ board.sort }}">
+    <caption class="sr">Crew standings, sorted by {{ board.sort }}, highest first</caption>
+    <thead><tr>
+      <th scope="col">#</th>
+      <th scope="col">Crew</th>
+      <th scope="col" class="num{% if board.sort == "profit" %} sorted{% endif %}"{% if board.sort == "profit" %} aria-sort="descending"{% endif %} title="Credit for the run: kept as seller plus every share earned, forfeited or not, less lost cargo."><a href="/board?sort=profit" data-go="board">Profit</a></th>
+      <th scope="col" class="num{% if board.sort == "collected" %} sorted{% endif %}"{% if board.sort == "collected" %} aria-sort="descending"{% endif %} title="aUEC actually received: kept as seller plus shares paid to them, less lost cargo. Forfeited shares go to someone else."><a href="/board?sort=collected" data-go="board">Collected</a></th>
+      <th scope="col" class="num{% if board.sort == "runs" %} sorted{% endif %}"{% if board.sort == "runs" %} aria-sort="descending"{% endif %} title="Voyages with every load sold that the member sold on or held a share of."><a href="/board?sort=runs" data-go="board">Runs</a></th>
+      <th scope="col" class="num" title="Sold loads the member sold or held a share of.">Loads</th>
+      <th scope="col" class="num{% if board.sort == "scu" %} sorted{% endif %}"{% if board.sort == "scu" %} aria-sort="descending"{% endif %} title="SCU sold on those loads."><a href="/board?sort=scu" data-go="board">SCU hauled</a></th>
+      <th scope="col">Best route</th>
+      <th scope="col" class="bar" title="{{ board.share_hint }}">{{ board.share_head }}</th>
+    </tr></thead>
     <tbody>
       {% for s in board.rows %}
       <tr{% if s.dim %} class="dim"{% endif %}>
         <td class="rank">{{ s.rank }}</td>
-        <td><button class="cmd crew" type="button" hx-get="/crew/{{ s.user_id }}" hx-target="#overlay" hx-swap="innerHTML">{{ s.display_name }}</button> <span class="who">{{ s.handle }}</span></td>
-        <td class="num {% if s.profit_neg %}neg{% else %}pos{% endif %}">{{ s.profit_fmt }}</td>
+        <td class="name"><button class="cmd crew" type="button" hx-get="/crew/{{ s.user_id }}" hx-target="#overlay" hx-swap="innerHTML">{{ s.display_name }}</button> <span class="who">{{ s.handle }}</span></td>
+        <td class="num {% if s.profit_neg %}neg{% else %}pos{% endif %}" title="Credit for the run">{{ s.profit_fmt }}</td>
+        <td class="num collected{% if s.cash_neg %} neg{% endif %}" title="aUEC actually received">{{ s.cash_fmt }}{% if !s.forfeited_fmt.is_empty() %}<small class="forfeit" title="Shares this member earned but forfeited to someone else">{{ s.forfeited_fmt }}</small>{% endif %}{% if !s.forfeits_in_fmt.is_empty() %}<small class="forfeit-in" title="Shares other members forfeited to this one">{{ s.forfeits_in_fmt }}</small>{% endif %}</td>
         <td class="num">{{ s.runs }}</td>
         <td class="num">{{ s.loads }}</td>
         <td class="num">{{ s.scu_fmt }}</td>
         <td class="route">{% if s.has_route %}{{ s.route_from }}<span class="arr">→</span>{{ s.route_to }}{% else %}<span class="who">—</span>{% endif %}</td>
-        <td class="bar"><span class="meter" data-pct="{{ s.pct }}" style="--p: {{ s.pct }}"></span></td>
+        <td class="bar"><span class="share"><span class="meter" style="--p: {{ s.pct }}" aria-hidden="true"></span><span class="pct">{{ s.pct_label }}</span></span></td>
       </tr>
+      {% else %}
+      <tr><td colspan="9"><em>No crew yet.</em></td></tr>
       {% endfor %}
     </tbody>
   </table></div>

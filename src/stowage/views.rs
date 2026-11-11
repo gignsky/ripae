@@ -466,6 +466,9 @@ pub struct CloseFormView {
 pub struct TotalsView {
     pub committed_fmt: String,
     pub realised_fmt: String,
+    /// Realised is a net loss: shown in red, the one exception to the
+    /// green-on-black rule on the totals tiles.
+    pub realised_neg: bool,
     pub open_voyages: usize,
     pub open_loads: usize,
     pub open_scu: u32,
@@ -476,6 +479,7 @@ impl TotalsView {
         Self {
             committed_fmt: fmt_auec(t.committed),
             realised_fmt: fmt_auec(t.realised),
+            realised_neg: t.realised.round() < 0.0,
             open_voyages: t.open_voyages,
             open_loads: t.open_loads,
             open_scu: t.open_scu,
@@ -650,34 +654,89 @@ pub struct StandingView {
     pub handle: String,
     pub profit_fmt: String,
     pub profit_neg: bool,
+    pub cash_fmt: String,
+    pub cash_neg: bool,
+    /// `−570,000 forfeited` when the member gave shares away, else empty.
+    pub forfeited_fmt: String,
+    /// `+3,200 from forfeits` when someone forfeited to them, else empty.
+    pub forfeits_in_fmt: String,
     pub runs: usize,
     pub loads: usize,
     pub scu_fmt: String,
     pub route_from: String,
     pub route_to: String,
     pub has_route: bool,
+    /// Bar width, 0–100.
     pub pct: u32,
+    /// `100%`, `37%`, `<1%`, `0%`.
+    pub pct_label: String,
     pub dim: bool,
+}
+
+/// Whole-percent label for a share bar; a sliver that rounds to 0 reads `<1%`.
+pub fn pct_label(pct: f64) -> String {
+    if pct > 0.0 && pct < 0.5 {
+        "<1%".into()
+    } else {
+        format!("{}%", pct.round().clamp(0.0, 100.0) as u32)
+    }
+}
+
+/// `0` for an idle member, else signed.
+fn fmt_figure(amount: f64, idle: bool) -> String {
+    if idle || amount.round() == 0.0 { "0".into() } else { fmt_signed(amount) }
 }
 
 impl StandingView {
     pub fn new(rank: usize, s: &Standing) -> Self {
+        let idle = s.is_idle();
         Self {
             rank,
             user_id: s.user_id,
             display_name: s.display_name.clone(),
             handle: s.handle.clone(),
-            profit_fmt: if s.loads_sold == 0 && s.board_credit == 0.0 { "0".into() } else { fmt_signed(s.board_credit) },
-            profit_neg: s.board_credit < 0.0,
+            profit_fmt: fmt_figure(s.board_credit, idle),
+            profit_neg: s.board_credit.round() < 0.0,
+            cash_fmt: fmt_figure(s.cash, idle),
+            cash_neg: s.cash.round() < 0.0,
+            forfeited_fmt: if s.forfeited.round() > 0.0 { format!("−{} forfeited", fmt_auec(s.forfeited)) } else { String::new() },
+            forfeits_in_fmt: if s.forfeits_received.round() > 0.0 { format!("+{} from forfeits", fmt_auec(s.forfeits_received)) } else { String::new() },
             runs: s.runs_closed,
             loads: s.loads_sold,
             scu_fmt: fmt_auec(s.scu_hauled as f64),
             route_from: s.best_route.as_ref().map(|r| short_terminal(&r.from)).unwrap_or_default(),
             route_to: s.best_route.as_ref().map(|r| short_terminal(&r.to)).unwrap_or_default(),
             has_route: s.best_route.is_some(),
-            pct: s.pct_of_org.round() as u32,
-            dim: s.loads_sold == 0 && s.board_credit == 0.0,
+            pct: s.share_of_org.round().clamp(0.0, 100.0) as u32,
+            pct_label: pct_label(s.share_of_org),
+            dim: idle,
         }
+    }
+}
+
+/// One `[BY …]` sort command and its column header.
+pub struct SortLink {
+    pub key: &'static str,
+    pub label: &'static str,
+    pub on: bool,
+}
+
+/// What the share bar measures under each sort.
+pub fn share_heading(key: SortKey) -> &'static str {
+    match key {
+        SortKey::Profit => "Share of org profit",
+        SortKey::Collected => "Share of org collected",
+        SortKey::Runs => "Share of org runs",
+        SortKey::Scu => "Share of org SCU hauled",
+    }
+}
+
+fn share_hint(key: SortKey) -> &'static str {
+    match key {
+        SortKey::Profit => "Each member's profit (credit) as a share of the org's; adds up to 100%.",
+        SortKey::Collected => "Each member's collected aUEC as a share of the org's; adds up to 100%.",
+        SortKey::Runs => "Closed runs the member flew, out of the org's. A shared run counts for everyone aboard, so these don't add up to 100%.",
+        SortKey::Scu => "SCU sold on loads the member sold or held a share of, out of the org's. Shared loads count for everyone on them, so these don't add up to 100%.",
     }
 }
 
@@ -693,6 +752,9 @@ pub struct RecentShareView {
 pub struct BoardView {
     pub rows: Vec<StandingView>,
     pub sort: &'static str,
+    pub sorts: Vec<SortLink>,
+    pub share_head: &'static str,
+    pub share_hint: &'static str,
     pub org_realised_fmt: String,
     pub closed_runs: usize,
     pub scu_hauled_fmt: String,
@@ -734,6 +796,21 @@ pub fn board_view(users: &[User], voyages: &[Voyage], key: SortKey) -> BoardView
     BoardView {
         rows: rows.iter().enumerate().map(|(i, s)| StandingView::new(i + 1, s)).collect(),
         sort: key.as_str(),
+        sorts: SortKey::ALL
+            .iter()
+            .map(|k| SortLink {
+                key: k.as_str(),
+                label: match k {
+                    SortKey::Profit => "By profit",
+                    SortKey::Collected => "By collected",
+                    SortKey::Runs => "By runs",
+                    SortKey::Scu => "By SCU",
+                },
+                on: *k == key,
+            })
+            .collect(),
+        share_head: share_heading(key),
+        share_hint: share_hint(key),
         org_realised_fmt: fmt_auec(realised),
         closed_runs,
         scu_hauled_fmt: fmt_auec(scu_hauled as f64),
@@ -875,6 +952,36 @@ mod tests {
         assert_eq!(short_terminal("ArcCorp Mining Area 141"), "ArcCorp 141");
         assert_eq!(trim_num(25.0), "25");
         assert_eq!(trim_num(12.5), "12.5");
+    }
+
+    #[test]
+    fn share_labels_round_and_never_pass_100() {
+        assert_eq!(pct_label(100.0), "100%");
+        assert_eq!(pct_label(99.6), "100%");
+        assert_eq!(pct_label(37.4), "37%");
+        assert_eq!(pct_label(0.3), "<1%");
+        assert_eq!(pct_label(0.0), "0%");
+        assert_eq!(share_heading(SortKey::Runs), "Share of org runs");
+        assert_eq!(share_heading(SortKey::Scu), "Share of org SCU hauled");
+    }
+
+    #[test]
+    fn the_board_shows_what_a_forfeit_cost_and_who_got_it() {
+        use crate::stowage::model::fixtures::{sold_load, users, voyage, GIG, JT};
+        use crate::stowage::model::ShareKind;
+        let vs = vec![voyage(1, JT, None, vec![sold_load(1, JT, 10.0, 30.0, &[32], vec![(GIG, Some(JT), ShareKind::Pct, 100.0)])])];
+        let b = board_view(&users(), &vs, SortKey::Profit);
+        assert_eq!(b.share_head, "Share of org profit");
+        assert_eq!(b.sorts.iter().filter(|s| s.on).map(|s| s.key).collect::<Vec<_>>(), vec!["profit"]);
+        let gig = b.rows.iter().find(|r| r.user_id == GIG).unwrap();
+        assert_eq!((gig.rank, gig.profit_fmt.as_str(), gig.cash_fmt.as_str()), (1, "+640", "0"));
+        assert_eq!((gig.forfeited_fmt.as_str(), gig.pct_label.as_str(), gig.pct), ("−640 forfeited", "100%", 100));
+        let jt = b.rows.iter().find(|r| r.user_id == JT).unwrap();
+        assert_eq!((jt.profit_fmt.as_str(), jt.cash_fmt.as_str(), jt.forfeits_in_fmt.as_str()), ("0", "+640", "+640 from forfeits"));
+        assert!(!jt.dim, "a member who sold isn't idle even at 0 profit");
+        let by_runs = board_view(&users(), &vs, SortKey::Runs);
+        assert_eq!(by_runs.share_head, "Share of org runs");
+        assert!(by_runs.rows.iter().filter(|r| r.user_id != 3).all(|r| r.pct_label == "100%"));
     }
 
     #[test]
