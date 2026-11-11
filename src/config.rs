@@ -20,6 +20,11 @@ pub struct Config {
     /// Discord sign-in, when all of its variables are set (see
     /// `DiscordConfig::from_env`). Without it the gate is handle + password.
     pub discord: Option<DiscordConfig>,
+    /// `RIPAE_DEV_RESET_LOGINS=<password>`: local dev only, for running on a
+    /// copy of the live database. At boot every account gets this password
+    /// and loses its Discord link, and stored sessions are dropped (see
+    /// `db::dev_reset_logins`). Refused alongside Discord sign-in.
+    pub dev_reset_logins: Option<String>,
 }
 
 /// The Discord application and the server whose members get in.
@@ -88,6 +93,15 @@ impl Config {
         let log_json = std::env::var("RIPAE_LOG_JSON").as_deref() == Ok("1");
         let cookie_secure = std::env::var("RIPAE_COOKIE_SECURE").as_deref() != Ok("0");
         let discord = DiscordConfig::from_env()?;
+        let dev_reset_logins = std::env::var("RIPAE_DEV_RESET_LOGINS")
+            .ok()
+            .filter(|v| !v.is_empty());
+        if dev_reset_logins.is_some() && discord.is_some() {
+            anyhow::bail!(
+                "RIPAE_DEV_RESET_LOGINS rewrites every account's password; \
+                 it is refused while Discord sign-in is configured (that is a real deployment)"
+            );
+        }
 
         Ok(Self {
             bind,
@@ -97,6 +111,7 @@ impl Config {
             log_json,
             cookie_secure,
             discord,
+            dev_reset_logins,
         })
     }
 }

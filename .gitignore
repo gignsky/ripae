@@ -8,3 +8,6 @@
 result
 result-*
 proptest-regressions/
+
+# local test databases (scripts/dev.sh)
+.dev/

@@ -3,6 +3,13 @@
 Every notable change to Ripae. Newest first. This file is also what the
 version badge in the corner of the site shows.
 
+## 0.3.2
+
+### Added
+- **A test copy of the site on any machine.** `scripts/dev.sh` runs Ripae
+  locally on a clean database, or on a copy of the live one pulled from
+  spacedock, without touching the real site. Nothing changes for members.
+
 ## 0.3.1
 
 ### Changed
