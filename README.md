@@ -34,7 +34,9 @@ cargo build --release
 throwaway database, walks the whole 0.2 story (gate → new run → crate
 manifest → partial close with a forfeited share → SALE banner → leaderboard
 → service record → delete through the confirmation) and asserts there is no
-horizontal scroll at 1280 / 760 / 400 px. Set `RIPAE_URL` to run it against
+horizontal scroll at 1280 / 760 / 400 px; then the fleet (hulls, a carried
+one and a loaner, pull out / store / destroy / claim, a run flown by a hull
+that follows `[NEXT STOP]`, the same widths on `/fleet`). Set `RIPAE_URL` to run it against
 an already-running build instead. It needs `playwright` resolvable from
 Node (`npm i -g playwright && npx playwright install chromium`, or a
 preinstalled copy on `NODE_PATH`). The raster reveal is not something a
@@ -182,6 +184,21 @@ still a reasonable addition; not built here, kept to scope.
 - [x] `cargo test` (65 tests incl. the proptest invariants of RIPAE-ROLL7.md §6); `scripts/smoke.mjs` passes.
 - [x] `CHANGELOG.md` 0.2.0; `Cargo.toml` 0.2.0; badge reads `v0.2.0`.
 - [ ] Deployed to spacedock -- operator action (`rf promote`, dotfiles deploy with the wipe + reseed above).
+
+## Roadmap
+
+- **0.4** -- permissions (who may edit what; today anyone signed in may
+  edit anything) and the **hangar import**: pulling members' owned ships
+  from their RSI hangar into the fleet. Groundwork is in: `hulls.source` /
+  `hulls.external_ref` (NULL for hand-typed hulls, unique per source when
+  set) let imported rows be reconciled on a re-import. Sources looked at:
+  ccugame.app offers CSV exports of a hangar (no public API found); the RSI
+  hangar exporters HangarXPLOR and hangar.link's Hangar Export produce
+  JSON / CSV. The import itself is not built.
+- **0.5** -- the **UEX import** (prices, and reconciling off-list
+  commodity / terminal / ship names onto `uex_id`). The splash says
+  `PRICE FEED ... MANUAL (UEX IMPORT 0.5)`. The historical specs
+  (RIPAE-0.2.md etc.) still say 0.4; they are left as written.
 
 ## Decisions
 
@@ -357,3 +374,55 @@ Routes (roll 4, migration 0011):
   terminal and leaves the rest open for another. Ship tracking (whose ship,
   where it's parked) is its own roll; `voyages.at_stop` and the route are
   the groundwork for "where is this ship now".
+
+Fleet (roll 8):
+
+- **Hulls, not models.** `hulls` (migration 0014) is the crew's actual
+  ships and ground vehicles; `ships` stays the model lookup. A hull's
+  model snaps to the list (spelling, manufacturer, capacity) when it's on
+  it and is kept as typed when it isn't (an Ursa, a Cyclone variant) --
+  the "pick-lists are suggestions" rule. Anyone signed in may add, edit
+  and remove any hull until 0.4's permissions.
+- **One status at a time**: on order, stored at, pulled out at, destroyed
+  (claim pending). Quick actions per row: Delivered (on order → stored),
+  Pull out (stored → out), Store (out or stored → stored; storing a
+  stored hull is a hangar transfer), Destroyed (stored or out), Claim
+  (destroyed → stored). The rules are `fleet::model::apply`. A blank
+  location keeps the one it has. "Pulled out by" is always the owner (in
+  Star Citizen nobody can pull a crewmate's ship), so there's no pilot
+  field, and a voyage can only fly its own crew member's hull.
+- **Carried hulls follow their carrier.** A hull carried in another has
+  no whereabouts of its own: its status and location are its outermost
+  carrier's (`fleet::model::resolve`), so storing or moving the carrier
+  moves it. Carrying something that (transitively) carries you is refused,
+  and only hulls in play (stored / out) carry or ride. Pulling out or
+  storing a carried hull unloads it. **Destroying a carrier destroys what
+  it carries** (each needs its own claim) and unloads them. Removing a
+  carrier leaves its contents where they were (in its own carrier, or
+  given its status and location).
+- **Loaners** are tagged and linked to their pledge (same owner, a hull
+  on order). Once the pledge is delivered its row offers *Remove loaners*
+  (deleted) or *Keep them* (they become ordinary hulls) until one is picked.
+- **Insurance** is the owner's number: a claim cost in aUEC plus a free
+  text type (LTI, 10 yr). Destroyed hulls show the claim cost; the
+  at-a-glance tiles sum it.
+- **Voyages fly a hull** (`voyages.hull_id`, NULL for every voyage from
+  before). Picking one in New Run / Edit voyage sets the voyage's
+  `ship_id` to the hull's model when it's on the list, so the stowage
+  plan and capacity work as before. A new run pulls the hull out at the
+  route's start; `[NEXT STOP]` moves it to the stop reached (what it
+  carries goes along); an Edit voyage that changes the hull or where the
+  voyage is does the same, other edits leave it alone. A hull on order or
+  destroyed is never dragged out by a voyage. Nothing is stored
+  automatically: when a sale closes the voyage, the SALE banner offers
+  `[STORE <hull> AT <where>]` (where the last sale was, else the stop
+  reached), and the fleet page keeps offering it while the hull is still
+  out there. Detaching a load copies the hull with the ship.
+- **The fleet page** (`/fleet`) filters by member and status (and
+  loaners), sorts by owner / model / status / location, nests carried hulls
+  under their carrier, and shows which open voyage a hull is flying. A
+  member's name filters the fleet to their hulls (no member ledger route
+  on this branch). Quick actions re-render with the page's filters, read
+  from htmx's `HX-Current-URL`. Locations suggest the terminals plus every
+  place a hull has been left. The fleet page does not live-refresh from
+  other members' changes yet (the ledger does).
