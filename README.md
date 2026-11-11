@@ -418,10 +418,10 @@ still hold come first.
   signing in at the gate (Discord's included, via a one-shot session flag)
   doesn't play it again. Deep links (`/board`) and htmx partials never show it.
 - **The ledger's four panels start folded** to their title bar on entering.
-  The bar is a `<button aria-expanded aria-controls>`; hovering it (mouse or
-  pen), focusing it or tapping it unfolds the panel with a quick stepped wipe
+  The bar is a `<button aria-expanded aria-controls>`; resting on it (mouse or
+  pen) for 200 ms, focusing it or tapping it unfolds the panel with a quick stepped wipe
   (instant under reduced motion). Open Cargo, Stowage Plan and Ledger then
-  stay open until `[HIDE]`; New Run folds again when the pointer leaves
+  stay open until `[HIDE]`; New Run folds again 600 ms after the pointer leaves
   unless it was clicked, focused into or typed into, and never while one of
   its fields has focus. The bar never folds a panel (a hover-then-click
   would otherwise shut it); `[HIDE]` does. State is a class on the

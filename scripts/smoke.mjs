@@ -192,6 +192,12 @@ const run = async () => {
   await page.waitForURL(base + "/");
   check("the rail's Ledger link skips the splash", await page.isHidden("#splash"));
 
+  // -- hover intent: a pass over a bar doesn't open it --
+  await page.hover("#plans-panel > header .bar");
+  await page.mouse.move(5, 5);
+  await page.waitForTimeout(350);
+  check("a pointer passing over a bar leaves it folded", !(await page.isVisible("#plans")));
+
   // -- hover: Open Cargo stays open; New Run peeks, and stays only once clicked --
   await openPanel(page, "open-cargo-panel");
   await page.mouse.move(5, 5);
@@ -200,6 +206,7 @@ const run = async () => {
   await page.hover("#newrun > header");
   await page.waitForSelector("#newrun-form", { state: "visible" });
   await page.mouse.move(5, 5);
+  check("New Run lingers a moment after the pointer leaves", await page.isVisible("#newrun-form"));
   await page.waitForSelector("#newrun-form", { state: "hidden" });
   check("New Run folds again when the pointer leaves", true);
   await page.click("#newrun-toggle");

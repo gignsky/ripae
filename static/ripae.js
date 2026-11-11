@@ -245,6 +245,7 @@
           its fields has focus. State is a class on the <section>, which no htmx swap replaces. Open "stay"
           panels are remembered for the tab (sessionStorage) and forgotten on entering through the splash. ---- */
   var FOLD_KEY = "ripae.panels.open";
+  var FOLD_OPEN_MS = 200, FOLD_CLOSE_MS = 600; // hover before opening; how long New Run lingers after the pointer leaves
   var folds = Array.prototype.slice.call(document.querySelectorAll(".panel.fold"));
   function foldLoad() { try { return JSON.parse(sessionStorage.getItem(FOLD_KEY) || "[]"); } catch (e) { return []; } }
   function foldSave() {
@@ -275,8 +276,22 @@
     p.classList.remove("open");
     if (bar) bar.setAttribute("aria-expanded", "false");
     if (keep.indexOf(p.id) >= 0 || p.classList.contains("pinned")) setFold(p, true, false);
-    head.addEventListener("pointerenter", function (e) { if (e.pointerType !== "touch") setFold(p, true); });
-    p.addEventListener("pointerleave", function (e) { if (e.pointerType !== "touch") peekClose(p); });
+    // hover intent: a pointer passing over a bar doesn't open it, and New Run lingers a moment after it
+    // leaves, so a slip off the edge doesn't fold it. Focus, clicks and taps stay instant.
+    var openT = 0, closeT = 0;
+    function later(t, fn, ms) { clearTimeout(t); return setTimeout(fn, ms); }
+    head.addEventListener("pointerenter", function (e) {
+      if (e.pointerType === "touch") return;
+      clearTimeout(closeT);
+      openT = later(openT, function () { setFold(p, true); }, FOLD_OPEN_MS);
+    });
+    head.addEventListener("pointerleave", function () { clearTimeout(openT); });
+    p.addEventListener("pointerenter", function () { clearTimeout(closeT); });
+    p.addEventListener("pointerleave", function (e) {
+      if (e.pointerType === "touch") return;
+      clearTimeout(openT);
+      closeT = later(closeT, function () { peekClose(p); }, FOLD_CLOSE_MS);
+    });
     p.addEventListener("focusin", function (e) {
       if (hushFocus) return;
       setFold(p, true);
