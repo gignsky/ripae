@@ -10,6 +10,9 @@
     <meta name="htmx-config" content='{"useTemplateFragments": true}' />
     <script src="/static/htmx.min.js?v={{ crate::changelog::VERSION }}"></script>
     <script>
+      // Set before first paint so folded panels never flash open (ripae.js
+      // sets it too, later, for pages that skip this).
+      document.documentElement.classList.add("js");
       // Validation failures come back as 422 with the form re-rendered and an
       // error line. htmx 1.9 refuses to swap any 4xx by default, so without
       // this the edit/close forms looked like they did nothing (0.1.3 bug).
@@ -110,7 +113,9 @@
           <p class="any"><button class="cmd boxed" type="submit" id="g-enter">Enter</button></p>
         </form>
         {% endif %}
-        <div class="ras any" id="g-known"{% if shell.splash_mode == "gate" %} hidden{% endif %}>Welcome back, <b id="g-who">{{ shell.splash_who }}</b> · Press any key<span class="cursor"></span> · <form method="post" action="/logout" class="inline"><button class="cmd" type="submit" id="g-logout">Log out</button></form></div>
+        {# Opening the site with a session lands here too: [CONTINUE AS ...]
+           (or any key) lets the member in. #}
+        <div class="ras any" id="g-known"{% if shell.splash_mode == "gate" %} hidden{% endif %}>Welcome back, <b id="g-who">{{ shell.splash_who }}</b> · <button class="cmd boxed" type="button" id="g-continue">Continue as {{ shell.splash_who }}</button> · or press any key<span class="cursor"></span> · <form method="post" action="/logout" class="inline"><button class="cmd" type="submit" id="g-logout">Log out</button></form></div>
       </div>
     </div>
 
