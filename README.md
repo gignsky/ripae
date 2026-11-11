@@ -55,6 +55,52 @@ baseline, grouped by voyage; confirming applies it to live in one
 transaction and deletes the copy). Everyone else stays on live throughout.
 Sandboxes are deleted after 24 h (boot sweep, then hourly) and on log out.
 
+## Running a test copy locally
+
+```sh
+scripts/dev.sh                 # clean database, kept in .dev/clean.db (--reset empties it)
+scripts/dev.sh live            # copy of the live database from spacedock (--refresh pulls anew)
+```
+
+Works from any host with `cargo` (`nix develop` / direnv) and, for `live`,
+`ssh spacedock`. It serves on `127.0.0.1:8080` over plain HTTP (override with
+`RIPAE_BIND`), keeps its databases under `.dev/` (gitignored), and strips any
+Discord settings from the environment, so it can never sign in against, or
+write to, the real site. Sign in with handle + password, `changeme` unless
+`RIPAE_DEV_PASSWORD` says otherwise: `lordgig` / `firstofficer` on a clean
+database, any live handle on a copy. A copy is pulled once and then reused;
+local edits to it survive restarts until you `--refresh`.
+
+On a copy, `RIPAE_DEV_RESET_LOGINS=<password>` (which `dev.sh live` sets)
+gives every account that password, drops its Discord link and clears stored
+sessions at boot, so you needn't set Discord up. The app refuses to start
+with it set alongside Discord sign-in.
+
+**One-time spacedock setup.** `/var/lib/ripae` is root-only, so the pull goes
+through a single sudo command that takes a consistent `sqlite3 .backup` into
+`~/.cache/ripae-snapshot.db` (`scripts/spacedock-snapshot.sh`). In the
+dotfiles, on spacedock:
+
+```nix
+let
+  ripae-snapshot = pkgs.writeShellApplication {
+    name = "ripae-snapshot";
+    runtimeInputs = [ pkgs.sqlite pkgs.coreutils pkgs.getent ];
+    # keep a copy of scripts/spacedock-snapshot.sh next to the config
+    text = builtins.readFile ./spacedock-snapshot.sh;
+  };
+in {
+  environment.systemPackages = [ ripae-snapshot ];
+  security.sudo.extraRules = [{
+    users = [ "gig" ];
+    commands = [{ command = "/run/current-system/sw/bin/ripae-snapshot"; options = [ "NOPASSWD" ]; }];
+  }];
+}
+```
+
+The snapshot is the live ledger, password hashes and Discord ids included;
+it sits mode 600 in `~/.cache` on spacedock and in `.dev/` locally.
+
 ## Discord sign-in
 
 Set all four of these and the gate becomes `[SIGN IN WITH DISCORD]`:
