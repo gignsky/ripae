@@ -103,8 +103,10 @@
   /* ---- label every cell with its column header, so narrow screens can stack rows as cards ---- */
   function labelCards(root) {
     (root.matches && root.matches("table.cards") ? [root] : Array.prototype.slice.call(root.querySelectorAll ? root.querySelectorAll("table.cards") : [])).forEach(function (t) {
-      if (!t.tHead) return;
-      var hs = Array.prototype.map.call(t.tHead.rows[0].cells, function (c) { return c.textContent.trim(); });
+      // a table-wide thead, or (Open Cargo) the column-header row each voyage carries
+      var hr = t.tHead ? t.tHead.rows[0] : t.querySelector("tr.colhead");
+      if (!hr) return;
+      var hs = Array.prototype.map.call(hr.cells, function (c) { return c.textContent.trim(); });
       Array.prototype.forEach.call(t.tBodies, function (tb) {
         Array.prototype.forEach.call(tb.rows, function (r) {
           if (r.cells.length < hs.length) return;
@@ -198,18 +200,18 @@
     var bb = fields.querySelector("[name=balance_before]"), ba = fields.querySelector("[name=balance_after]");
     var boxes = fields.querySelector("[data-boxes]"), bcalc = fields.querySelector(".boxes-calc");
     if (!mode || !p || !l) return; // the close form has its own wiring
-    var scuTouched = !!(scu && scu.value);
+    // SCU is generated from the boxes (crates define it): a read-only figure
+    // the server derives again, so it is never typed or posted.
+    var scuVal = parseFloat(scu && scu.textContent) || 0;
     function recalcBoxes() {
       if (!boxes) return;
       var bs = parseBoxes(boxes.value); var tot = 0, cnt = 0; bs.forEach(function (b) { tot += b.n * b.size; cnt += b.n; });
-      if (!bs.length) { bcalc.textContent = "= —"; bcalc.classList.remove("bad"); return; }
-      if (!scuTouched || !scu.value) scu.value = tot;
-      var q = parseFloat(scu.value) || 0;
-      bcalc.innerHTML = "= <b>" + tot + "</b> SCU · " + cnt + " box" + (cnt === 1 ? "" : "es") + (q && q !== tot ? " · SCU field says " + q + " -- crates define the SCU" : "");
-      bcalc.classList.toggle("bad", !!q && q !== tot);
+      scuVal = tot;
+      if (scu) scu.textContent = bs.length ? String(tot) : "—";
+      bcalc.innerHTML = bs.length ? "= <b>" + tot + "</b> SCU · " + cnt + " box" + (cnt === 1 ? "" : "es") : "= —";
     }
     function recalcPrice() {
-      var q = parseFloat(scu && scu.value) || 0;
+      var q = scuVal;
       if (scuL) scuL.hidden = mode.value !== "scu"; if (lotL) lotL.hidden = mode.value !== "lot";
       balL.forEach(function (b) { b.hidden = mode.value !== "balance"; });
       if (mode.value === "scu" && scuL) { var per = parseFloat(p.value) || 0; scuL.querySelector(".calc").innerHTML = q && per ? "lot = <b>" + fmt(per * q) + "</b> · " + q + " SCU" : "lot = —"; }
@@ -222,7 +224,6 @@
       }
       else if (lotL) { var tot = parseFloat(l.value) || 0; lotL.querySelector(".calc").innerHTML = q && tot ? "per SCU = <b>" + fmt(tot / q) + "</b> · " + q + " SCU" : "per SCU = —"; }
     }
-    if (scu) scu.addEventListener("input", function () { scuTouched = true; recalcBoxes(); recalcPrice(); });
     if (boxes) boxes.addEventListener("input", function () { recalcBoxes(); recalcPrice(); });
     [mode, p, l, bb, ba].forEach(function (el) { if (el) { el.addEventListener("input", recalcPrice); el.addEventListener("change", recalcPrice); } });
     var status = fields.querySelector("[data-status]"), storedAt = fields.querySelector("[name=stored_at]");
@@ -298,6 +299,127 @@
   });
   window.ripaeFoldAll = foldAll;
 
+  /* ---- keyboard flow: focus the first field of a form that opens, and put focus somewhere
+          sensible when an htmx swap takes away the element that had it ---- */
+  var FIELDS = "input:not([type=hidden]):not([readonly]):not([disabled]):not([tabindex='-1']), select:not([disabled]), textarea:not([disabled])";
+  function visible(el) { return !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length); }
+  function firstField(root) { return Array.prototype.filter.call(root.querySelectorAll(FIELDS), visible)[0] || null; }
+  // a swapped-in line is visibility:hidden until the raster lights it, and hidden things refuse focus
+  function focusSoon(el, tries) {
+    if (!el || !el.isConnected) return;
+    var a = document.activeElement;
+    if (tries && a && a !== document.body && a.isConnected) return; // the user has moved on
+    el.focus({ preventScroll: true });
+    if (document.activeElement !== el && (tries || 0) < 20) setTimeout(function () { focusSoon(el, (tries || 0) + 1); }, 60);
+  }
+  function focusFirstField(root) { var f = firstField(root); if (f) focusSoon(f); return !!f; }
+  function buttonsIn(root) { return Array.prototype.filter.call(root.querySelectorAll("button:not([disabled])"), visible); }
+  var lastTrigger = null, openers = {};
+  document.addEventListener("htmx:beforeRequest", function (e) {
+    var elt = e.detail && e.detail.elt, t = e.detail && e.detail.target;
+    if (!elt || !t || !t.id || t.id === "overlay") { lastTrigger = null; return; }
+    if (elt.tagName === "BUTTON" && !elt.closest("form")) {
+      var scope = document.getElementById(t.id);
+      lastTrigger = { scope: t.id, label: elt.textContent.trim(), index: scope ? buttonsIn(scope).indexOf(elt) : -1 };
+    } else lastTrigger = { scope: t.id, fromForm: true };
+  });
+  document.addEventListener("htmx:afterSettle", function (e) {
+    var trig = lastTrigger; lastTrigger = null;
+    if (!trig) return;
+    var a = document.activeElement;
+    var lost = !a || a === document.body || !a.isConnected;
+    var t = e.detail && e.detail.target, el = t && t.id ? document.getElementById(t.id) : null;
+    if (!el) return;
+    var form = el.querySelector("form");
+    if (form) {
+      // a form opened (or came back with an error): remember who opened it, start on its first field
+      if (!trig.fromForm) openers[trig.scope] = trig;
+      if (lost || !trig.fromForm || form.querySelector(".form-error")) focusFirstField(form);
+      return;
+    }
+    if (!lost) return;
+    // the form closed (saved or cancelled) or the trigger was replaced: back to the button that
+    // opened it, else the same button again, else the row's first command
+    var back = trig.fromForm ? openers[trig.scope] : trig;
+    delete openers[trig.scope];
+    var scope = (back && document.getElementById(back.scope)) || el;
+    var bs = buttonsIn(scope);
+    var hit = back && (bs.filter(function (b) { return b.textContent.trim() === back.label; })[0] || (back.index >= 0 && bs[back.index]));
+    var first = hit || scope.querySelector(".cmd:not([disabled])") || bs[0];
+    if (first) focusSoon(first);
+  });
+  /* ---- route editor (New Run, Edit voyage): stops, and every stop pick-list in step ---- */
+  var stopSeq = 0;
+  function shortTerminal(t) { return t.replace("Mining Facility ", "").replace("Mining Area ", ""); }
+  function routeRows(ed) { return Array.prototype.slice.call(ed.querySelectorAll(".route-stops > .route-stop")); }
+  // every row as {key, label}, start first -- labelled as views::stop_option_label spells it
+  function routeOptions(ed) {
+    return routeRows(ed).map(function (li, i) {
+      var t = (li.querySelector("[name=stop_terminal]").value || "").trim();
+      var name = t ? shortTerminal(t) : "—";
+      return { key: li.querySelector("[name=stop_key]").value, label: (i === 0 ? "Start · " : "Stop " + i + " · ") + name };
+    });
+  }
+  function fillPick(sel, opts) {
+    var kind = sel.getAttribute("data-stop-pick");
+    var want = sel.value || sel.getAttribute("data-sel") || "";
+    var list = kind === "drop" ? opts.slice(1) : opts;
+    var keys = list.map(function (o) { return o.key; });
+    sel.innerHTML = "";
+    if (kind === "drop") sel.appendChild(new Option("undecided", ""));
+    list.forEach(function (o) { sel.appendChild(new Option(o.label, o.key)); });
+    if (kind === "drop" && want === "" && sel.hasAttribute("data-fresh")) want = keys.length ? keys[keys.length - 1] : "";
+    if (want !== "" && keys.indexOf(want) < 0) want = kind === "drop" ? (keys.length ? keys[keys.length - 1] : "") : (keys[0] || "");
+    if (want === "" && kind !== "drop") want = keys[0] || "";
+    sel.value = want; sel.removeAttribute("data-fresh"); sel.setAttribute("data-sel", want);
+  }
+  function refreshRoute(ed) {
+    var rows = routeRows(ed);
+    rows.forEach(function (li, i) {
+      li.querySelector(".ln").textContent = i === 0 ? "Start" : i;
+      var inp = li.querySelector("[name=stop_terminal]");
+      inp.placeholder = i === 0 ? "where you start" : "terminal";
+      inp.setAttribute("aria-label", i === 0 ? "Start" : "Stop " + i);
+      var up = li.querySelector(".up"), rm = li.querySelector(".rm-stop");
+      if (up) up.hidden = i === 0; if (rm) rm.hidden = i === 0;
+    });
+    var form = ed.closest("form") || ed.parentNode, opts = routeOptions(ed);
+    form.querySelectorAll("select[data-stop-pick]").forEach(function (sel) { fillPick(sel, opts); });
+  }
+  function wireRoute(ed) {
+    if (ed.dataset.wired) { refreshRoute(ed); return; } ed.dataset.wired = "1";
+    var list = ed.querySelector(".route-stops"), tpl = ed.querySelector(".stop-tpl");
+    ed.addEventListener("click", function (e) {
+      var b = e.target.closest("button"); if (!b || !ed.contains(b)) return;
+      var li = b.closest(".route-stop");
+      if (b.hasAttribute("data-add-stop")) {
+        var row = tpl.content.firstElementChild.cloneNode(true);
+        row.querySelector("[name=stop_key]").value = "n" + Date.now().toString(36) + (stopSeq++);
+        row.classList.add("lit"); list.appendChild(row);
+        document.dispatchEvent(new CustomEvent("htmx:load", { detail: { elt: row } }));
+        refreshRoute(ed); row.querySelector("[name=stop_terminal]").focus();
+      } else if (b.classList.contains("rm-stop") && li && li.previousElementSibling) {
+        li.remove(); refreshRoute(ed);
+      } else if (b.classList.contains("up") && li && li.previousElementSibling) {
+        list.insertBefore(li, li.previousElementSibling); refreshRoute(ed);
+      }
+    });
+    // keep the labels in step with the terminals as they're typed or picked
+    ed.addEventListener("input", function (e) { if (e.target.name === "stop_terminal") refreshRoute(ed); });
+    ed.addEventListener("change", function (e) { if (e.target.name === "stop_terminal") refreshRoute(ed); });
+    refreshRoute(ed);
+  }
+  function wireRoutes(root) {
+    if (!root || !root.querySelectorAll) return;
+    var eds = Array.prototype.slice.call(root.querySelectorAll("[data-route]"));
+    // a load line added to a form that has a route: fill its pick-lists
+    var form = root.closest && root.closest("form");
+    var own = form && form.querySelector("[data-route]");
+    if (own && eds.indexOf(own) < 0) eds.push(own);
+    eds.forEach(wireRoute);
+  }
+  document.addEventListener("htmx:load", function (e) { wireRoutes(e.detail && e.detail.elt); });
+
   /* ---- New Run panel: add / remove load lines ---- */
   var panel = document.getElementById("newrun");
   if (panel) {
@@ -317,13 +439,13 @@
     }
     function addLoad() {
       var line = tpl.content.firstElementChild.cloneNode(true);
-      // the new line inherits the previous line's terminal
-      var prev = loads.lastElementChild;
-      if (prev) { var t = prev.querySelector("[name=terminal]"); var nt = line.querySelector("[name=terminal]"); if (t && nt) nt.value = t.value; }
+      // a new line is picked up at the start and dropped at the last stop (static/ripae.js route editor)
+      var dsel = line.querySelector("select[data-stop-pick=drop]"); if (dsel) dsel.setAttribute("data-fresh", "1");
       loads.appendChild(line); wireRemove(line); renumber();
       // let the picker, the date default and the price wiring see the new line
       document.dispatchEvent(new CustomEvent("htmx:load", { detail: { elt: line } }));
       raster([line], true);
+      focusFirstField(line);
     }
     Array.prototype.forEach.call(loads.children, wireRemove); renumber();
     var add = document.getElementById("add-load"); if (add) add.addEventListener("click", addLoad);

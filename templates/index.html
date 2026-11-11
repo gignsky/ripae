@@ -8,14 +8,14 @@
    stays open until [HIDE]; "peek" (New Run) folds again when the pointer
    leaves, unless it was clicked or typed into. #}
 <section class="panel fold" id="open-cargo-panel" data-fold="stay">
-  <header><h2><button class="bar" type="button" id="open-cargo-bar" aria-expanded="true" aria-controls="open-cargo-body">Open Cargo</button></h2><span class="hint">Bought, not yet sold, grouped by voyage. Oldest first. Stop № is the order you mean to sell. Loads move between voyages with Merge and Detach.</span><button class="cmd fold-hide" type="button" aria-controls="open-cargo-body">Hide</button></header>
+  <header><h2><button class="bar" type="button" id="open-cargo-bar" aria-expanded="true" aria-controls="open-cargo-body">Open Cargo</button></h2><span class="hint">Bought, not yet sold, grouped by voyage. Oldest first. Each voyage flies a route; the numbers are the stops a load comes aboard (when not the start) and comes off at. [Next stop] moves a voyage along it. Loads move between voyages with Merge and Detach.</span><button class="cmd fold-hide" type="button" aria-controls="open-cargo-body">Hide</button></header>
   <div class="body" id="open-cargo-body">
   {{ open_cargo_html|safe }}
   </div>
 </section>
 
 <section class="panel fold" id="plans-panel" data-fold="stay">
-  <header><h2><button class="bar" type="button" id="plans-bar" aria-expanded="true" aria-controls="plans-body">Stowage Plan</button></h2><span class="hint">Live, from Open Cargo. Last stop loads first, deepest in the hold. Unassigned voyages bound the same way are offered as one.</span><button class="cmd fold-hide" type="button" aria-controls="plans-body">Hide</button></header>
+  <header><h2><button class="bar" type="button" id="plans-bar" aria-expanded="true" aria-controls="plans-body">Stowage Plan</button></h2><span class="hint">Live, from Open Cargo, leg by leg along each route. What comes off first sits by the door; what boards later goes on top of what is already aboard. Unassigned voyages bound the same way are offered as one.</span><button class="cmd fold-hide" type="button" aria-controls="plans-body">Hide</button></header>
   <div class="body" id="plans-body">
   {{ plans_html|safe }}
   </div>

@@ -39,8 +39,19 @@
     <script src="/static/picker.js?v={{ crate::changelog::VERSION }}" defer></script>
     <script src="/static/ripae.js?v={{ crate::changelog::VERSION }}" defer></script>
   </head>
-  <body>
+  <body{% if shell.test_mode %} class="test-mode"{% endif %}>
     <div class="screen">
+      {% if shell.test_mode %}
+      {# Always on screen while this session writes to its sandbox. Plain
+         forms, no htmx: leaving test mode reloads the whole page. #}
+      <div class="test-banner" id="test-banner" role="status">
+        <p class="tb-line"><b class="tb-tag">▲ TEST MODE</b> <span>Sandbox copy · nothing here touches the live books</span></p>
+        <div class="tb-acts">
+          <form method="post" action="/test-mode/discard" class="inline"><button class="cmd danger" type="submit" id="test-discard">Discard</button></form>
+          <a class="cmd warn" href="/test-mode/keep" id="test-keep">Keep / push live</a>
+        </div>
+      </div>
+      {% endif %}
       <header class="rail" id="rail">
         <h1>RIPAE <small>LEDGER TERMINAL · NISC CARGO</small></h1>
         <div class="meta">
@@ -51,6 +62,7 @@
             <a class="cmd{% if shell.screen == "ledger" %} on{% endif %}" href="/" data-go="ledger">Ledger</a>
             <a class="cmd{% if shell.screen == "board" %} on{% endif %}" href="/board" data-go="board">Leaderboard</a>
           </nav>
+          {% if !shell.test_mode %}<form method="post" action="/test-mode" class="inline"><button class="cmd warn" type="submit" id="test-enter" title="Work on a private copy of the books; discard it or push it live after">Enter test mode</button></form>{% endif %}
           <button class="cmd" type="button" id="replay-splash">Close</button>
           {% else %}
           <span>STARDATE <b>{{ shell.stardate }}</b></span>
@@ -111,6 +123,10 @@
           </div>
           {% if let Some(err) = shell.gate_error %}<p class="gate-err neg" id="g-err">{{ err }}</p>{% endif %}
           <p class="any"><button class="cmd boxed" type="submit" id="g-enter">Enter</button></p>
+          {% if !shell.dev_logins.is_empty() %}
+          {# RIPAE_DEV_QUICK_LOGIN (local dev): one click per account, no password #}
+          <p class="any" id="g-dev">Dev sign-in:{% for (id, handle, name) in shell.dev_logins %} <button class="cmd" type="submit" formaction="/login/dev" formnovalidate name="user_id" value="{{ id }}" title="{{ handle }}">{{ name }}</button>{% endfor %}</p>
+          {% endif %}
         </form>
         {% endif %}
         {# Opening the site with a session lands here too: [CONTINUE AS ...]

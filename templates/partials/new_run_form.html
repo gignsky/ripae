@@ -1,19 +1,21 @@
 <form class="run" method="post" action="/voyages" id="newrun-form">
   {% if let Some(error) = new_run.error %}<p class="ras neg form-error">{{ error }}</p>{% endif %}
-  <div class="ras sub-h"><span>Voyage</span><span>Crew member, ship and date apply to every load below</span></div>
+  <div class="ras sub-h"><span>Voyage</span><span>Crew member, ship and date apply to every load below; the status is for what boards at the start</span></div>
   <div class="ras fields">
     <label>Crew member<select name="logged_by" title="Whose run this is: they bought it and will sell it; you may just be keeping the books">{% for u in new_run.users %}<option value="{{ u.id }}"{% if new_run.logged_by == u.id.to_string() %} selected{% endif %}>{{ u.display_name|upper }}</option>{% endfor %}</select></label>
     <label>Bought on<input type="date" name="bought_at" value="{{ new_run.bought_at }}" data-today required /></label>
     <label>Ship<input type="text" name="ship" list="pick-ships" data-pick autocomplete="off" value="{{ new_run.ship }}" placeholder="no hull yet" /></label>
     <label>Status<select name="voyage_status">
-      <option value="awaiting_pickup"{% if new_run.status == "awaiting_pickup" %} selected{% endif %}>Awaiting pickup</option>
-      <option value="aboard"{% if new_run.status == "aboard" || new_run.status == "" %} selected{% endif %}>In transit</option>
+      <option value="awaiting_pickup"{% if new_run.status == "awaiting_pickup" || new_run.status == "" %} selected{% endif %}>Awaiting pickup</option>
+      <option value="aboard"{% if new_run.status == "aboard" %} selected{% endif %}>In transit</option>
       <option value="stored"{% if new_run.status == "stored" %} selected{% endif %}>Stored</option>
     </select></label>
     <label>Stored at<input type="text" name="voyage_stored_at" list="pick-terminals" data-pick autocomplete="off" placeholder="—" value="{{ new_run.stored_at }}" /></label>
     <label>Notes<input type="text" name="voyage_notes" value="{{ new_run.notes }}" /></label>
   </div>
-  <div class="ras sub-h"><span>Cargo loads</span><span>One per commodity or hauling contract. Boxes as count×SCU, comma-separated: 2×32, 4×8</span></div>
+  {% let r = new_run.route.clone() %}
+  {% include "partials/route_fields.html" %}
+  <div class="ras sub-h"><span>Cargo loads</span><span>One per commodity or hauling contract, each picked up and dropped at stops on the route. Boxes as count×SCU, comma-separated: 2×32, 4×8</span></div>
   <div class="cargo-lines" id="loads">
     {% for f in new_run.loads %}
     <div class="ras cargo-line"><span class="ln">{{ loop.index }}</span><div class="fields">
@@ -23,7 +25,7 @@
     {% endfor %}
   </div>
   <template id="load-tpl">
-    {% let f = crate::stowage::views::LoadFormView::blank("") %}
+    {% let f = crate::stowage::views::LoadFormView::blank(Vec::new()) %}
     <div class="ras cargo-line"><span class="ln">1</span><div class="fields">
       {% include "partials/load_fields.html" %}
       <span class="line-cmd"><button class="cmd danger rm" type="button">Remove</button></span>
@@ -32,6 +34,6 @@
   <div class="ras"><button class="cmd" type="button" id="add-load">+ Add load</button></div>
   <div class="ras formfoot">
     <span class="actions"><button class="cmd boxed" type="submit">Log run</button><button class="cmd" type="button" id="newrun-cancel">Cancel</button></span>
-    <span class="note">Terminal and ship default to the crew's last delivery point and last hull.</span>
+    <span class="note">The start and ship default to the crew's last delivery point and last hull.</span>
   </div>
 </form>
