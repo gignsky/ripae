@@ -106,6 +106,14 @@ pub struct IndexTemplate {
     pub ships: Vec<String>,
 }
 
+/// `/crew/:id/ledger` -- one member's voyages, newest first.
+#[derive(Template)]
+#[template(path = "crew_ledger.html")]
+pub struct CrewLedgerTemplate {
+    pub shell: Shell,
+    pub m: crate::stowage::views::MemberLedgerView,
+}
+
 /// `/test-mode/keep` -- what pushing the sandbox live would change.
 #[derive(Template)]
 #[template(path = "test_mode.html")]

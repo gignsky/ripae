@@ -12,12 +12,12 @@
 // (one priced per lot) on a three-stop route, the second picked up at the
 // first's drop → per-leg stowage plan → [NEXT STOP] → a second run → crate
 // manifest: one crate lost, one stored (written off, but kept out of
-// Realised while its voyage is open) → status reads SPLIT → close the first
-// load selling two crates
-// with a 25 % share forfeited to the other crew member → SALE banner shows
-// the profit → leaderboard → a crew name → service record → close the other
-// load at a loss: the voyage closes, the write-off lands and Realised turns
-// red → delete the
+// Realised while its voyage is open) → status reads SPLIT → put the other
+// crew member on the voyage's crew on 25 %, forfeited back to the owner →
+// close the first load selling two crates under that split → SALE banner
+// shows the profit → leaderboard → a crew name → their ledger → service
+// record → close the other load at a loss: the voyage closes, the
+// write-off lands and Realised turns red → delete the
 // second voyage through the confirmation → gone. Then asserts no
 // horizontal scroll at 1280 / 760 / 400 px. Then test mode: enter it, log
 // a run, the TEST banner is up and another member still sees live, discard
@@ -150,6 +150,16 @@ async function newRun(page, ship, route, loads, crew) {
   check("Open Cargo stays open across the post-redirect reload", await page.isVisible("#open-cargo-panel.open #open-cargo"));
   check("no splash after logging a run", await page.isHidden("#splash"));
   await openPanels(page);
+}
+
+async function noScroll(page, where) {
+  for (const w of [1280, 760, 400]) {
+    await page.setViewportSize({ width: w, height: 900 });
+    await page.waitForTimeout(150);
+    const [sw, cw] = await page.evaluate(() => [document.documentElement.scrollWidth, document.documentElement.clientWidth]);
+    check(`no horizontal scroll at ${w}px${where}`, sw === cw, `scrollWidth ${sw}, clientWidth ${cw}`);
+  }
+  await page.setViewportSize({ width: 1280, height: 900 });
 }
 
 const run = async () => {
@@ -328,7 +338,22 @@ const run = async () => {
   check("status reads SPLIT", (await page.textContent(`#${firstId} .status`)).trim() === "Split");
   check("where-now lists both groups", (await page.textContent(`#${firstId} td.where >> nth=1`)).includes("stored at Everus Harbor"));
 
-  // -- close the first load: two crates, 25 % share to JT forfeited to Gig --
+  // -- the voyage's crew: JT aboard on 25 % of every sale, forfeited to Gig --
+  const firstHead = await page.locator("#open-cargo tbody.vhead").first().getAttribute("id");
+  await page.locator(`#${firstHead} .cmd`, { hasText: "Edit" }).click();
+  await page.waitForSelector(`#${firstHead} form.crew-form`);
+  check("the owner is on the crew from the start", (await page.locator(`#${firstHead} .crew-row`).count()) === 1);
+  await page.click(`#${firstHead} .add-crew`);
+  const jtRow = page.locator(`#${firstHead} .crew-rows .crew-row`).nth(1);
+  await jtRow.locator("[name=crew_user]").selectOption({ label: "JT" });
+  await jtRow.locator("[name=crew_pct]").fill("25");
+  await jtRow.locator("[name=crew_paid_to]").selectOption({ label: "LORD GIG" });
+  await page.click(`#${firstHead} form.crew-form button[type=submit]`);
+  await page.waitForSelector(`#${firstHead} .crew-line`);
+  await page.waitForFunction((id) => !document.querySelector(`#${id} form.crew-form`), firstHead);
+  check("voyage header lists the crew and the split", (await page.textContent(`#${firstHead} .crew-line`)).includes("JT 25% → LORD GIG"));
+
+  // -- close the first load: two crates, split by the crew --
   await page.locator(`#${firstId} .cmd`, { hasText: "Close" }).click();
   await page.waitForSelector(`#${firstId} form.close-form`);
   const picks = page.locator(`#${firstId} label.crate input`);
@@ -336,12 +361,11 @@ const run = async () => {
   check("two sound crates pre-selected", (await picks.nth(1).isChecked()) && (await picks.nth(2).isChecked()));
   await page.fill(`#${firstId} [name=sell_terminal]`, "Area18 TDD");
   await page.fill(`#${firstId} [name=sell_scu]`, "3600");
-  await page.click(`#${firstId} .add-share`);
-  await page.waitForSelector(`#${firstId} .share`);
-  await page.selectOption(`#${firstId} [name=share_to]`, { label: "JT" });
-  await page.fill(`#${firstId} [name=share_amount]`, "25");
-  await page.selectOption(`#${firstId} [name=share_paid_to]`, { label: "LORD GIG" });
-  check("live preview computes the profit", (await page.textContent(`#${firstId} .preview`)).includes("+12,800"));
+  const split = await page.textContent(`#${firstId} .crew-split`);
+  check("close form shows the crew's split", split.includes("JT") && split.includes("25% of profit") && split.includes("forfeited to LORD GIG"));
+  check("no per-sale share editor any more", (await page.locator(`#${firstId} [name=share_to], #${firstId} .add-share`).count()) === 0);
+  const preview = await page.textContent(`#${firstId} .preview`);
+  check("live preview computes the profit and the crew's cut", preview.includes("+12,800") && preview.includes("shares 3,200") && preview.includes("9,600"), preview);
   await page.click(`#${firstId} form.close-form button[type=submit]`);
   await page.waitForSelector("#overlay:not([hidden]) #sale-profit");
   const banner = await page.textContent("#overlay");
@@ -353,6 +377,16 @@ const run = async () => {
   check("ledger gained the sale", (await page.textContent("#ledger")).includes("+12,800"));
   check("panels stay open through htmx swaps", (await page.isVisible("#open-cargo")) && (await page.isVisible("#ledger")) && (await page.isVisible("#plans")));
   check("first load left Open Cargo (lost crate rides along)", (await page.locator(`#${firstId}`).count()) === 0);
+
+  // -- the sale editor re-pays the sale's own shares unless asked to re-split by the crew --
+  await page.locator("#ledger .cmd", { hasText: "Sale" }).first().click();
+  await page.waitForSelector("#overlay:not([hidden]) [data-overlay=sale-edit]");
+  const rec = await page.textContent("#overlay .split-lines.recorded");
+  check("sale editor shows the shares as recorded", rec.includes("JT") && rec.includes("as recorded"));
+  check("sale editor offers a re-split by the crew", (await page.locator("#overlay [name=resplit]").count()) === 1);
+  await page.click("#overlay form.sale-edit button[type=submit]");
+  await page.waitForSelector("#overlay", { state: "hidden" });
+  check("saving the sale unchanged keeps its split", (await page.textContent("#ledger")).includes("→ JT 3,200 (to LORD GIG)"));
 
   // -- sell JT's load on JT's behalf: the close form defaults to the buyer --
   const jtId = await page.locator("#open-cargo tbody.load").nth(1).getAttribute("id");
@@ -374,9 +408,9 @@ const run = async () => {
   check("leaderboard ranks JT first (his 67,200 beats Gig's 9,600 + 3,200)", (await page.textContent("#board tbody tr >> nth=0")).includes("JT"));
   check("JT's row carries his profit", (await page.textContent("#board tbody tr >> nth=0")).includes("+70,400"));
   check("recent shares shows the forfeit", (await page.textContent("#view-board")).includes("JT → LORD GIG"));
-  const jtRow = () => page.locator("#board tbody tr", { hasText: "firstofficer" });
-  check("collected is what JT's sale took in, before cargo costs (48 × 9,000)", (await jtRow().locator("td.collected").textContent()).includes("+432,000"));
-  check("JT's row shows what he forfeited", (await jtRow().locator("td.collected .forfeit").textContent()).includes("−3,200 forfeited"));
+  const jtBoardRow = () => page.locator("#board tbody tr", { hasText: "firstofficer" });
+  check("collected is what JT's sale took in, before cargo costs (48 × 9,000)", (await jtBoardRow().locator("td.collected").textContent()).includes("+432,000"));
+  check("JT's row shows what he forfeited", (await jtBoardRow().locator("td.collected .forfeit").textContent()).includes("−3,200 forfeited"));
   check("Gig's row shows what was forfeited to him", (await page.locator("#board tbody tr", { hasText: "lordgig" }).locator(".forfeit-in").textContent()).includes("+3,200 from forfeits"));
   check("Profit and Collected headers explain themselves", (await page.getAttribute("#board th:has-text('Collected')", "title")).includes("Forfeited shares go to someone else"));
   check("by profit: the bar is the share of org profit", (await page.textContent("#board th.bar")).trim() === "Share of org profit");
@@ -406,7 +440,22 @@ const run = async () => {
     }
     await page.setViewportSize({ width: 1280, height: 900 });
   }
-  await page.locator("#board .crew", { hasText: "Lord Gig" }).click();
+
+  // -- a crew name opens their ledger; its totals are the board's --
+  const gigRow = page.locator("#board tbody tr", { hasText: "Lord Gig" });
+  const gigProfit = (await gigRow.locator("td.num").first().textContent()).trim();
+  const gigCollected = (await gigRow.locator("td.collected").evaluate((td) => td.firstChild.textContent)).trim();
+  await Promise.all([page.waitForURL(/\/crew\/\d+\/ledger$/), gigRow.locator(".crew").click()]);
+  await page.waitForSelector("#member-ledger");
+  check("member ledger totals match the leaderboard row", (await page.textContent("#ledger-credit")).trim() === gigProfit, `${gigProfit} vs ${await page.textContent("#ledger-credit")}`);
+  check("the ledger's collected is the board's Collected", (await page.textContent("#ledger-cash")).includes(gigCollected), `${gigCollected} vs ${await page.textContent("#ledger-cash")}`);
+  const lv = page.locator("#member-ledger tbody.lvoyage");
+  check("one voyage on Gig's ledger, with his roles", (await lv.count()) === 1 && (await lv.first().textContent()).includes("logged · sold"));
+  await lv.first().locator("[data-expand]").click();
+  await page.waitForSelector("#member-ledger tr.lloads:not([hidden])");
+  check("a voyage row opens to its loads", (await page.textContent("#member-ledger tr.lloads")).includes("LARANITE"));
+  await noScroll(page, " on the member ledger");
+  await page.locator("#crew-ledger .cmd", { hasText: "Service record" }).click();
   await page.waitForSelector("#overlay:not([hidden]) .record");
   check("service record visible", await page.isVisible("#overlay .record"));
   check("WOMP WOMP for rank 2", await page.isVisible("#overlay .ascii.womp"));
@@ -452,12 +501,13 @@ const run = async () => {
   check("[DELETE VOYAGE] removes it", (await page.locator(`#${secondHead}`).count()) === 0);
 
   // -- no horizontal scroll at any width --
-  for (const w of [1280, 760, 400]) {
-    await page.setViewportSize({ width: w, height: 900 });
-    await page.waitForTimeout(150);
-    const [sw, cw] = await page.evaluate(() => [document.documentElement.scrollWidth, document.documentElement.clientWidth]);
-    check(`no horizontal scroll at ${w}px`, sw === cw, `scrollWidth ${sw}, clientWidth ${cw}`);
-  }
+  await noScroll(page, "");
+  // -- and the screen fills a wide window rather than stopping at a fixed width --
+  await page.setViewportSize({ width: 1920, height: 900 });
+  await page.waitForTimeout(150);
+  const fill = await page.evaluate(() => [document.querySelector(".screen").getBoundingClientRect().width, document.documentElement.clientWidth]);
+  check("the screen fills a 1920px window", fill[0] >= fill[1] - 2 * Math.max(16, fill[1] * 0.015) - 1, `${fill[0]} of ${fill[1]}`);
+  await page.setViewportSize({ width: 1280, height: 900 });
 
   // -- test mode: a sandbox for this session only; discard, then keep --
   await page.setViewportSize({ width: 1280, height: 900 });

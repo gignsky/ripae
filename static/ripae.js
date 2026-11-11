@@ -163,6 +163,15 @@
     raster(secs, false, function () { location.href = href; });
   });
 
+  /* ---- [data-expand]: show / hide the element it names (a member ledger's loads under a voyage) ---- */
+  document.addEventListener("click", function (e) {
+    var b = e.target.closest("[data-expand]"); if (!b) return;
+    var t = document.getElementById(b.dataset.expand); if (!t) return;
+    var open = t.hidden; t.hidden = !open; b.setAttribute("aria-expanded", open ? "true" : "false");
+    b.classList.toggle("on", open);
+    if (open) { t.classList.add("ras"); t.classList.remove("lit"); raster([t], true); }
+  });
+
   /* ---- every panel header gets [HIDE]/[SHOW]; the body rasters out and in ---- */
   document.querySelectorAll(".panel > header").forEach(function (h) {
     var panel = h.parentNode;
@@ -466,14 +475,13 @@
     var add = document.getElementById("add-load"); if (add) add.addEventListener("click", addLoad);
   }
 
-  /* ---- close form: crate picker, live preview, shares ---- */
+  /* ---- close form: crate picker, live preview, the crew's split ---- */
   function wireClose(form) {
     if (form.dataset.wired) return; form.dataset.wired = "1";
     var buyScu = parseFloat(String(form.dataset.buyScu || "0").replace(/,/g, "")) || 0;
     var scuSold = form.querySelector("[data-scu-sold]"), mode = form.querySelector("[data-mode]");
     var scuL = form.querySelector(".price-scu"), lotL = form.querySelector(".price-lot");
     var balL = Array.prototype.slice.call(form.querySelectorAll(".price-bal"));
-    var sharesBox = form.querySelector(".shares");
     function crates() { return Array.prototype.slice.call(form.querySelectorAll("label.crate")); }
     function paintCrate(c) {
       var i = c.querySelector("input"); var sk = c.querySelector(".sold-kept");
@@ -495,11 +503,21 @@
       }
       var tot = parseFloat(form.querySelector("[name=sell_lot]").value) || 0; return { q: q, rev: tot, per: q ? tot / q : 0 };
     }
+    // the split shown read-only: the crew's terms less the seller's own (or, on the
+    // sale editor, the shares as recorded unless re-split by the crew)
+    var resplit = form.querySelector(".resplit");
     function shares(profit) {
-      var paid = 0;
-      sharesBox.querySelectorAll(".share").forEach(function (sh) {
-        var kind = sh.querySelector("[name=share_kind]").value, amt = parseFloat(sh.querySelector("[name=share_amount]").value) || 0;
-        paid += profit <= 0 ? 0 : (kind === "pct" ? profit * amt / 100 : amt);
+      var paid = 0, seller = (form.querySelector("[name=sold_by]") || {}).value;
+      var crew = form.querySelector(".crew-split"), rec = form.querySelector(".split-lines.recorded");
+      if (rec && resplit) { rec.hidden = resplit.checked; crew.hidden = !resplit.checked; }
+      form.querySelectorAll(".split-lines").forEach(function (box) {
+        box.querySelectorAll(".split-line").forEach(function (ln) {
+          var skip = box.dataset.skipSeller && ln.dataset.user === seller;
+          ln.classList.toggle("dim", !!skip);
+          var tag = ln.querySelector(".seller-tag"); if (tag) tag.hidden = !skip;
+          if (box.hidden || skip || profit <= 0) return;
+          paid += profit * (parseFloat(ln.dataset.pct) || 0) / 100 + (parseFloat(ln.dataset.flat) || 0);
+        });
       });
       return paid;
     }
@@ -522,59 +540,51 @@
     var all = form.querySelector(".sel-all"), none = form.querySelector(".sel-none");
     if (all) all.addEventListener("click", function () { crates().forEach(function (c) { var i = c.querySelector("input"); if (!i.disabled) i.checked = c.dataset.sound === "1"; paintCrate(c); }); recalc(); });
     if (none) none.addEventListener("click", function () { crates().forEach(function (c) { var i = c.querySelector("input"); if (!i.disabled) i.checked = false; paintCrate(c); }); recalc(); });
-    wireShares(form, recalc);
     form.querySelectorAll("input,select").forEach(function (el) { el.addEventListener("input", recalc); el.addEventListener("change", recalc); });
     recalc();
   }
 
-  /* ---- profit shares: [+ ADD SHARE] / [REMOVE], even split. Close form, sale editor, voyage form ---- */
-  function wireShares(form, onChange) {
-    if (form.dataset.sharesWired) return; form.dataset.sharesWired = "1";
-    var box = form.querySelector(".shares"), tpl = form.querySelector(".share-tpl"), add = form.querySelector(".add-share");
+  /* ---- voyage crew: [+ ADD CREW] / [REMOVE]; a new member's % is an even cut until typed into ---- */
+  function wireCrew(form) {
+    if (form.dataset.crewWired) return; form.dataset.crewWired = "1";
+    var box = form.querySelector(".crew-rows"), tpl = form.querySelector(".crew-tpl"), add = form.querySelector(".add-crew");
     if (!box || !tpl || !add) return;
-    onChange = onChange || function () {};
-    function rows() { return Array.prototype.slice.call(box.querySelectorAll(".share")); }
-    // whoever keeps the remainder: the seller picked on a sale, the run's owner on a voyage
-    function owner() { var s = form.querySelector("[name=sold_by], [name=logged_by]"); return s ? s.value : form.dataset.owner || ""; }
-    // a % share nobody has typed into is an even cut: what the typed-in %
-    // shares leave, split equally among them and whoever keeps the remainder
+    function rows() { return Array.prototype.slice.call(box.querySelectorAll(".crew-row")); }
+    // what the typed-in cuts leave, split equally among the untouched new members and whoever sells
     function even() {
       var typed = 0, auto = [];
-      rows().forEach(function (sh) {
-        if (sh.querySelector("[name=share_kind]").value !== "pct") return;
-        var a = sh.querySelector("[name=share_amount]");
-        if (sh.dataset.auto) auto.push(a); else typed += parseFloat(a.value) || 0;
+      rows().forEach(function (r) {
+        var a = r.querySelector("[name=crew_pct]");
+        if (r.dataset.auto) auto.push(a); else typed += parseFloat(a.value) || 0;
       });
       if (!auto.length) return;
       var each = Math.floor(Math.max(0, 100 - typed) / (auto.length + 1) * 100) / 100;
       auto.forEach(function (a) { a.value = each; });
     }
-    // a new share goes to the first crew member without one
-    function pickCrew(sh) {
-      var taken = rows().filter(function (r) { return r !== sh; }).map(function (r) { return r.querySelector("[name=share_to]").value; });
-      taken.push(owner());
-      var sel = sh.querySelector("[name=share_to]");
+    // a new row goes to the first member not aboard yet
+    function pickCrew(r) {
+      var taken = rows().filter(function (x) { return x !== r; }).map(function (x) { return x.querySelector("[name=crew_user]").value; });
+      var sel = r.querySelector("[name=crew_user]");
       var free = Array.prototype.filter.call(sel.options, function (o) { return taken.indexOf(o.value) < 0; })[0];
       if (free) sel.value = free.value;
     }
-    function wire(sh) {
-      sh.querySelectorAll("input,select").forEach(function (el) { el.addEventListener("input", onChange); el.addEventListener("change", onChange); });
-      sh.querySelector("[name=share_amount]").addEventListener("input", function () { delete sh.dataset.auto; even(); onChange(); });
-      sh.querySelector("[name=share_kind]").addEventListener("change", function () { even(); onChange(); });
-      sh.querySelector(".rm-share").addEventListener("click", function () { raster([sh], false, function () { sh.remove(); even(); onChange(); }); });
+    function wire(r) {
+      r.querySelector("[name=crew_pct]").addEventListener("input", function () { delete r.dataset.auto; even(); });
+      var rm = r.querySelector(".rm-crew");
+      if (rm) rm.addEventListener("click", function () { raster([r], false, function () { r.remove(); even(); }); });
     }
     rows().forEach(wire);
     add.addEventListener("click", function () {
-      var sh = tpl.content.firstElementChild.cloneNode(true); box.appendChild(sh);
-      pickCrew(sh); wire(sh); even(); raster([sh], true); onChange();
+      var r = tpl.content.firstElementChild.cloneNode(true); box.appendChild(r);
+      pickCrew(r); wire(r); even(); raster([r], true);
     });
   }
   document.addEventListener("htmx:load", function (e) {
     var root = e.detail && e.detail.elt; if (!root || !root.querySelectorAll) return;
     if (root.matches && root.matches("form.close-form")) wireClose(root);
     root.querySelectorAll("form.close-form").forEach(wireClose);
-    if (root.matches && root.matches("form.shares-form")) wireShares(root);
-    root.querySelectorAll("form.shares-form").forEach(function (f) { wireShares(f); });
+    if (root.matches && root.matches("form.crew-form")) wireCrew(root);
+    root.querySelectorAll("form.crew-form").forEach(wireCrew);
   });
 
   /* ---- live updates: another crew member's change refreshes the ledger panels in place ----

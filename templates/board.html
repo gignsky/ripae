@@ -22,7 +22,7 @@
       {% for s in board.rows %}
       <tr{% if s.dim %} class="dim"{% endif %}>
         <td class="rank">{{ s.rank }}</td>
-        <td class="name"><button class="cmd crew" type="button" hx-get="/crew/{{ s.user_id }}" hx-target="#overlay" hx-swap="innerHTML">{{ s.display_name }}</button> <span class="who">{{ s.handle }}</span></td>
+        <td class="name"><a class="cmd crew" href="/crew/{{ s.user_id }}/ledger" data-go="board" title="Their ledger: every voyage, newest first">{{ s.display_name }}</a> <span class="who">{{ s.handle }}</span></td>
         <td class="num {% if s.profit_neg %}neg{% else %}pos{% endif %}" title="Credit for the run">{{ s.profit_fmt }}</td>
         <td class="num collected{% if s.cash_neg %} neg{% endif %}" title="aUEC actually received">{{ s.cash_fmt }}{% if !s.forfeited_fmt.is_empty() %}<small class="forfeit" title="Shares this member earned but forfeited to someone else">{{ s.forfeited_fmt }}</small>{% endif %}{% if !s.forfeits_in_fmt.is_empty() %}<small class="forfeit-in" title="Shares other members forfeited to this one">{{ s.forfeits_in_fmt }}</small>{% endif %}</td>
         <td class="num">{{ s.runs }}</td>

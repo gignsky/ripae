@@ -17,7 +17,7 @@ use sqlx::{Column, Row, SqliteConnection, SqlitePool, TypeInfo, ValueRef};
 /// The mergeable tables, parents before children. Users, sessions, auth
 /// and the pick-lists are deliberately absent: they're never diffed and
 /// never written back.
-pub const LEDGER_TABLES: &[&str] = &["voyages", "voyage_stops", "loads", "crates", "shares", "voyage_shares"];
+pub const LEDGER_TABLES: &[&str] = &["voyages", "voyage_stops", "loads", "crates", "shares", "voyage_crew"];
 
 /// One SQLite value, exactly as stored (no float formatting round trip).
 #[derive(Debug, Clone, PartialEq)]

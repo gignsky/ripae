@@ -98,7 +98,7 @@ impl Ctx<'_> {
     fn key(&self, table: &str, row: &RowMap) -> Key {
         match table {
             "voyages" => int(row, "id").map_or(Key::Other, Key::Voyage),
-            "loads" | "voyage_shares" | "voyage_stops" => int(row, "voyage_id").map_or(Key::Other, Key::Voyage),
+            "loads" | "voyage_crew" | "voyage_stops" => int(row, "voyage_id").map_or(Key::Other, Key::Voyage),
             "crates" | "shares" => int(row, "load_id").map_or(Key::Other, |l| self.voyage_of_load(l)),
             _ => Key::Other,
         }
@@ -356,7 +356,7 @@ pub fn describe(ch: &ChangeSet, base: &Snapshot, sb: &Snapshot, names: &Names) -
         push(cx.voyage_of_load(load), format!("{name} crates: {}", parts.join(" · ")));
     }
 
-    for (table, what) in [("shares", "Share"), ("voyage_shares", "Voyage split")] {
+    for (table, what) in [("shares", "Share")] {
         let sh = ch.table(table);
         let on = |r: &RowMap| match table {
             "shares" => int(r, "load_id").and_then(|l| cx.row("loads", l)).map(|l| format!(" on {}", cx.load_name(l))).unwrap_or_default(),
@@ -394,9 +394,62 @@ pub fn describe(ch: &ChangeSet, base: &Snapshot, sb: &Snapshot, names: &Names) -
         }
     }
 
+    // a voyage's crew: saving the voyage form replaces its rows wholesale,
+    // so a member deleted and inserted again reads as one change, or none
+    let crew = ch.table("voyage_crew");
+    let terms = |r: &RowMap| {
+        let (p, f) = (num(r, "pct").unwrap_or(0.0), num(r, "flat").unwrap_or(0.0));
+        let mut t = Vec::new();
+        if p > 0.0 {
+            t.push(format!("{} of profit", pct(p)));
+        }
+        if f > 0.0 {
+            t.push(format!("{} aUEC a sale", money(f)));
+        }
+        let mut s = if t.is_empty() { "no share".to_string() } else { t.join(" + ") };
+        if let Some(to) = int(r, "paid_to") {
+            s.push_str(&format!(", forfeited to {}", cx.user(Some(to))));
+        }
+        s
+    };
+    let member = |r: &RowMap| (int(r, "voyage_id"), int(r, "user_id"));
+    let mut left: Vec<&RowMap> = crew
+        .deleted
+        .values()
+        .filter(|r| !int(r, "voyage_id").map_or(false, |v| voyages.deleted.contains_key(&v)))
+        .collect();
+    let changed = |b: &RowMap, a: &RowMap| {
+        let who = cx.user(int(a, "user_id"));
+        if terms(b) != terms(a) {
+            Some(format!("Crew: {who}'s terms {} → {}", terms(b), terms(a)))
+        } else if text(b, "reason") != text(a, "reason") {
+            Some(format!("Crew: {who}'s reason \"{}\" → \"{}\"", text(b, "reason"), text(a, "reason")))
+        } else {
+            None
+        }
+    };
+    for r in crew.inserted.values() {
+        match left.iter().position(|g| member(g) == member(r)).map(|i| left.remove(i)) {
+            Some(b) => {
+                if let Some(s) = changed(b, r) {
+                    push(cx.key("voyage_crew", r), s);
+                }
+            }
+            None => push(cx.key("voyage_crew", r), format!("Crew: {} joins · {}", cx.user(int(r, "user_id")), terms(r))),
+        }
+    }
+    for (b, a) in crew.updated.values() {
+        if let Some(s) = changed(b, a) {
+            push(cx.key("voyage_crew", a), s);
+        }
+    }
+    for r in left {
+        push(cx.key("voyage_crew", r), format!("Crew: {} leaves ({})", cx.user(int(r, "user_id")), terms(r)));
+    }
+
     // anything a later table adds, plainly
     for (table, t) in &ch.tables {
-        if matches!(table.as_str(), "voyages" | "voyage_stops" | "loads" | "crates" | "shares" | "voyage_shares") {
+        if matches!(table.as_str(), "voyages" | "voyage_stops" | "loads" | "crates" | "shares" | "voyage_crew") {
             continue;
         }
         for id in t.inserted.keys() {
@@ -454,7 +507,7 @@ fn row_label(cx: &Ctx, table: &str, id: i64) -> String {
             Some(l) => format!("{}'s share on {} ({})", cx.user(int(r, "to_user")), cx.load_name(l), voyage(int(l, "voyage_id"))),
             None => format!("{}'s share", cx.user(int(r, "to_user"))),
         },
-        "voyage_shares" => format!("{}'s voyage split on {}", cx.user(int(r, "to_user")), voyage(int(r, "voyage_id"))),
+        "voyage_crew" => format!("{}'s place on the crew of {}", cx.user(int(r, "user_id")), voyage(int(r, "voyage_id"))),
         "voyage_stops" => format!("the route of {} (stop {}, {})", voyage(int(r, "voyage_id")), int(r, "seq").unwrap_or(0), text(r, "terminal")),
         _ => format!("{table} row {id}"),
     }

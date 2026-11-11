@@ -444,3 +444,35 @@ async fn a_rewritten_route_pushes_live_and_reads_as_one_line() {
     assert_eq!(stops(w.live.clone(), v2).await, ["Area18 TDD", "Lorville TDD"], "the other route is untouched");
     assert_eq!(count(&w.live, &format!("SELECT at_stop FROM voyages WHERE id = {v1}")).await, 1);
 }
+
+#[tokio::test]
+async fn a_resaved_crew_pushes_live_and_reads_only_what_changed() {
+    let w = world().await;
+    let crew = |pool: SqlitePool, v: i64| async move {
+        sqlx::query_as::<_, (i64, f64, Option<i64>)>(&format!("SELECT user_id, pct, paid_to FROM voyage_crew WHERE voyage_id = {v} ORDER BY user_id"))
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+    };
+    // Lord Gig (1) runs it; JT (2) is aboard on 25 %
+    let v1 = voyage(&w.live, Some("Caterpillar")).await;
+    exec(&w.live, &format!("INSERT INTO voyage_crew (voyage_id, user_id) VALUES ({v1}, 1)")).await;
+    exec(&w.live, &format!("INSERT INTO voyage_crew (voyage_id, user_id, pct) VALUES ({v1}, 2, 25)")).await;
+    let id = w.boxes.create(&w.live).await.unwrap();
+    let sb = w.boxes.get(&id).await.unwrap();
+    // what repo::update_voyage does with the voyage form: every member out,
+    // the crew as saved back in -- Gig unchanged, JT up to 30 % forfeited to Gig
+    exec(&sb.pool, &format!("DELETE FROM voyage_crew WHERE voyage_id = {v1}")).await;
+    exec(&sb.pool, &format!("INSERT INTO voyage_crew (voyage_id, user_id) VALUES ({v1}, 1)")).await;
+    exec(&sb.pool, &format!("INSERT INTO voyage_crew (voyage_id, user_id, pct, paid_to) VALUES ({v1}, 2, 30, 1)")).await;
+
+    let (base, after, _) = snaps(&w, &id).await;
+    let lines: Vec<String> = describe(&diff(&base, &after), &base, &after, &names(&sb.pool).await)
+        .into_iter()
+        .flat_map(|g| g.lines)
+        .collect();
+    assert_eq!(lines, vec!["Crew: JT's terms 25% of profit → 30% of profit, forfeited to Lord Gig".to_string()]);
+
+    assert!(matches!(merge::merge(&w.live, &base, &after).await.unwrap(), Outcome::Merged { .. }));
+    assert_eq!(crew(w.live.clone(), v1).await, vec![(1, 0.0, None), (2, 30.0, Some(1))]);
+}
