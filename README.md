@@ -222,7 +222,7 @@ still a reasonable addition; not built here, kept to scope.
 - [x] Glitched and lost crates; lost SCU written off and shown.
 - [x] Close per crate, price per SCU or per lot, shares by % or flat, forfeits, kept crates stay open.
 - [x] SALE banner with blackout; DELETE confirmation; HOORAY / WOMP WOMP + service record.
-- [x] Leaderboard sortable by profit / runs / SCU, org totals, recent shares.
+- [x] Leaderboard sortable by profit / collected / runs / SCU, org totals, recent shares.
 - [x] Splash is the login; welcome once per session; `[CLOSE]` replays; `[LOG OUT]` on rail and splash.
 - [x] No horizontal scrollbar at 1280 / 760 / 400 px; cards under ~980 px.
 - [x] `cargo test` (65 tests incl. the proptest invariants of RIPAE-ROLL7.md §6); `scripts/smoke.mjs` passes.
@@ -327,6 +327,17 @@ still hold come first.
   (`Voyage::is_fully_sold`); then it lands in full. `Totals::losses` and
   `losses(u)` are the closed-voyage write-offs; the service record's
   *Crates lost* still shows every write-off.
+- **The board shows Profit and Collected side by side.** Profit is
+  `board_credit` (a forfeited share still counts for whoever earned it);
+  Collected is `cash` (what they actually received), with the forfeited
+  amount, and any forfeits received, under it. The money maths is
+  unchanged. The share bar follows the sort: profit and collected are a
+  share of the org's positive total (negatives count as 0, they add up to
+  100 %); runs and SCU are the fraction of the org's closed runs / SCU sold
+  the member took part in -- a shared run counts for everyone aboard, so
+  those don't add up to 100 %. Ties fall back to profit, collected, runs,
+  SCU, then name (A→Z, ignoring case). The service record's rank stays
+  "by profit".
 - **A net loss on *Realised · net of losses* is red.** The Open Cargo
   tile's value takes `.neg` (`--red`) when it rounds below zero -- an
   explicit exception to green-on-black; zero and gains stay green.
