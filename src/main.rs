@@ -41,6 +41,9 @@ async fn main() -> anyhow::Result<()> {
     let pool = db::connect(&config.db_path).await?;
     db::migrate(&pool).await?;
     db::seed_if_empty(&pool, &config).await?;
+    if let Some(password) = &config.dev_reset_logins {
+        db::dev_reset_logins(&pool, password).await?;
+    }
 
     let session_store = SqliteStore::new(pool.clone());
     session_store.migrate().await?;
