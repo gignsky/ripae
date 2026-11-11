@@ -4,6 +4,8 @@
   <div class="ras fields">
     <label>Crew member<select name="logged_by" title="Whose run this is: they bought it and will sell it; you may just be keeping the books">{% for u in new_run.users %}<option value="{{ u.id }}"{% if new_run.logged_by == u.id.to_string() %} selected{% endif %}>{{ u.display_name|upper }}</option>{% endfor %}</select></label>
     <label>Bought on<input type="date" name="bought_at" value="{{ new_run.bought_at }}" data-today required /></label>
+    {% let hp_sel = new_run.hull.clone() %}{% let hp_hulls = new_run.hulls.clone() %}
+    {% include "partials/hull_pick.html" %}
     <label>Ship<input type="text" name="ship" list="pick-ships" data-pick autocomplete="off" value="{{ new_run.ship }}" placeholder="no hull yet" /></label>
     <label>Status<select name="voyage_status">
       <option value="awaiting_pickup"{% if new_run.status == "awaiting_pickup" %} selected{% endif %}>Awaiting pickup</option>

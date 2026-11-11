@@ -3,6 +3,7 @@ mod changelog;
 mod config;
 mod db;
 mod discord;
+mod fleet;
 mod live;
 mod lookups;
 mod stowage;
@@ -75,6 +76,13 @@ async fn main() -> anyhow::Result<()> {
         .route("/live/panels", get(stowage::live_panels))
         .route("/board", get(stowage::board))
         .route("/crew/{id}", get(stowage::crew))
+        .route("/fleet", get(fleet::page))
+        .route("/hulls", post(fleet::create))
+        .route("/hulls/new", get(fleet::new_form))
+        .route("/hulls/{id}", axum::routing::put(fleet::update).delete(fleet::delete))
+        .route("/hulls/{id}/edit", get(fleet::edit_form))
+        .route("/hulls/{id}/status", post(fleet::status))
+        .route("/hulls/{id}/loaners", post(fleet::loaners))
         .route("/voyages", post(stowage::create_voyage))
         .route(
             "/voyages/{id}",

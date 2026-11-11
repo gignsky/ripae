@@ -47,6 +47,7 @@
           <nav class="views" aria-label="Screens">
             <a class="cmd{% if shell.screen == "ledger" %} on{% endif %}" href="/" data-go="ledger">Ledger</a>
             <a class="cmd{% if shell.screen == "board" %} on{% endif %}" href="/board" data-go="board">Leaderboard</a>
+            <a class="cmd{% if shell.screen == "fleet" %} on{% endif %}" href="/fleet" data-go="fleet">Fleet</a>
           </nav>
           <button class="cmd" type="button" id="replay-splash">Close</button>
           {% else %}

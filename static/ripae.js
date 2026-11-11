@@ -579,6 +579,37 @@
     else splash.hidden = true;
   }
 
+  /* ---- voyage forms: the Hull pick-list offers the run owner's hulls only (nobody can pull out a
+          crewmate's ship); picking one puts its model in the Ship field ---- */
+  function hullPick(root) {
+    if (!root || !root.querySelectorAll) return;
+    root.querySelectorAll("select[data-hull-pick]").forEach(function (sel) {
+      if (sel.dataset.wired) return;
+      sel.dataset.wired = "1";
+      var form = sel.closest("form");
+      if (!form) return;
+      var owner = form.querySelector("[name=logged_by]"), ship = form.querySelector("[name=ship]");
+      function filter() {
+        var o = owner ? owner.value : "";
+        Array.prototype.forEach.call(sel.options, function (op) {
+          if (!op.value) return;
+          var mine = !o || op.getAttribute("data-owner") === o;
+          op.hidden = !mine; op.disabled = !mine;
+          if (!mine && op.selected) sel.value = "";
+        });
+      }
+      if (owner) owner.addEventListener("change", filter);
+      sel.addEventListener("change", function () {
+        var op = sel.options[sel.selectedIndex];
+        var m = op && op.getAttribute("data-model");
+        if (ship && m) ship.value = m;
+      });
+      filter();
+    });
+  }
+  hullPick(document);
+  document.addEventListener("htmx:load", function (e) { hullPick(e.detail && e.detail.elt); });
+
   /* ---- leaderboard meters ---- */
   document.querySelectorAll(".meter[data-pct]").forEach(function (m) { m.style.setProperty("--p", m.dataset.pct); });
 })();

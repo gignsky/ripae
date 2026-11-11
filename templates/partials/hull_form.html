@@ -1,0 +1,31 @@
+{# Add or edit a hull, in the overlay. Success answers with an empty overlay
+   (static/ripae.js closes it) plus #fleet-body oob. Expects `f: HullFormView`. #}
+<div class="splash-in" data-overlay="hull" role="dialog" aria-label="{% if f.id.is_some() %}Edit hull{% else %}Add hull{% endif %}">
+  <p class="ras tag">{% if f.id.is_some() %}Edit <b>{% if f.nickname != "" %}{{ f.nickname }}{% else %}{{ f.model }}{% endif %}</b>{% else %}Add a <b>hull</b> to the fleet{% endif %}</p>
+  <form class="run hull-form" id="hull-form" {% if let Some(id) = f.id %}hx-put="/hulls/{{ id }}"{% else %}hx-post="/hulls"{% endif %} hx-target="#overlay" hx-swap="innerHTML">
+    {% if let Some(error) = f.error %}<p class="ras neg form-error">{{ error }}</p>{% endif %}
+    <div class="ras fields">
+      <label>Owner<select name="owner">{% for u in f.users %}<option value="{{ u.id }}"{% if f.owner == u.id.to_string() %} selected{% endif %}>{{ u.display_name|upper }}</option>{% endfor %}</select></label>
+      <label>Model<input type="text" name="model" list="pick-models" data-pick autocomplete="off" value="{{ f.model }}" placeholder="Ironclad, Ursa Rover…" required /></label>
+      <label>Nickname<input type="text" name="nickname" value="{{ f.nickname }}" placeholder="optional" /></label>
+      <label>Kind<select name="kind"><option value="ship"{% if f.kind != "vehicle" %} selected{% endif %}>Ship</option><option value="vehicle"{% if f.kind == "vehicle" %} selected{% endif %}>Ground vehicle</option></select></label>
+    </div>
+    <div class="ras fields">
+      <label>Status<select name="status">{% for s in f.statuses() %}<option value="{{ s.0 }}"{% if f.status == s.0 %} selected{% endif %}>{{ s.1 }}</option>{% endfor %}</select></label>
+      <label>Location<input type="text" name="location" list="pick-locations" data-pick autocomplete="off" value="{{ f.location }}" placeholder="station, city, hangar" /></label>
+      <label>Carried in<select name="carried_in" title="While carried, it is wherever its carrier is"><option value="">— not carried —</option>{% for c in f.carriers %}<option value="{{ c.0 }}"{% if f.carried_in == c.0 %} selected{% endif %}>{{ c.1 }}</option>{% endfor %}</select></label>
+    </div>
+    <div class="ras fields">
+      <label>Insurance claim<input type="text" name="insurance_claim" inputmode="numeric" value="{{ f.insurance_claim }}" placeholder="aUEC" /></label>
+      <label>Insurance<input type="text" name="insurance_type" value="{{ f.insurance_type }}" placeholder="LTI, 10 yr…" /></label>
+      <label class="inline-label check"><input type="checkbox" name="loaner" value="1"{% if f.loaner %} checked{% endif %} /> Loaner</label>
+      <label>Loaner for<select name="loaner_for" title="The pledge it is lent for (on order)"><option value="">—</option>{% for p in f.pledges %}<option value="{{ p.0 }}"{% if f.loaner_for == p.0 %} selected{% endif %}>{{ p.1 }}</option>{% endfor %}</select></label>
+      <label>Notes<input type="text" name="notes" value="{{ f.notes }}" /></label>
+    </div>
+    <p class="ras any"><span class="actions">
+      <button class="cmd boxed" type="submit">{% if f.id.is_some() %}Save{% else %}Add hull{% endif %}</button>
+      <button class="cmd boxed" type="button" data-dismiss>Cancel</button>
+      {% if let Some(id) = f.id %}<button class="cmd danger" type="button" id="hull-remove" hx-delete="/hulls/{{ id }}" hx-target="#overlay" hx-swap="innerHTML" title="Takes it off the fleet; anything it carries stays where it is">Remove hull</button>{% endif %}
+    </span></p>
+  </form>
+</div>

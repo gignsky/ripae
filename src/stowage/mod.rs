@@ -108,12 +108,18 @@ pub async fn shell(
         },
         None => "RESTRICTED".to_string(),
     };
+    let fleet = match user {
+        Some(_) => crate::fleet::boot_line(state).await,
+        None => "RESTRICTED".to_string(),
+    };
     let lines = [
         format!("RIPAE INTERFACE v{} ........ ONLINE", crate::changelog::VERSION),
         "LEDGER STORE ................... MOUNTED".to_string(),
         format!("CREW ROSTER .................... {crew} ABOARD"),
         format!("OPEN CARGO ..................... {cargo}"),
-        "PRICE FEED ..................... MANUAL (UEX IMPORT 0.4)".to_string(),
+        format!("FLEET .......................... {fleet}"),
+        // roadmap: 0.4 permissions + hangar import, 0.5 UEX import (README)
+        "PRICE FEED ..................... MANUAL (UEX IMPORT 0.5)".to_string(),
         String::new(),
     ];
     Shell {
@@ -282,6 +288,52 @@ async fn pick_ship(state: &AppState, raw: &str) -> Result<Option<i64>, String> {
             tracing::error!(error = %e, "failed to look up ship");
             Err("Could not check the ship list.".into())
         }
+    }
+}
+
+/// The fleet's hulls that can fly a voyage (plus `keep`, its own).
+async fn hull_choices(state: &AppState, keep: Option<i64>) -> Vec<crate::fleet::views::HullChoice> {
+    match crate::fleet::repo::list_hulls(&state.pool).await {
+        Ok(h) => crate::fleet::views::hull_choices(&h, keep),
+        Err(e) => {
+            tracing::error!(error = %e, "failed to list hulls");
+            Vec::new()
+        }
+    }
+}
+
+/// The hull picked to fly a voyage: one of the run owner's (only the owner
+/// can pull a hull out), stored or out. `current` (the voyage's own) is
+/// accepted as it is.
+async fn pick_hull(state: &AppState, raw: &str, owner: i64, current: Option<i64>) -> Result<Option<crate::fleet::repo::Hull>, String> {
+    let Some(v) = opt(raw) else { return Ok(None) };
+    let id: i64 = v.parse().map_err(|_| "Hull: pick one from the list.".to_string())?;
+    let hulls = crate::fleet::repo::list_hulls(&state.pool).await.map_err(|e| {
+        tracing::error!(error = %e, "failed to list hulls");
+        "Could not check the fleet.".to_string()
+    })?;
+    let Some(h) = hulls.iter().find(|h| h.id == id) else { return Err("Hull: that hull isn't in the fleet.".into()) };
+    if h.owner_id != owner {
+        return Err(format!(
+            "Hull: {} is {}'s -- a run flies its own crew member's hull (nobody can pull out a crewmate's ship).",
+            h.label(),
+            h.owner_name
+        ));
+    }
+    let nodes: Vec<_> = hulls.iter().map(|h| h.node()).collect();
+    let status = crate::fleet::model::resolve(&nodes, id).map(|r| r.status);
+    if Some(id) != current && !status.is_some_and(|s| s.in_play()) {
+        return Err(format!("Hull: {} is {} -- it can't fly.", h.label(), status.map(|s| s.label()).unwrap_or("gone").to_lowercase()));
+    }
+    Ok(Some(h.clone()))
+}
+
+/// The voyage's ship model: the hull's when it has one on the list (so the
+/// stowage plan and its capacity keep working), else the Ship field.
+async fn ship_of(state: &AppState, hull: Option<&crate::fleet::repo::Hull>, typed: &str) -> Result<Option<i64>, String> {
+    match hull.and_then(|h| h.ship_id) {
+        Some(id) => Ok(Some(id)),
+        None => pick_ship(state, typed).await,
     }
 }
 
@@ -558,6 +610,7 @@ async fn render_index(state: &AppState, user: &CurrentUser, mode: SplashMode, ne
         }
     });
     new_run.users = l.users.clone();
+    new_run.hulls = hull_choices(state, None).await;
     let options = new_run.route.options();
     for f in &mut new_run.loads {
         f.stops = options.clone();
@@ -590,6 +643,8 @@ pub async fn create_voyage(State(state): State<AppState>, user: CurrentUser, bod
         logged_by: form.get("logged_by").into(),
         users: Vec::new(),
         ship: form.get("ship").into(),
+        hull: form.get("hull").into(),
+        hulls: Vec::new(),
         status: form.get("voyage_status").into(),
         stored_at: form.get("voyage_stored_at").into(),
         notes: form.get("voyage_notes").into(),
@@ -606,7 +661,7 @@ pub async fn create_voyage(State(state): State<AppState>, user: CurrentUser, bod
             return render_index(&state, &user, SplashMode::Hidden, Some(view)).await;
         }
     };
-    match parse_new_run(&state, &view).await {
+    match parse_new_run(&state, &view, owner).await {
         Ok((voyage, loads)) => {
             if let Err(e) = repo::create_voyage(&state.pool, owner, user.id, &voyage, &loads).await {
                 tracing::error!(error = %e, "failed to create voyage");
@@ -622,9 +677,10 @@ pub async fn create_voyage(State(state): State<AppState>, user: CurrentUser, bod
     }
 }
 
-async fn parse_new_run(state: &AppState, v: &NewRunFormView) -> Result<(NewVoyage, Vec<NewLoad>), String> {
+async fn parse_new_run(state: &AppState, v: &NewRunFormView, owner: i64) -> Result<(NewVoyage, Vec<NewLoad>), String> {
     let bought_at = parse_date(&v.bought_at, today()).map_err(|e| format!("Bought on: {e}"))?;
-    let ship_id = pick_ship(state, &v.ship).await?;
+    let hull = pick_hull(state, &v.hull, owner, None).await?;
+    let ship_id = ship_of(state, hull.as_ref(), &v.ship).await?;
     let whereabouts = parse_whereabouts(&v.status)?.unwrap_or(Whereabouts::Aboard);
     let stored_at = pick_opt(state, Kind::Terminal, &v.stored_at).await;
     if whereabouts == Whereabouts::Stored && stored_at.is_none() {
@@ -663,7 +719,7 @@ async fn parse_new_run(state: &AppState, v: &NewRunFormView) -> Result<(NewVoyag
         });
     }
     let route = route.into_iter().map(|(_, t)| t).collect();
-    Ok((NewVoyage { ship_id, bought_at, notes: opt(&v.notes), route }, loads))
+    Ok((NewVoyage { ship_id, hull_id: hull.map(|h| h.id), bought_at, notes: opt(&v.notes), route }, loads))
 }
 
 // ---------------------------------------------------------------------------
@@ -733,6 +789,8 @@ async fn voyage_form(state: &AppState, v: &Voyage, with_route: bool) -> VoyageFo
     VoyageFormView {
         bought_at: v.bought_at.clone(),
         ship: v.ship.as_ref().map(|s| s.name.clone()).unwrap_or_default(),
+        hull: v.hull_id.map(|h| h.to_string()).unwrap_or_default(),
+        hulls: hull_choices(state, v.hull_id).await,
         notes: v.notes.clone().unwrap_or_default(),
         entered_by: v.entered_by.to_string(),
         users: repo::list_users(&state.pool).await.unwrap_or_default(),
@@ -787,6 +845,8 @@ async fn save_voyage_form(state: &AppState, v: &Voyage, body: &str) -> Result<()
     let mut view = VoyageFormView {
         bought_at: form.get("bought_at").into(),
         ship: form.get("ship").into(),
+        hull: form.get("hull").into(),
+        hulls: hull_choices(state, v.hull_id).await,
         notes: form.get("notes").into(),
         entered_by: form.get("entered_by").into(),
         users: repo::list_users(&state.pool).await.unwrap_or_default(),
@@ -821,8 +881,9 @@ async fn save_voyage_form(state: &AppState, v: &Voyage, body: &str) -> Result<()
     };
     let parsed = async {
         let bought_at = parse_date(&view.bought_at, today()).map_err(|e| format!("Bought on: {e}"))?;
-        let ship_id = pick_ship(state, &view.ship).await?;
         let logged_by = pick_member(&view.owner, v.logged_by, &view.users, "Crew member")?;
+        let hull = pick_hull(state, &view.hull, logged_by, v.hull_id).await?;
+        let ship_id = ship_of(state, hull.as_ref(), &view.ship).await?;
         let entered_by = pick_member(&view.entered_by, v.entered_by, &view.users, "Logged by")?;
         // the run's owner sells by default and keeps the remainder
         let shares = parse_shares(&view.shares, &view.users, logged_by, "run's owner")?;
@@ -830,7 +891,7 @@ async fn save_voyage_form(state: &AppState, v: &Voyage, body: &str) -> Result<()
             Some(rf) => Some(parse_route_edit(state, v, &form, rf).await?),
             None => None,
         };
-        Ok::<_, String>(EditVoyage { ship_id, bought_at, notes: opt(&view.notes), logged_by, move_loads: view.move_loads, entered_by, shares, route })
+        Ok::<_, String>(EditVoyage { ship_id, hull_id: hull.map(|h| h.id), bought_at, notes: opt(&view.notes), logged_by, move_loads: view.move_loads, entered_by, shares, route })
     }
     .await;
     let edit = match parsed {
@@ -1572,6 +1633,14 @@ pub async fn close_load(State(state): State<AppState>, user: CurrentUser, Path(i
     };
     let kept_scu: u32 = sale.kept.iter().filter(|c| c.is_live()).map(|c| c.size_scu).sum();
     let seller_name = users.iter().find(|u| u.id == seller).map(|u| u.display_name.clone()).unwrap_or_default();
+    // the voyage just closed: offer to put its hull away where it ended
+    let store = match l.voyages.iter().find(|v| v.id == sold.voyage_id).and_then(|v| v.hull_id) {
+        Some(h) => match crate::fleet::repo::list_hulls(&state.pool).await {
+            Ok(hulls) => crate::fleet::views::store_prompt(&hulls, &l.voyages, h),
+            Err(_) => None,
+        },
+        None => None,
+    };
     let banner = SaleFrag {
         haul: sold.is_haul(),
         who_upper: seller_name.to_uppercase(),
@@ -1585,6 +1654,7 @@ pub async fn close_load(State(state): State<AppState>, user: CurrentUser, Path(i
         shares: sold.shares.iter().map(ShareView::new).collect(),
         keeps_fmt: crate::templates::fmt_auec(sale.seller_keeps),
         kept_scu,
+        store,
     };
     let body = format!(
         "{}{}{}{}",

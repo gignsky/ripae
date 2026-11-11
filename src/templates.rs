@@ -174,6 +174,8 @@ pub struct SaleFrag {
     pub keeps_fmt: String,
     /// Live SCU left open on the voyage after a partial close.
     pub kept_scu: u32,
+    /// The voyage closed with its hull still out: `[STORE <hull> AT <stop>]`.
+    pub store: Option<crate::fleet::views::StorePrompt>,
 }
 
 pub struct ConfirmLine {
