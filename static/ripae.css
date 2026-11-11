@@ -330,3 +330,26 @@ body::before{content:"";position:fixed;left:0;right:0;top:0;height:22vh;pointer-
 @media (prefers-reduced-motion:reduce){.scan,pre.scan{animation:none}body::after,.screen{animation:none}body::before{display:none}}
 /* ledger: eleven columns leave no room for side-by-side commands -- stack them so the Cmd column stays inside the panel */
 #ledger .actions{flex-direction:column;align-items:flex-start;gap:.2rem}
+/* -- test mode (0.3.1 roll 3): the sandbox banner and the push-live review.
+   Amber and red on purpose: nothing about it may read as the live green. -- */
+.test-banner{position:sticky;top:0;z-index:55;display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:.4rem 1.2rem;
+  padding:.5rem .9rem;border:2px solid var(--amber);background:repeating-linear-gradient(-45deg,#1a1103 0 12px,#120b02 12px 24px);
+  color:var(--amber);text-transform:uppercase;letter-spacing:.12em;font-size:.85rem;
+  text-shadow:0 0 2px rgba(242,178,58,.8),0 0 10px rgba(242,178,58,.3);box-shadow:0 0 18px rgba(242,178,58,.25)}
+.test-banner p{margin:0}
+.test-banner .tb-line{display:flex;flex-wrap:wrap;gap:.2rem .8rem;align-items:baseline;min-width:0}
+.test-banner .tb-tag{font-family:var(--display);font-size:1.7rem;font-weight:400;line-height:1;color:var(--red);text-shadow:0 0 3px rgba(255,90,78,.9),0 0 14px rgba(255,90,78,.45)}
+.test-banner .tb-line span{text-transform:none;letter-spacing:.04em;overflow-wrap:anywhere}
+.test-banner .tb-acts{display:flex;flex-wrap:wrap;gap:.4rem 1.2rem}
+body.test-mode .screen{outline:1px dashed var(--amber);outline-offset:.6rem}
+.tm-body{padding:.9rem;display:grid;gap:1rem}
+.tm-body p{margin:0}
+.tm-group{border-left:3px solid var(--fg-dim);padding:.2rem 0 .2rem .8rem}
+.tm-group.new{border-left-color:var(--fg)}
+.tm-group.deleted{border-left-color:var(--red)}
+.tm-group h3{font-size:.95rem;letter-spacing:.08em;text-transform:uppercase}
+.tm-group.deleted h3{color:var(--red)}
+.tm-group ul,.tm-conflicts ul{margin:.35rem 0 0;padding-left:1.2rem}
+.tm-group li,.tm-conflicts li{overflow-wrap:anywhere}
+.tm-conflicts{border:1px solid var(--red);padding:.6rem .8rem;color:var(--red)}
+.tm-acts{display:flex;flex-wrap:wrap;gap:.6rem 1.2rem;align-items:center}

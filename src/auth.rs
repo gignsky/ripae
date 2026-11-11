@@ -264,7 +264,9 @@ async fn authenticate(
     }
 }
 
-pub async fn logout(session: Session) -> Redirect {
+pub async fn logout(State(state): State<AppState>, session: Session) -> Redirect {
+    // a sandbox nobody can get back to any more
+    crate::sandbox::leave(&state, &session).await;
     let _ = session.flush().await;
     Redirect::to("/login")
 }

@@ -64,6 +64,9 @@ pub struct Shell {
     /// The gate is `[SIGN IN WITH DISCORD]`, with the password form kept
     /// only for claiming an old account.
     pub discord: bool,
+    /// This session is in test mode: the TEST banner shows, and the rail
+    /// offers no `[ENTER TEST MODE]`.
+    pub test_mode: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -98,6 +101,17 @@ pub struct IndexTemplate {
     pub commodities: Vec<String>,
     pub terminals: Vec<String>,
     pub ships: Vec<String>,
+}
+
+/// `/test-mode/keep` -- what pushing the sandbox live would change.
+#[derive(Template)]
+#[template(path = "test_mode.html")]
+pub struct TestModeTemplate {
+    pub shell: Shell,
+    pub groups: Vec<crate::sandbox::describe::Group>,
+    /// Why the push was refused; empty before one is tried.
+    pub conflicts: Vec<String>,
+    pub empty: bool,
 }
 
 #[derive(Template)]
