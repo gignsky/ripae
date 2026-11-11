@@ -792,7 +792,8 @@ pub struct Standing {
     pub display_name: String,
     /// Net of shares: kept as seller + shares earned (forfeited or not).
     pub board_credit: f64,
-    /// What the member actually holds: kept as seller + shares received.
+    /// aUEC actually received: sale revenue as seller, less the shares paid
+    /// out, plus shares paid to this member (see [`cash`]).
     pub cash: f64,
     /// Shares this member earned but forfeited to someone else.
     pub forfeited: f64,
@@ -858,17 +859,17 @@ pub fn board_credit(user_id: i64, voyages: &[Voyage]) -> f64 {
     sales - losses(user_id, voyages)
 }
 
-/// `cash(u) = Σ seller_keeps where u sold + Σ share.paid where share.paid_to
-/// = u − losses(u)`.
+/// `cash(u) = Σ (revenue − shares_paid) where u sold + Σ share.paid where
+/// share.paid_to = u`: the aUEC that landed in the member's wallet. What the
+/// cargo cost, lost crates included, doesn't come off it -- that's profit.
 pub fn cash(user_id: i64, voyages: &[Voyage]) -> f64 {
-    let sales: f64 = sold_loads(voyages)
+    sold_loads(voyages)
         .map(|l| {
-            let kept = if l.submitted_by == user_id { l.seller_keeps().unwrap_or(0.0) } else { 0.0 };
+            let taken = if l.submitted_by == user_id { l.revenue().unwrap_or(0.0) - l.shares_paid() } else { 0.0 };
             let received: f64 = l.shares.iter().filter(|s| s.paid_to == user_id).map(|s| s.paid_auec).sum();
-            kept + received
+            taken + received
         })
-        .sum();
-    sales - losses(user_id, voyages)
+        .sum()
 }
 
 /// `losses(u) = Σ written_off over every load u holds in a closed voyage`
@@ -920,8 +921,8 @@ fn best_route_of(user_id: i64, voyages: &[Voyage]) -> Option<Route> {
 }
 
 /// `forfeited(u) = Σ share.paid where share.to_user = u and share.paid_to ≠ u`
-/// and `forfeits_received(u)` the other way round, so
-/// `board_credit − cash = forfeited − forfeits_received`.
+/// and `forfeits_received(u)` the other way round: what a forfeit moved
+/// between earner and receiver.
 fn forfeits(user_id: i64, voyages: &[Voyage]) -> (f64, f64) {
     sold_loads(voyages).flat_map(|l| l.shares.iter()).fold((0.0, 0.0), |(out, inn), s| {
         match (s.to_user == user_id, s.paid_to == user_id) {
@@ -1019,7 +1020,7 @@ pub struct ServiceRecord {
     pub crates_lost: usize,
     pub scu_lost: u32,
     /// What those lost crates cost, open voyages included; only the part on
-    /// closed voyages (`losses`) is off `board_credit` and `cash` so far.
+    /// closed voyages (`losses`) is off `board_credit` so far.
     pub written_off: f64,
     pub shares_paid_out: f64,
     pub shares_received: f64,
@@ -1857,13 +1858,14 @@ mod tests {
         assert_eq!(board_credit(GIG, &vs), 750.0);
         assert_eq!(board_credit(JT, &vs), 250.0);
         assert_eq!(board_credit(THIRD, &vs), 0.0);
-        assert_eq!(cash(GIG, &vs), 750.0);
+        // Gig took in 2000 and paid 250 of it out; it landed with Crew-03
+        assert_eq!(cash(GIG, &vs), 1750.0);
         assert_eq!(cash(JT, &vs), 0.0);
         assert_eq!(cash(THIRD, &vs), 250.0);
     }
 
     #[test]
-    fn board_credit_and_cash_sum_to_same_org_total() {
+    fn credit_sums_to_profit_and_cash_to_revenue() {
         let vs = vec![
             voyage(1, GIG, None, vec![sold_load(1, GIG, 10.0, 20.0, &[32, 32], vec![(JT, Some(THIRD), ShareKind::Pct, 30.0)])]),
             voyage(2, JT, None, vec![sold_load(2, JT, 10.0, 5.0, &[8], vec![(GIG, None, ShareKind::Flat, 1000.0)])]),
@@ -1871,9 +1873,11 @@ mod tests {
         ];
         let credit: f64 = [GIG, JT, THIRD].iter().map(|&u| board_credit(u, &vs)).sum();
         let money: f64 = [GIG, JT, THIRD].iter().map(|&u| cash(u, &vs)).sum();
-        assert!(approx(credit, money), "{credit} vs {money}");
         let realised: f64 = vs.iter().flat_map(|v| v.loads.iter()).filter_map(|l| l.profit()).sum();
         assert!(approx(credit, realised));
+        // shares only move takings between members: the org collected every sale
+        let revenue: f64 = vs.iter().flat_map(|v| v.loads.iter()).filter_map(|l| l.revenue()).sum();
+        assert!(approx(money, revenue), "{money} vs {revenue}");
     }
 
     #[test]
@@ -1932,7 +1936,8 @@ mod tests {
         let vs = vec![voyage(1, GIG, None, vec![sold, gone])];
         assert_eq!(losses(GIG, &vs), 80.0);
         assert_eq!(board_credit(GIG, &vs), 80.0 - 80.0);
-        assert_eq!(cash(GIG, &vs), 80.0 - 80.0);
+        // took in 320, paid JT 80; the lost crate cost money, it wasn't taken
+        assert_eq!(cash(GIG, &vs), 320.0 - 80.0);
         assert_eq!(board_credit(JT, &vs), 80.0);
         let rec = service_record(&users()[0], &users(), &vs);
         assert_eq!(rec.written_off, 80.0);
@@ -1951,7 +1956,7 @@ mod tests {
         assert_eq!((t.written_off, t.committed), (80.0, 80.0));
         assert_eq!(losses(GIG, &vs), 0.0);
         assert_eq!(board_credit(GIG, &vs), 80.0);
-        assert_eq!(cash(GIG, &vs), 80.0);
+        assert_eq!(cash(GIG, &vs), 240.0);
         // the record still shows the lost crate
         assert_eq!(service_record(&users()[0], &users(), &vs).written_off, 80.0);
 
@@ -1964,7 +1969,8 @@ mod tests {
         let t = Totals::from_voyages(&vs);
         assert_eq!((t.losses, t.realised, t.committed), (80.0, 0.0, 0.0));
         assert_eq!(board_credit(GIG, &vs), 0.0);
-        assert_eq!(cash(GIG, &vs), 0.0);
+        // the write-off is off profit, not off what the two sales took in
+        assert_eq!(cash(GIG, &vs), 240.0 + 80.0);
     }
 
     // -- standings -----------------------------------------------------------
@@ -2068,17 +2074,15 @@ mod tests {
         let vs = forfeit_ledger();
         let rows = standings(&users(), &vs, SortKey::Profit);
         let (gig, jt) = (row_of(&rows, GIG), row_of(&rows, JT));
-        assert_eq!((gig.board_credit, gig.cash, gig.forfeited, gig.forfeits_received), (720.0, 80.0, 640.0, 0.0));
-        assert_eq!((jt.board_credit, jt.cash, jt.forfeited, jt.forfeits_received), (0.0, 640.0, 0.0, 640.0));
-        for r in &rows {
-            assert!(approx(r.board_credit - r.cash, r.forfeited - r.forfeits_received), "{}", r.display_name);
-        }
+        // Gig: the 160 Gig sold for; JT: took 960, "paid" Gig 640 that came back to JT
+        assert_eq!((gig.board_credit, gig.cash, gig.forfeited, gig.forfeits_received), (720.0, 160.0, 640.0, 0.0));
+        assert_eq!((jt.board_credit, jt.cash, jt.forfeited, jt.forfeits_received), (0.0, 960.0, 0.0, 640.0));
         // profit: Gig has all of it; collected: JT holds most of the cash
         assert_eq!(rows[0].user_id, GIG);
         assert!(approx(rows[0].share_of_org, 100.0));
         let by_cash = standings(&users(), &vs, SortKey::Collected);
         assert_eq!(by_cash.iter().map(|r| r.user_id).collect::<Vec<_>>(), vec![JT, GIG, THIRD]);
-        assert!(approx(by_cash[0].share_of_org, 640.0 / 720.0 * 100.0));
+        assert!(approx(by_cash[0].share_of_org, 960.0 / 1120.0 * 100.0));
         assert!(approx(by_cash.iter().map(|r| r.share_of_org).sum::<f64>(), 100.0));
     }
 
@@ -2102,11 +2106,12 @@ mod tests {
     fn a_loss_takes_no_share_and_an_empty_board_is_all_zero() {
         // Gig loses 80 on his only sale: no negative share, no NaN
         let vs = vec![voyage(1, GIG, None, vec![sold_load(1, GIG, 20.0, 10.0, &[8], vec![])])];
-        for key in [SortKey::Profit, SortKey::Collected] {
-            let rows = standings(&users(), &vs, key);
-            assert!(rows.iter().all(|r| r.share_of_org == 0.0), "{key:?}");
-            assert_eq!(rows.last().unwrap().user_id, GIG, "the loss sorts last");
-        }
+        let rows = standings(&users(), &vs, SortKey::Profit);
+        assert!(rows.iter().all(|r| r.share_of_org == 0.0));
+        assert_eq!(rows.last().unwrap().user_id, GIG, "the loss sorts last");
+        // the 80 it sold for still came in
+        let by_cash = standings(&users(), &vs, SortKey::Collected);
+        assert_eq!((by_cash[0].user_id, by_cash[0].cash, by_cash[0].share_of_org), (GIG, 80.0, 100.0));
         for key in SortKey::ALL {
             let rows = standings(&users(), &[], key);
             assert!(rows.iter().all(|r| r.share_of_org == 0.0 && r.is_idle()));
@@ -2123,9 +2128,10 @@ mod tests {
             voyage(2, JT, None, vec![sold_load(2, JT, 10.0, 20.0, &[16], vec![(GIG, Some(JT), ShareKind::Pct, 25.0)])]),
         ];
         let rows = standings(&users(), &vs, SortKey::Runs);
-        // Gig: 80 kept + 40 earned = 120 credit, 80 + 80 = 160 cash; JT: 120 + 80 = 200 credit, 120 + 40 = 160 cash
-        assert_eq!((row_of(&rows, GIG).board_credit, row_of(&rows, GIG).cash), (120.0, 160.0));
-        assert_eq!((row_of(&rows, JT).board_credit, row_of(&rows, JT).cash), (200.0, 160.0));
+        // Gig: 80 kept + 40 earned = 120 credit, 320 taken − 80 paid + 80 forfeited back = 320 cash;
+        // JT: 120 kept + 80 earned = 200 credit, 320 − 40 + 40 = 320 cash
+        assert_eq!((row_of(&rows, GIG).board_credit, row_of(&rows, GIG).cash), (120.0, 320.0));
+        assert_eq!((row_of(&rows, JT).board_credit, row_of(&rows, JT).cash), (200.0, 320.0));
         assert_eq!(rows.iter().map(|r| r.user_id).collect::<Vec<_>>(), vec![JT, GIG, THIRD]);
         // equal cash: the tie on collected goes to profit
         let by_cash = standings(&users(), &vs, SortKey::Collected);
@@ -2440,8 +2446,9 @@ mod properties {
             prop_assert_eq!(sale.sold.len() + sale.kept.len(), l.crates.len());
         }
 
-        /// 3. Σ board_credit == Σ cash == realised over the org, write-offs
-        /// on closed voyages included (open-voyage ones on neither side).
+        /// 3. Σ board_credit == realised over the org, write-offs on closed
+        /// voyages included (open-voyage ones on neither side); Σ cash == the
+        /// revenue of every sale, shares and write-offs aside.
         #[test]
         fn credit_and_cash_agree_across_the_org(cases in prop::collection::vec(sale_case(), 1..=4)) {
             let mut voyages = Vec::new();
@@ -2459,7 +2466,8 @@ mod properties {
             voyages.push(voyage(99, GIG, None, vec![load(99, 10.0, vec![sound(991, 8), crate_(992, 8, Condition::Lost, Whereabouts::Aboard)])]));
             let credit: f64 = [GIG, JT, THIRD].iter().map(|&u| board_credit(u, &voyages)).sum();
             let money: f64 = [GIG, JT, THIRD].iter().map(|&u| cash(u, &voyages)).sum();
-            prop_assert!(approx(credit, money), "{} vs {}", credit, money);
+            let revenue: f64 = voyages.iter().flat_map(|v| v.loads.iter()).filter_map(|l| l.revenue()).sum();
+            prop_assert!(approx(money, revenue), "{} vs {}", money, revenue);
             let realised = Totals::from_voyages(&voyages).realised;
             prop_assert!(approx(credit, realised), "{} vs {}", credit, realised);
         }

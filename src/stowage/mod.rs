@@ -13,7 +13,7 @@ pub mod model;
 pub mod repo;
 pub mod views;
 
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, Query};
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Redirect, Response};
 use serde::Deserialize;
@@ -25,6 +25,7 @@ use crate::templates::{
     render_str, BoardTemplate, ConfirmFrag, ConfirmLine, ConfirmWriteOffFrag, SaleOverlayFrag, VoyageOverlayFrag, IndexTemplate, LedgerFrag, LoadFrag,
     OpenCargoFrag, PlansFrag, SaleFrag, Shell, TotalsFrag, VerdictFrag, VoyageHeadFrag,
 };
+use crate::sandbox::Db;
 use crate::AppState;
 use model::{
     parse_boxes, parse_date, service_record, resettle, settle, today, Load, LoadKind, PriceMode, Sale, SaleInput, ShareInput,
@@ -108,6 +109,14 @@ pub async fn shell(
         },
         None => "RESTRICTED".to_string(),
     };
+    let dev_logins = if state.dev_quick_login && user.is_none() {
+        sqlx::query_as("SELECT id, handle, display_name FROM users ORDER BY id")
+            .fetch_all(&state.pool)
+            .await
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     let lines = [
         format!("RIPAE INTERFACE v{} ........ ONLINE", crate::changelog::VERSION),
         "LEDGER STORE ................... MOUNTED".to_string(),
@@ -125,6 +134,8 @@ pub async fn shell(
         boot_json: serde_json::to_string(&lines).unwrap_or_else(|_| "[]".into()),
         gate_error,
         discord: state.discord.is_some(),
+        test_mode: state.sandbox.is_some(),
+        dev_logins,
     }
 }
 
@@ -188,7 +199,7 @@ fn ledger_frag(l: &Ledger, oob: bool) -> String {
 
 /// `GET /live/panels` -- every live panel of the ledger screen, refetched
 /// when another crew member changes something (see `crate::live`).
-pub async fn live_panels(State(state): State<AppState>, _user: CurrentUser) -> Response {
+pub async fn live_panels(Db(state): Db, _user: CurrentUser) -> Response {
     match ledger(&state).await {
         Ok(l) => html(
             StatusCode::OK,
@@ -451,7 +462,7 @@ fn pick_member(raw: &str, fallback: i64, users: &[User], what: &str) -> Result<i
 // GET /  -- the ledger terminal
 // ---------------------------------------------------------------------------
 
-pub async fn index(State(state): State<AppState>, user: CurrentUser, session: Session) -> Response {
+pub async fn index(Db(state): Db, user: CurrentUser, session: Session) -> Response {
     let mode = take_splash_mode(&session, &user).await;
     render_index(&state, &user, mode, None).await
 }
@@ -503,7 +514,7 @@ async fn render_index(state: &AppState, user: &CurrentUser, mode: SplashMode, ne
 // POST /voyages  -- new run
 // ---------------------------------------------------------------------------
 
-pub async fn create_voyage(State(state): State<AppState>, user: CurrentUser, body: String) -> Response {
+pub async fn create_voyage(Db(state): Db, user: CurrentUser, body: String) -> Response {
     let form = FormData::parse(&body);
     let n = form.count("commodity").max(1);
     let mut view = NewRunFormView {
@@ -582,7 +593,7 @@ async fn parse_new_run(state: &AppState, v: &NewRunFormView) -> Result<(NewVoyag
 // ---------------------------------------------------------------------------
 
 /// `GET /voyages/:id/head` -- the header on its own (cancels a chooser/form).
-pub async fn voyage_head(State(state): State<AppState>, _user: CurrentUser, Path(id): Path<i64>) -> Response {
+pub async fn voyage_head(Db(state): Db, _user: CurrentUser, Path(id): Path<i64>) -> Response {
     match find_voyage(&state, id).await {
         Ok(v) => html(StatusCode::OK, head_frag(VoyageView::new(&v), false)),
         Err(r) => r,
@@ -595,7 +606,7 @@ fn head_with(v: &Voyage, extra: VoyageExtra, status: StatusCode) -> Response {
     html(status, head_frag(view, false))
 }
 
-pub async fn voyage_edit_form(State(state): State<AppState>, _user: CurrentUser, Path(id): Path<i64>) -> Response {
+pub async fn voyage_edit_form(Db(state): Db, _user: CurrentUser, Path(id): Path<i64>) -> Response {
     match find_voyage(&state, id).await {
         Ok(v) => head_with(&v, VoyageExtra::Edit(voyage_form(&state, &v).await), StatusCode::OK),
         Err(r) => r,
@@ -604,7 +615,7 @@ pub async fn voyage_edit_form(State(state): State<AppState>, _user: CurrentUser,
 
 /// `PUT /voyages/:id` -- ship, date, notes, whose run it is and who logged it. Success re-renders Open Cargo
 /// (every load's where-now names the hull).
-pub async fn voyage_update(State(state): State<AppState>, _user: CurrentUser, Path(id): Path<i64>, body: String) -> Response {
+pub async fn voyage_update(Db(state): Db, _user: CurrentUser, Path(id): Path<i64>, body: String) -> Response {
     let v = match find_voyage(&state, id).await {
         Ok(v) => v,
         Err(r) => return r,
@@ -686,7 +697,7 @@ fn voyage_overlay(v: &Voyage, f: VoyageFormView, status: StatusCode) -> Response
 
 /// `GET /voyages/:id/details` -- the voyage form in an overlay, for any
 /// voyage: the ledger's way in to one that's already closed.
-pub async fn voyage_details_form(State(state): State<AppState>, _user: CurrentUser, Path(id): Path<i64>) -> Response {
+pub async fn voyage_details_form(Db(state): Db, _user: CurrentUser, Path(id): Path<i64>) -> Response {
     match find_voyage(&state, id).await {
         Ok(v) => voyage_overlay(&v, voyage_form(&state, &v).await, StatusCode::OK),
         Err(r) => r,
@@ -696,7 +707,7 @@ pub async fn voyage_details_form(State(state): State<AppState>, _user: CurrentUs
 /// `PUT /voyages/:id/details` -- saves the overlay form. Success empties
 /// the overlay (which closes it) and refreshes every panel the voyage
 /// shows up in.
-pub async fn voyage_details_update(State(state): State<AppState>, _user: CurrentUser, Path(id): Path<i64>, body: String) -> Response {
+pub async fn voyage_details_update(Db(state): Db, _user: CurrentUser, Path(id): Path<i64>, body: String) -> Response {
     let v = match find_voyage(&state, id).await {
         Ok(v) => v,
         Err(r) => return r,
@@ -714,7 +725,7 @@ pub async fn voyage_details_update(State(state): State<AppState>, _user: Current
 }
 
 /// `GET /voyages/:id/merge` -- the "merge into…" chooser under the header.
-pub async fn voyage_merge_chooser(State(state): State<AppState>, _user: CurrentUser, Path(id): Path<i64>) -> Response {
+pub async fn voyage_merge_chooser(Db(state): Db, _user: CurrentUser, Path(id): Path<i64>) -> Response {
     let l = match ledger(&state).await {
         Ok(l) => l,
         Err(r) => return r,
@@ -738,7 +749,7 @@ pub async fn voyage_merge_chooser(State(state): State<AppState>, _user: CurrentU
 
 /// `POST /voyages/:id/move` with `voyage_id` -- every open load of the
 /// voyage moves there (the header's Merge, and the Suggested card's).
-pub async fn voyage_move(State(state): State<AppState>, user: CurrentUser, Path(id): Path<i64>, body: String) -> Response {
+pub async fn voyage_move(Db(state): Db, user: CurrentUser, Path(id): Path<i64>, body: String) -> Response {
     let form = FormData::parse(&body);
     let Ok(target) = form.get("voyage_id").trim().parse::<i64>() else {
         return (StatusCode::UNPROCESSABLE_ENTITY, "Pick a voyage to merge into.").into_response();
@@ -760,7 +771,7 @@ pub async fn voyage_move(State(state): State<AppState>, user: CurrentUser, Path(
 }
 
 /// `GET /voyages/:id/loads/new` -- single-load form under the header.
-pub async fn add_load_form(State(state): State<AppState>, _user: CurrentUser, Path(id): Path<i64>) -> Response {
+pub async fn add_load_form(Db(state): Db, _user: CurrentUser, Path(id): Path<i64>) -> Response {
     match find_voyage(&state, id).await {
         Ok(v) => {
             let terminal = v
@@ -779,7 +790,7 @@ pub async fn add_load_form(State(state): State<AppState>, _user: CurrentUser, Pa
 }
 
 /// `POST /voyages/:id/loads`.
-pub async fn add_load(State(state): State<AppState>, _user: CurrentUser, Path(id): Path<i64>, body: String) -> Response {
+pub async fn add_load(Db(state): Db, _user: CurrentUser, Path(id): Path<i64>, body: String) -> Response {
     let v = match find_voyage(&state, id).await {
         Ok(v) => v,
         Err(r) => return r,
@@ -860,7 +871,7 @@ fn confirm_for(kind: &'static str, id: i64, v: &Voyage, loads: &[&Load]) -> Conf
 }
 
 /// `GET /voyages/:id/delete` -- the DELETE overlay.
-pub async fn voyage_delete_confirm(State(state): State<AppState>, _user: CurrentUser, Path(id): Path<i64>) -> Response {
+pub async fn voyage_delete_confirm(Db(state): Db, _user: CurrentUser, Path(id): Path<i64>) -> Response {
     match find_voyage(&state, id).await {
         Ok(v) => {
             let loads: Vec<&Load> = v.open_loads().collect();
@@ -871,7 +882,7 @@ pub async fn voyage_delete_confirm(State(state): State<AppState>, _user: Current
 }
 
 /// `DELETE /voyages/:id` -- only from the confirmation's button.
-pub async fn voyage_delete(State(state): State<AppState>, _user: CurrentUser, Path(id): Path<i64>) -> Response {
+pub async fn voyage_delete(Db(state): Db, _user: CurrentUser, Path(id): Path<i64>) -> Response {
     if let Err(r) = find_voyage(&state, id).await {
         return r;
     }
@@ -889,7 +900,7 @@ pub async fn voyage_delete(State(state): State<AppState>, _user: CurrentUser, Pa
 }
 
 /// `GET /loads/:id/delete`.
-pub async fn load_delete_confirm(State(state): State<AppState>, _user: CurrentUser, Path(id): Path<i64>) -> Response {
+pub async fn load_delete_confirm(Db(state): Db, _user: CurrentUser, Path(id): Path<i64>) -> Response {
     let load = match find_load(&state, id).await {
         Ok(l) => l,
         Err(r) => return r,
@@ -901,7 +912,7 @@ pub async fn load_delete_confirm(State(state): State<AppState>, _user: CurrentUs
 }
 
 /// `DELETE /loads/:id`.
-pub async fn load_delete(State(state): State<AppState>, _user: CurrentUser, Path(id): Path<i64>) -> Response {
+pub async fn load_delete(Db(state): Db, _user: CurrentUser, Path(id): Path<i64>) -> Response {
     if let Err(r) = find_load(&state, id).await {
         return r;
     }
@@ -923,7 +934,7 @@ pub async fn load_delete(State(state): State<AppState>, _user: CurrentUser, Path
 // ---------------------------------------------------------------------------
 
 /// `GET /loads/:id/write-off` -- the confirmation overlay.
-pub async fn load_write_off_confirm(State(state): State<AppState>, _user: CurrentUser, Path(id): Path<i64>) -> Response {
+pub async fn load_write_off_confirm(Db(state): Db, _user: CurrentUser, Path(id): Path<i64>) -> Response {
     let load = match find_load(&state, id).await {
         Ok(l) => l,
         Err(r) => return r,
@@ -946,7 +957,7 @@ pub async fn load_write_off_confirm(State(state): State<AppState>, _user: Curren
 
 /// `POST /loads/:id/write-off` -- every crate still in play is lost; the
 /// load leaves Open Cargo without a sale.
-pub async fn load_write_off(State(state): State<AppState>, _user: CurrentUser, Path(id): Path<i64>) -> Response {
+pub async fn load_write_off(Db(state): Db, _user: CurrentUser, Path(id): Path<i64>) -> Response {
     let load = match find_load(&state, id).await {
         Ok(l) => l,
         Err(r) => return r,
@@ -982,17 +993,17 @@ async fn load_response(state: &AppState, id: i64, extra: LoadExtra, status: Stat
 }
 
 /// `GET /loads/:id` -- the plain row (closes a manifest or form).
-pub async fn load_row(State(state): State<AppState>, _user: CurrentUser, Path(id): Path<i64>) -> Response {
+pub async fn load_row(Db(state): Db, _user: CurrentUser, Path(id): Path<i64>) -> Response {
     load_response(&state, id, LoadExtra::None, StatusCode::OK).await
 }
 
 /// `GET /loads/:id/crates` -- the crate manifest under the row.
-pub async fn crate_manifest(State(state): State<AppState>, _user: CurrentUser, Path(id): Path<i64>) -> Response {
+pub async fn crate_manifest(Db(state): Db, _user: CurrentUser, Path(id): Path<i64>) -> Response {
     load_response(&state, id, LoadExtra::Manifest, StatusCode::OK).await
 }
 
 /// `GET /loads/:id/edit`.
-pub async fn load_edit_form(State(state): State<AppState>, _user: CurrentUser, Path(id): Path<i64>) -> Response {
+pub async fn load_edit_form(Db(state): Db, _user: CurrentUser, Path(id): Path<i64>) -> Response {
     let load = match find_load(&state, id).await {
         Ok(l) => l,
         Err(r) => return r,
@@ -1004,7 +1015,7 @@ pub async fn load_edit_form(State(state): State<AppState>, _user: CurrentUser, P
 }
 
 /// `PUT /loads/:id/edit` -- incl. status, stop №, stored-at.
-pub async fn load_update(State(state): State<AppState>, _user: CurrentUser, Path(id): Path<i64>, body: String) -> Response {
+pub async fn load_update(Db(state): Db, _user: CurrentUser, Path(id): Path<i64>, body: String) -> Response {
     let load = match find_load(&state, id).await {
         Ok(l) => l,
         Err(r) => return r,
@@ -1050,7 +1061,7 @@ pub async fn load_update(State(state): State<AppState>, _user: CurrentUser, Path
 }
 
 /// `POST /loads/:id/move` with `voyage_id` = a voyage id or `new`.
-pub async fn load_move(State(state): State<AppState>, user: CurrentUser, Path(id): Path<i64>, body: String) -> Response {
+pub async fn load_move(Db(state): Db, user: CurrentUser, Path(id): Path<i64>, body: String) -> Response {
     if let Err(r) = find_load(&state, id).await {
         return r;
     }
@@ -1087,7 +1098,7 @@ pub async fn load_move(State(state): State<AppState>, user: CurrentUser, Path(id
 // ---------------------------------------------------------------------------
 
 /// `POST /crates/:id/condition` -- cycle sound → glitched → lost.
-pub async fn crate_condition(State(state): State<AppState>, _user: CurrentUser, Path(id): Path<i64>) -> Response {
+pub async fn crate_condition(Db(state): Db, _user: CurrentUser, Path(id): Path<i64>) -> Response {
     let c = match repo::find_crate(&state.pool, id).await {
         Ok(Some(c)) => c,
         Ok(None) => return not_found("crate"),
@@ -1114,7 +1125,7 @@ async fn where_from(state: &AppState, form: &FormData) -> Result<(Whereabouts, O
 }
 
 /// `POST /crates/:id/where` -- toggle aboard ↔ stored (with `stored_at`).
-pub async fn crate_where(State(state): State<AppState>, _user: CurrentUser, Path(id): Path<i64>, body: String) -> Response {
+pub async fn crate_where(Db(state): Db, _user: CurrentUser, Path(id): Path<i64>, body: String) -> Response {
     let c = match repo::find_crate(&state.pool, id).await {
         Ok(Some(c)) => c,
         Ok(None) => return not_found("crate"),
@@ -1137,7 +1148,7 @@ pub async fn crate_where(State(state): State<AppState>, _user: CurrentUser, Path
 }
 
 /// `POST /loads/:id/where` -- `[ALL ABOARD]` / `[ALL STORED]`.
-pub async fn load_where(State(state): State<AppState>, _user: CurrentUser, Path(id): Path<i64>, body: String) -> Response {
+pub async fn load_where(Db(state): Db, _user: CurrentUser, Path(id): Path<i64>, body: String) -> Response {
     if let Err(r) = find_load(&state, id).await {
         return r;
     }
@@ -1183,7 +1194,7 @@ fn blank_close(load: &Load, users: Vec<User>, voyage_shares: &[ShareInput]) -> C
 }
 
 /// `GET /loads/:id/close`.
-pub async fn close_form(State(state): State<AppState>, _user: CurrentUser, Path(id): Path<i64>) -> Response {
+pub async fn close_form(Db(state): Db, _user: CurrentUser, Path(id): Path<i64>) -> Response {
     let load = match find_load(&state, id).await {
         Ok(l) => l,
         Err(r) => return r,
@@ -1304,7 +1315,7 @@ fn parse_shares(rows: &[ShareFormRow], users: &[User], seller: i64, who: &str) -
 }
 
 /// `POST /loads/:id/close` -- records the sale; answers with the SALE banner.
-pub async fn close_load(State(state): State<AppState>, user: CurrentUser, Path(id): Path<i64>, body: String) -> Response {
+pub async fn close_load(Db(state): Db, user: CurrentUser, Path(id): Path<i64>, body: String) -> Response {
     let load = match find_load(&state, id).await {
         Ok(l) => l,
         Err(r) => return r,
@@ -1419,7 +1430,7 @@ fn sale_overlay(load: &Load, f: CloseFormView, status: StatusCode) -> Response {
 
 /// `GET /loads/:id/sale` -- the sale editor, filled in as recorded. The
 /// price comes up as the lot total: the figure actually received.
-pub async fn sale_edit_form(State(state): State<AppState>, _user: CurrentUser, Path(id): Path<i64>) -> Response {
+pub async fn sale_edit_form(Db(state): Db, _user: CurrentUser, Path(id): Path<i64>) -> Response {
     let load = match find_sale(&state, id).await {
         Ok(l) => l,
         Err(r) => return r,
@@ -1457,7 +1468,7 @@ pub async fn sale_edit_form(State(state): State<AppState>, _user: CurrentUser, P
 /// `PUT /loads/:id/sale` -- saves the correction: shares are paid again on
 /// the new profit. Success empties the overlay (closing it) and refreshes
 /// the ledger and totals.
-pub async fn sale_update(State(state): State<AppState>, _user: CurrentUser, Path(id): Path<i64>, body: String) -> Response {
+pub async fn sale_update(Db(state): Db, _user: CurrentUser, Path(id): Path<i64>, body: String) -> Response {
     let load = match find_sale(&state, id).await {
         Ok(l) => l,
         Err(r) => return r,
@@ -1501,7 +1512,7 @@ pub struct BoardQuery {
 }
 
 /// `GET /board?sort=profit|runs|scu`.
-pub async fn board(State(state): State<AppState>, user: CurrentUser, Query(q): Query<BoardQuery>) -> Response {
+pub async fn board(Db(state): Db, user: CurrentUser, Query(q): Query<BoardQuery>) -> Response {
     let l = match ledger(&state).await {
         Ok(l) => l,
         Err(r) => return r,
@@ -1516,7 +1527,7 @@ pub async fn board(State(state): State<AppState>, user: CurrentUser, Query(q): Q
 }
 
 /// `GET /crew/:id` -- verdict banner + service record fragment.
-pub async fn crew(State(state): State<AppState>, _user: CurrentUser, Path(id): Path<i64>) -> Response {
+pub async fn crew(Db(state): Db, _user: CurrentUser, Path(id): Path<i64>) -> Response {
     let l = match ledger(&state).await {
         Ok(l) => l,
         Err(r) => return r,

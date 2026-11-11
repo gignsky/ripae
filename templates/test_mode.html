@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel" id="test-review">
+  <header><h2>Push test mode live</h2><span class="hint"><a href="/">← back to the sandbox</a></span></header>
+  <div class="tm-body">
+    {% if !conflicts.is_empty() %}
+    <div class="tm-conflicts" id="test-conflicts" role="alert">
+      <p><b>Not pushed: live changed underneath you.</b> These rows were changed in the live books after you entered test mode, and pushing would overwrite someone's work. Nothing was written. Discard the sandbox and make the change again on live.</p>
+      <ul>
+        {% for c in conflicts %}<li>{{ c }}</li>{% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+    {% if empty %}
+    <p id="test-nochange">Nothing has changed in the sandbox. Leaving test mode writes nothing.</p>
+    {% else %}
+    <p class="hint">Only the ledger is pushed (voyages, loads, crates, shares). Sign-ins, crew and the pick-lists stay as live has them.</p>
+    <div id="test-diff">
+      {% for g in groups %}
+      <div class="tm-group {{ g.kind }}">
+        <h3>{{ g.title }}</h3>
+        {% if !g.lines.is_empty() %}
+        <ul>
+          {% for l in g.lines %}<li>{{ l }}</li>{% endfor %}
+        </ul>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+    <div class="tm-acts">
+      {% if conflicts.is_empty() %}
+      <form method="post" action="/test-mode/keep" class="inline"><button class="cmd boxed" type="submit" id="test-confirm">{% if empty %}Leave test mode{% else %}Confirm · push live{% endif %}</button></form>
+      {% endif %}
+      <form method="post" action="/test-mode/discard" class="inline"><button class="cmd danger" type="submit" id="test-review-discard">Discard sandbox</button></form>
+      <a class="cmd" href="/">Back</a>
+    </div>
+  </div>
+</section>
+{% endblock %}

@@ -25,6 +25,10 @@ pub struct Config {
     /// and loses its Discord link, and stored sessions are dropped (see
     /// `db::dev_reset_logins`). Refused alongside Discord sign-in.
     pub dev_reset_logins: Option<String>,
+    /// `RIPAE_DEV_QUICK_LOGIN=1`: local dev only. The gate lists every
+    /// account as a one-click sign-in, no password. Refused alongside
+    /// Discord sign-in.
+    pub dev_quick_login: bool,
 }
 
 /// The Discord application and the server whose members get in.
@@ -102,6 +106,13 @@ impl Config {
                  it is refused while Discord sign-in is configured (that is a real deployment)"
             );
         }
+        let dev_quick_login = std::env::var("RIPAE_DEV_QUICK_LOGIN").as_deref() == Ok("1");
+        if dev_quick_login && discord.is_some() {
+            anyhow::bail!(
+                "RIPAE_DEV_QUICK_LOGIN signs anyone in without a password; \
+                 it is refused while Discord sign-in is configured (that is a real deployment)"
+            );
+        }
 
         Ok(Self {
             bind,
@@ -112,6 +123,7 @@ impl Config {
             cookie_secure,
             discord,
             dev_reset_logins,
+            dev_quick_login,
         })
     }
 }
