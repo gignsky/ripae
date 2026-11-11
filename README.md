@@ -320,7 +320,13 @@ still hold come first.
   *Org realised*) and off the lifetime profit and cash of whoever holds
   the load (`submitted_by`), whether the load is open, sold or written off
   whole. A sale's own profit, and the shares settled on it, still count
-  only the crates that sold.
+  only the crates that sold. **Deferred until the voyage closes:** a
+  write-off in a voyage that still has an open load comes off *Committed ·
+  afloat* (if its load is open) but stays out of realised, board credit and
+  cash until every load in that voyage is sold or lost
+  (`Voyage::is_fully_sold`); then it lands in full. `Totals::losses` and
+  `losses(u)` are the closed-voyage write-offs; the service record's
+  *Crates lost* still shows every write-off.
 - **The board shows Profit and Collected side by side.** Profit is
   `board_credit` (a forfeited share still counts for whoever earned it);
   Collected is `cash` (what they actually received), with the forfeited
@@ -332,6 +338,9 @@ still hold come first.
   those don't add up to 100 %. Ties fall back to profit, collected, runs,
   SCU, then name (A→Z, ignoring case). The service record's rank stays
   "by profit".
+- **A net loss on *Realised · net of losses* is red.** The Open Cargo
+  tile's value takes `.neg` (`--red`) when it rounds below zero -- an
+  explicit exception to green-on-black; zero and gains stay green.
 - **`users.created_at` is the service record's "aboard since."** Keep it
   across the 0.2 wipe with the steps under Deploying.
 - **Bookkeeping for a crewmate.** Whose run it is (`voyages.logged_by`,

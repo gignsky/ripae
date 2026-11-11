@@ -10,9 +10,12 @@
 //
 // Walks the whole 0.2 story: gate login → ledger → new run with two loads
 // (one priced per lot) → a second run → crate manifest: one crate lost, one
-// stored → status reads SPLIT → close the first load selling two crates
+// stored (written off, but kept out of Realised while its voyage is open) →
+// status reads SPLIT → close the first load selling two crates
 // with a 25 % share forfeited to the other crew member → SALE banner shows
-// the profit → leaderboard → a crew name → service record → delete the
+// the profit → leaderboard → a crew name → service record → close the other
+// load at a loss: the voyage closes, the write-off lands and Realised turns
+// red → delete the
 // second voyage through the confirmation → gone. Then asserts no
 // horizontal scroll at 1280 / 760 / 400 px. Motion is reduced so the run is
 // deterministic; the raster itself has to be eyeballed.
@@ -92,6 +95,9 @@ async function fillLoadLine(line, f) {
   await line.locator("[name=destination]").fill(f.dest);
 }
 
+const realisedVal = (page) => page.locator("#totals .tile").nth(1).locator(".val");
+const realisedText = async (page) => (await realisedVal(page).innerText()).replace(/aUEC/, "").trim();
+
 async function newRun(page, ship, loads, crew) {
   await page.goto(base + "/");
   await page.click("#newrun-toggle");
@@ -162,6 +168,8 @@ const run = async () => {
   await page.locator(`#${firstId} .crate-tile .crate`).first().click(); // glitched → lost
   await page.waitForSelector(`#${firstId} .crate.lost`);
   check("one crate lost, SCU written off", (await page.textContent(`#${firstId} .crates-h`)).includes("written off"));
+  // 8 SCU × 2800 = 22,400 written off, but the voyage is still open: not yet off Realised
+  check("open-voyage write-off stays out of Realised", (await realisedText(page)) === "0", await realisedText(page));
   await page.fill(`#stored-at-${firstId.replace("load-", "")}`, "Everus Harbor");
   await page.locator(`#${firstId} .crate-tile .wh`).nth(1).click(); // second crate: aboard → stored
   await page.waitForSelector(`#${firstId} .status.split`);
@@ -252,12 +260,31 @@ const run = async () => {
   await page.click("#overlay [data-dismiss]");
   await page.waitForSelector("#overlay", { state: "hidden" });
 
+  // -- close the Agricium load at a loss: its voyage closes, the 22,400 write-off lands --
+  await page.goto(base + "/");
+  await page.waitForSelector("#open-cargo");
+  check("Realised before the voyage closes is both sales, no write-off", (await realisedText(page)) === "80,000", await realisedText(page));
+  const agId = await page.locator("#open-cargo tbody.load").first().getAttribute("id");
+  await page.locator(`#${agId} .cmd`, { hasText: "Close" }).click();
+  await page.waitForSelector(`#${agId} form.close-form`);
+  await page.fill(`#${agId} [name=sell_terminal]`, "Lorville TDD");
+  await page.fill(`#${agId} [name=sell_scu]`, "20000"); // 64 × 20000 − 1,612,800 = −332,800
+  await page.click(`#${agId} form.close-form button[type=submit]`);
+  await page.waitForSelector("#overlay:not([hidden]) #sale-profit");
+  await page.click("#overlay [data-dismiss]");
+  await page.waitForSelector("#overlay", { state: "hidden" });
+  // 12,800 + 67,200 − 332,800 − 22,400
+  check("write-off lands once its voyage closes", (await realisedText(page)) === "-275,200", await realisedText(page));
+  const negColor = await realisedVal(page).evaluate((e) => getComputedStyle(e).color);
+  const committedColor = await page.locator("#totals .tile").nth(0).locator(".val").evaluate((e) => getComputedStyle(e).color);
+  check("a net-loss Realised is red", (await realisedVal(page).getAttribute("class")).includes("neg") && negColor !== committedColor, negColor);
+
   // -- delete the remaining hull-less voyage through the confirmation --
   await newRun(page, "", [
     { commodity: "Gold", boxes: "2x4", mode: "scu", price: "5000", terminal: "Levski", stop: 1, dest: "Grim HEX" },
   ]);
   const heads = page.locator("#open-cargo tbody.vhead");
-  const secondHead = await heads.nth(1).getAttribute("id");
+  const secondHead = await heads.last().getAttribute("id");
   await page.locator(`#${secondHead} .cmd`, { hasText: "Del" }).click();
   await page.waitForSelector("#overlay:not([hidden]) [data-overlay=confirm]");
   check("DELETE confirmation names the voyage", (await page.textContent("#overlay .tag")).includes("Delete"));
