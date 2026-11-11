@@ -128,6 +128,26 @@ input[type=date]::-webkit-calendar-picker-indicator{filter:invert(.7) sepia(1) h
 .cargo-line .ln{font-family:var(--display);font-size:1.5rem;line-height:1.1;color:var(--fg-dim);padding-top:1.2rem}
 .cargo-line .fields{grid-template-columns:repeat(auto-fit,minmax(9rem,1fr))}
 .line-cmd{align-self:end;padding-bottom:.45rem}
+/* route editor: the start, then the stops in order */
+.route-editor{display:grid;gap:.5rem}
+.route-stops{margin:0;padding:0;list-style:none;display:grid;gap:.4rem}
+.route-stop{display:grid;grid-template-columns:3.6rem minmax(0,1fr) auto;gap:.6rem;align-items:center;border-left:1px solid var(--fg-faint);padding-left:.7rem}
+.route-stop .ln{font-family:var(--display);font-size:1.3rem;line-height:1;color:var(--fg-dim)}
+.route-stop .line-cmd{padding-bottom:0;display:flex;gap:.4rem}
+.route-now{grid-template-columns:repeat(auto-fit,minmax(13rem,1fr))}
+/* the header's route line: where the voyage is, what's behind it */
+tr.voyage td .vroute{display:block;margin-top:.2rem;color:var(--fg-dim);font-size:.72rem;white-space:normal}
+tr.voyage td .vroute .here{color:var(--fg)}
+tr.voyage td .vroute .past{color:var(--fg-faint)}
+/* stowage plan, leg by leg */
+.plan .leg{margin-top:.6rem;padding-left:.6rem;border-left:1px solid var(--fg-faint)}
+.plan .leg.now{border-left-color:var(--fg)}
+.plan .leg.past{opacity:.55}
+.plan .leg h4{margin:0;font-size:.72rem;letter-spacing:.14em;text-transform:uppercase;font-weight:400;color:var(--fg)}
+.plan .leg h4 span{color:var(--fg-dim)}
+.plan .leg p.off{margin-top:.25rem}
+.plan .leg p.warn{color:var(--amber)}
+.plan li.buried .depth{color:var(--amber)}
 /* a load line is bought cargo or a hauling contract; its Cargo select picks which fields show */
 .fields:has(select[data-kind] option[value=haul]:checked) .trade-only,
 .fields:not(:has(select[data-kind] option[value=haul]:checked)) .haul-only{display:none!important}
