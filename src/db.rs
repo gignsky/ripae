@@ -46,6 +46,30 @@ pub async fn seed_if_empty(pool: &SqlitePool, config: &Config) -> Result<()> {
     Ok(())
 }
 
+/// Local dev on a copy of the live database (`scripts/dev.sh live`): every
+/// account gets `password`, loses its Discord link and avatar (so the
+/// password gate works instead of bouncing to Discord), and stored sessions
+/// are dropped. Handles, names and all ledger data are left alone.
+pub async fn dev_reset_logins(pool: &SqlitePool, password: &str) -> Result<()> {
+    let hash = hash_password(password)?;
+    let res = sqlx::query(
+        "UPDATE users SET password_hash = ?, discord_id = NULL, avatar_url = NULL",
+    )
+    .bind(hash)
+    .execute(pool)
+    .await?;
+    // the session table belongs to the session store's own migrate(), which
+    // runs after this; on a database with no sessions yet there is nothing to drop
+    let _ = sqlx::query("DELETE FROM tower_sessions")
+        .execute(pool)
+        .await;
+    tracing::warn!(
+        accounts = res.rows_affected(),
+        "RIPAE_DEV_RESET_LOGINS: every account now signs in with the dev password"
+    );
+    Ok(())
+}
+
 async fn create_user(pool: &SqlitePool, user: &SeedUser) -> Result<()> {
     let hash = hash_password(&user.password)?;
     sqlx::query("INSERT INTO users (handle, display_name, password_hash) VALUES (?, ?, ?)")
@@ -95,6 +119,34 @@ mod tests {
             log_json: false,
             cookie_secure: true,
             discord: None,
+            dev_reset_logins: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn dev_reset_gives_every_account_the_password_and_unlinks_discord() {
+        use argon2::password_hash::{PasswordHash, PasswordVerifier};
+        let pool = test_pool().await;
+        for (h, d) in [("a", Some("1")), ("b", None)] {
+            sqlx::query("INSERT INTO users (handle, display_name, password_hash, discord_id) VALUES (?, ?, '', ?)")
+                .bind(h)
+                .bind(h)
+                .bind(d)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        dev_reset_logins(&pool, "devpw").await.unwrap();
+        let rows: Vec<(String, Option<String>)> =
+            sqlx::query_as("SELECT password_hash, discord_id FROM users")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(rows.len(), 2);
+        for (hash, discord_id) in rows {
+            assert!(discord_id.is_none());
+            let parsed = PasswordHash::new(&hash).unwrap();
+            assert!(argon2::Argon2::default().verify_password(b"devpw", &parsed).is_ok());
         }
     }
 
