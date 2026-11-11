@@ -4,14 +4,13 @@
 
 use std::sync::OnceLock;
 
-use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::response::{Html, IntoResponse, Response};
 use tower_sessions::Session;
 
 use crate::auth::{current_user, SplashMode};
 use crate::templates::{render, ChangelogTemplate};
-use crate::AppState;
+use crate::sandbox::Db;
 
 /// Shown in the corner of every page; dev builds carry their roll suffix.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -30,7 +29,7 @@ pub fn changelog_html() -> &'static str {
 
 /// htmx requests (the badge) get just the fragment for the dialog; a plain
 /// visit to /changelog gets a full page.
-pub async fn changelog(State(state): State<AppState>, session: Session, headers: HeaderMap) -> Response {
+pub async fn changelog(Db(state): Db, session: Session, headers: HeaderMap) -> Response {
     if headers.contains_key("hx-request") {
         Html(changelog_html()).into_response()
     } else {
