@@ -217,6 +217,16 @@ const run = async () => {
   check("ledger gained the sale", (await page.textContent("#ledger")).includes("+12,800"));
   check("first load left Open Cargo (lost crate rides along)", (await page.locator(`#${firstId}`).count()) === 0);
 
+  // -- the sale editor re-pays the sale's own shares unless asked to re-split by the crew --
+  await page.locator("#ledger .cmd", { hasText: "Sale" }).first().click();
+  await page.waitForSelector("#overlay:not([hidden]) [data-overlay=sale-edit]");
+  const rec = await page.textContent("#overlay .split-lines.recorded");
+  check("sale editor shows the shares as recorded", rec.includes("JT") && rec.includes("as recorded"));
+  check("sale editor offers a re-split by the crew", (await page.locator("#overlay [name=resplit]").count()) === 1);
+  await page.click("#overlay form.sale-edit button[type=submit]");
+  await page.waitForSelector("#overlay", { state: "hidden" });
+  check("saving the sale unchanged keeps its split", (await page.textContent("#ledger")).includes("→ JT 3,200 (to LORD GIG)"));
+
   // -- sell JT's load on JT's behalf: the close form defaults to the buyer --
   const jtId = await page.locator("#open-cargo tbody.load").nth(1).getAttribute("id");
   await page.locator(`#${jtId} .cmd`, { hasText: "Close" }).click();
