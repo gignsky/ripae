@@ -105,6 +105,16 @@ async function newRun(page, ship, loads, crew) {
   await page.waitForSelector("#open-cargo");
 }
 
+async function noScroll(page, where) {
+  for (const w of [1280, 760, 400]) {
+    await page.setViewportSize({ width: w, height: 900 });
+    await page.waitForTimeout(150);
+    const [sw, cw] = await page.evaluate(() => [document.documentElement.scrollWidth, document.documentElement.clientWidth]);
+    check(`no horizontal scroll at ${w}px${where}`, sw === cw, `scrollWidth ${sw}, clientWidth ${cw}`);
+  }
+  await page.setViewportSize({ width: 1280, height: 900 });
+}
+
 const run = async () => {
   if (!base) await startServer();
   const browser = await chromium.launch();
@@ -227,7 +237,20 @@ const run = async () => {
   check("leaderboard ranks JT first (his 67,200 beats Gig's 9,600 + 3,200)", (await page.textContent("#board tbody tr >> nth=0")).includes("JT"));
   check("JT's row carries his profit", (await page.textContent("#board tbody tr >> nth=0")).includes("+70,400"));
   check("recent shares shows the forfeit", (await page.textContent("#view-board")).includes("JT → LORD GIG"));
-  await page.locator("#board .crew", { hasText: "Lord Gig" }).click();
+  // -- a crew name opens their ledger; its totals are the board's --
+  const gigRow = page.locator("#board tbody tr", { hasText: "Lord Gig" });
+  const gigProfit = (await gigRow.locator("td.num").first().textContent()).trim();
+  await Promise.all([page.waitForURL(/\/crew\/\d+\/ledger$/), gigRow.locator(".crew").click()]);
+  await page.waitForSelector("#member-ledger");
+  check("member ledger totals match the leaderboard row", (await page.textContent("#ledger-credit")).trim() === gigProfit, `${gigProfit} vs ${await page.textContent("#ledger-credit")}`);
+  check("cash nets the forfeit Gig received against his lost crate", (await page.textContent("#ledger-cash")).includes("−9,600"));
+  const lv = page.locator("#member-ledger tbody.lvoyage");
+  check("one voyage on Gig's ledger, with his roles", (await lv.count()) === 1 && (await lv.first().textContent()).includes("logged · sold"));
+  await lv.first().locator("[data-expand]").click();
+  await page.waitForSelector("#member-ledger tr.lloads:not([hidden])");
+  check("a voyage row opens to its loads", (await page.textContent("#member-ledger tr.lloads")).includes("LARANITE"));
+  await noScroll(page, " on the member ledger");
+  await page.locator("#crew-ledger .cmd", { hasText: "Service record" }).click();
   await page.waitForSelector("#overlay:not([hidden]) .record");
   check("service record visible", await page.isVisible("#overlay .record"));
   check("WOMP WOMP for rank 2", await page.isVisible("#overlay .ascii.womp"));
@@ -253,12 +276,7 @@ const run = async () => {
   check("[DELETE VOYAGE] removes it", (await page.locator(`#${secondHead}`).count()) === 0);
 
   // -- no horizontal scroll at any width --
-  for (const w of [1280, 760, 400]) {
-    await page.setViewportSize({ width: w, height: 900 });
-    await page.waitForTimeout(150);
-    const [sw, cw] = await page.evaluate(() => [document.documentElement.scrollWidth, document.documentElement.clientWidth]);
-    check(`no horizontal scroll at ${w}px`, sw === cw, `scrollWidth ${sw}, clientWidth ${cw}`);
-  }
+  await noScroll(page, "");
 
   check("no page errors", pageErrors.length === 0, pageErrors.join(" | "));
   await browser.close();

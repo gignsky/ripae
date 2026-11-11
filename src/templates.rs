@@ -100,6 +100,14 @@ pub struct IndexTemplate {
     pub ships: Vec<String>,
 }
 
+/// `/crew/:id/ledger` -- one member's voyages, newest first.
+#[derive(Template)]
+#[template(path = "crew_ledger.html")]
+pub struct CrewLedgerTemplate {
+    pub shell: Shell,
+    pub m: crate::stowage::views::MemberLedgerView,
+}
+
 #[derive(Template)]
 #[template(path = "board.html")]
 pub struct BoardTemplate {

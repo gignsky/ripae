@@ -4,7 +4,7 @@
 
 use super::model::{
     cluster_unassigned, format_boxes, sc_cargo_link, standings, stowage_order, Crate, CrewMember, CrewTerms, Load,
-    LoadStatus, ServiceRecord, Share, SortKey, Standing, Totals, User, Voyage, Whereabouts,
+    LoadStatus, MemberLedger, ServiceRecord, Share, SortKey, Standing, Totals, User, Voyage, Whereabouts,
 };
 use crate::templates::fmt_auec;
 
@@ -184,6 +184,8 @@ pub struct LoadView {
     /// Its voyage has other open loads, so `[DETACH]` means something.
     pub can_detach: bool,
     pub by_upper: String,
+    /// Who holds it (the seller, on a sold row), for a link to their ledger.
+    pub by_id: i64,
     pub buy_price_scu_fmt: String,
     pub notes: String,
     /// First station any crate is stored at, for pre-filling forms.
@@ -236,6 +238,7 @@ impl LoadView {
             has_write_off: l.scu_lost() > 0,
             can_detach: false,
             by_upper: l.submitted_by_name.to_uppercase(),
+            by_id: l.submitted_by,
             buy_price_scu_fmt: fmt_price(l.buy_price_scu),
             notes: l.notes.clone().unwrap_or_default(),
             stored_at,
@@ -859,6 +862,7 @@ pub struct StatView {
 }
 
 pub struct RecordView {
+    pub user_id: i64,
     pub win: bool,
     pub name_upper: String,
     pub handle_line: String,
@@ -946,6 +950,7 @@ pub fn record_view(rec: &ServiceRecord, seed: u64) -> RecordView {
         txt("Latest sale", rec.latest_sale.clone().unwrap_or_else(dash)),
     ]);
     RecordView {
+        user_id: rec.user.id,
         win,
         name_upper,
         handle_line: format!(
@@ -960,6 +965,159 @@ pub fn record_view(rec: &ServiceRecord, seed: u64) -> RecordView {
         avatar_url: rec.user.avatar_url.clone(),
         line,
         stats,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// a member's ledger
+// ---------------------------------------------------------------------------
+
+/// `0` for nothing, else signed: a ledger cell that's empty reads as such.
+fn fmt_cell(amount: f64) -> String {
+    if amount.round() == 0.0 {
+        "0".into()
+    } else {
+        fmt_signed(amount)
+    }
+}
+
+pub struct LedgerLoadView {
+    pub commodity_upper: String,
+    pub is_haul: bool,
+    pub route: String,
+    /// `sold 11-07` or `open`.
+    pub when: String,
+    pub scu: u32,
+    pub seller_upper: String,
+    pub seller_id: i64,
+    pub by_member: bool,
+    pub sold: bool,
+    pub profit_fmt: String,
+    pub profit_neg: bool,
+    pub kept_fmt: String,
+    pub share_fmt: String,
+    pub received_fmt: String,
+    pub losses_fmt: String,
+    pub has_losses: bool,
+}
+
+pub struct LedgerVoyageView {
+    pub voyage_id: i64,
+    pub date_short: String,
+    pub ship: String,
+    pub roles: String,
+    /// `25% of profit · forfeited to LORD GIG`, or empty.
+    pub terms: String,
+    pub open: bool,
+    pub loads_sold: usize,
+    pub scu_sold: u32,
+    pub kept_fmt: String,
+    pub share_fmt: String,
+    pub collected_fmt: String,
+    pub losses_fmt: String,
+    pub credit_fmt: String,
+    pub credit_neg: bool,
+    pub running_credit_fmt: String,
+    pub running_cash_fmt: String,
+    pub loads: Vec<LedgerLoadView>,
+}
+
+pub struct MemberLedgerView {
+    pub user_id: i64,
+    pub name_upper: String,
+    pub handle: String,
+    pub voyages: Vec<LedgerVoyageView>,
+    pub voyage_count: usize,
+    pub loads_sold: usize,
+    pub scu_sold_fmt: String,
+    pub kept_fmt: String,
+    pub share_fmt: String,
+    pub collected_fmt: String,
+    pub losses_fmt: String,
+    pub credit_fmt: String,
+    pub credit_neg: bool,
+    pub cash_fmt: String,
+    pub cash_neg: bool,
+}
+
+pub fn member_ledger_view(user: &User, users: &[User], m: &MemberLedger) -> MemberLedgerView {
+    let name_of = |id: i64| users.iter().find(|u| u.id == id).map(|u| u.display_name.to_uppercase()).unwrap_or_default();
+    let voyages = m
+        .voyages
+        .iter()
+        .map(|v| LedgerVoyageView {
+            voyage_id: v.voyage_id,
+            date_short: short_date(&v.bought_at),
+            ship: v.ship.clone().unwrap_or_else(|| "—".into()),
+            roles: v.roles.iter().map(|r| r.label()).collect::<Vec<_>>().join(" · "),
+            terms: v
+                .terms
+                .as_ref()
+                .map(|t| match t.paid_to {
+                    Some(p) => format!("{} · forfeited to {}", terms_label(t.pct, t.flat), name_of(p)),
+                    None => terms_label(t.pct, t.flat),
+                })
+                .unwrap_or_default(),
+            open: v.open,
+            loads_sold: v.loads_sold,
+            scu_sold: v.scu_sold,
+            kept_fmt: fmt_cell(v.kept),
+            share_fmt: fmt_cell(v.share_earned),
+            collected_fmt: fmt_cell(v.collected),
+            losses_fmt: fmt_cell(-v.losses),
+            credit_fmt: fmt_cell(v.credit),
+            credit_neg: v.credit.round() < 0.0,
+            running_credit_fmt: fmt_signed(v.running_credit),
+            running_cash_fmt: fmt_signed(v.running_cash),
+            loads: v
+                .loads
+                .iter()
+                .map(|l| LedgerLoadView {
+                    commodity_upper: l.commodity.to_uppercase(),
+                    is_haul: l.kind == super::model::LoadKind::Haul,
+                    route: match &l.sell_terminal {
+                        Some(to) if !l.buy_terminal.is_empty() => format!("{} → {}", short_terminal(&l.buy_terminal), short_terminal(to)),
+                        Some(to) => format!("→ {}", short_terminal(to)),
+                        None => short_terminal(&l.buy_terminal),
+                    },
+                    when: match (&l.sold_at, l.sold) {
+                        (Some(d), true) => format!("sold {}", short_date(d)),
+                        _ => "open".into(),
+                    },
+                    scu: l.scu,
+                    seller_upper: l.seller_name.to_uppercase(),
+                    seller_id: l.seller_id,
+                    by_member: l.by_member,
+                    sold: l.sold,
+                    profit_fmt: l.profit.map(fmt_signed).unwrap_or_else(|| "—".into()),
+                    profit_neg: l.profit.is_some_and(|p| p.round() < 0.0),
+                    kept_fmt: fmt_cell(l.kept),
+                    share_fmt: fmt_cell(l.share_earned),
+                    received_fmt: fmt_cell(l.share_received),
+                    losses_fmt: fmt_cell(-l.losses),
+                    has_losses: l.losses > 0.0,
+                })
+                .collect(),
+        })
+        .collect();
+    let t = &m.totals;
+    MemberLedgerView {
+        user_id: user.id,
+        name_upper: user.display_name.to_uppercase(),
+        handle: user.handle.clone(),
+        voyages,
+        voyage_count: t.voyages,
+        loads_sold: t.loads_sold,
+        scu_sold_fmt: fmt_auec(t.scu_sold as f64),
+        kept_fmt: fmt_cell(t.kept),
+        share_fmt: fmt_cell(t.share_earned),
+        collected_fmt: fmt_cell(t.collected),
+        losses_fmt: fmt_cell(-t.losses),
+        // the board's own rule: a member with nothing on it reads a bare 0
+        credit_fmt: if t.credit == 0.0 && t.loads_sold == 0 && t.share_earned == 0.0 { "0".into() } else { fmt_signed(t.credit) },
+        credit_neg: t.credit.round() < 0.0,
+        cash_fmt: fmt_signed(t.cash),
+        cash_neg: t.cash.round() < 0.0,
     }
 }
 
@@ -995,6 +1153,38 @@ mod tests {
         let f = LoadFormView::from_load(&l);
         assert_eq!(f.price_scu, "333.33");
         assert_eq!(f.price_lot, "1000");
+    }
+
+    #[test]
+    fn ledger_page_totals_read_the_same_as_the_leaderboard_row() {
+        use crate::stowage::model::fixtures::{cut, load, sold_load, sound, users, voyage, with_crew, GIG, JT, THIRD};
+        use crate::stowage::model::{member_ledger, Condition, ShareKind, Whereabouts};
+        let mut open = load(3, 50.0, vec![sound(31, 8), crate::stowage::model::fixtures::crate_(32, 8, Condition::Lost, Whereabouts::Aboard)]);
+        open.submitted_by = JT;
+        let vs = vec![
+            with_crew(
+                voyage(1, GIG, None, vec![sold_load(1, GIG, 10.0, 30.0, &[32, 32], vec![(JT, Some(THIRD), ShareKind::Pct, 25.0)])]),
+                vec![cut(JT, 25.0, 0.0, Some(THIRD))],
+            ),
+            voyage(2, JT, None, vec![sold_load(2, JT, 10.0, 4.0, &[16], vec![(GIG, None, ShareKind::Flat, 99.0)]), open]),
+        ];
+        let us = users();
+        let board = board_view(&us, &vs, SortKey::Profit);
+        for u in &us {
+            let page = member_ledger_view(u, &us, &member_ledger(u.id, &vs));
+            let row = board.rows.iter().find(|r| r.user_id == u.id).unwrap();
+            assert_eq!(page.credit_fmt, row.profit_fmt, "{}'s ledger total vs their board row", u.display_name);
+            assert_eq!(page.cash_fmt, fmt_signed(crate::stowage::model::cash(u.id, &vs)));
+            if let Some(top) = page.voyages.first() {
+                assert_eq!(top.running_credit_fmt, fmt_signed(crate::stowage::model::board_credit(u.id, &vs)), "the newest voyage's running total is the total");
+            }
+        }
+        let jt = member_ledger_view(&us[1], &us, &member_ledger(JT, &vs));
+        assert_eq!(jt.voyages.iter().map(|v| v.voyage_id).collect::<Vec<_>>(), vec![2, 1]);
+        assert_eq!(jt.voyages[1].terms, "25% of profit · forfeited to CREW-03");
+        assert_eq!(jt.voyages[1].collected_fmt, "0", "JT's share went to Crew-03");
+        assert_eq!(jt.voyages[0].roles, "logged · sold");
+        assert!(jt.voyages[0].open);
     }
 
     #[test]

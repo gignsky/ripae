@@ -22,17 +22,17 @@ use tower_sessions::Session;
 use crate::auth::{take_splash_mode, CurrentUser, SplashMode};
 use crate::lookups::{self, Kind};
 use crate::templates::{
-    render_str, BoardTemplate, ConfirmFrag, ConfirmLine, ConfirmWriteOffFrag, SaleOverlayFrag, VoyageOverlayFrag, IndexTemplate, LedgerFrag, LoadFrag,
+    render_str, BoardTemplate, ConfirmFrag, CrewLedgerTemplate, ConfirmLine, ConfirmWriteOffFrag, SaleOverlayFrag, VoyageOverlayFrag, IndexTemplate, LedgerFrag, LoadFrag,
     OpenCargoFrag, PlansFrag, SaleFrag, Shell, TotalsFrag, VerdictFrag, VoyageHeadFrag,
 };
 use crate::AppState;
 use model::{
-    check_crew, crew_shares, parse_boxes, parse_date, service_record, resettle, settle, today, CrewMember, CrewTerms, Load,
+    check_crew, crew_shares, member_ledger, parse_boxes, parse_date, service_record, resettle, settle, today, CrewMember, CrewTerms, Load,
     LoadKind, PriceMode, Sale, SaleInput, ShareInput, SortKey, Totals, User, Voyage, Whereabouts,
 };
 use repo::{EditLoad, EditVoyage, MoveTarget, NewLoad, NewVoyage};
 use views::{
-    board_view, ledger_rows, plan_cards, record_view, CloseFormView, CrewFormRow, LoadExtra, LoadFormView,
+    board_view, ledger_rows, member_ledger_view, plan_cards, record_view, CloseFormView, CrewFormRow, LoadExtra, LoadFormView,
     LoadView, MergeChoice, NewRunFormView, ShareView, SplitLineView, TotalsView, VoyageExtra,
     VoyageFormView, VoyageView,
 };
@@ -1540,6 +1540,24 @@ pub async fn crew(State(state): State<AppState>, _user: CurrentUser, Path(id): P
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
     html(StatusCode::OK, render_str(&VerdictFrag { r: record_view(&rec, seed) }))
+}
+
+/// `GET /crew/:id/ledger` -- a member's ledger: every voyage they were on,
+/// newest first, with running totals that end on their leaderboard row.
+pub async fn crew_ledger(State(state): State<AppState>, user: CurrentUser, Path(id): Path<i64>) -> Response {
+    let l = match ledger(&state).await {
+        Ok(l) => l,
+        Err(r) => return r,
+    };
+    let Some(u) = l.users.iter().find(|u| u.id == id) else { return not_found("crew member") };
+    let m = member_ledger(u.id, &l.voyages);
+    html(
+        StatusCode::OK,
+        render_str(&CrewLedgerTemplate {
+            shell: shell(&state, Some(&user), "board", SplashMode::Hidden, None).await,
+            m: member_ledger_view(u, &l.users, &m),
+        }),
+    )
 }
 
 #[cfg(test)]

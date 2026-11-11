@@ -75,6 +75,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/live/panels", get(stowage::live_panels))
         .route("/board", get(stowage::board))
         .route("/crew/{id}", get(stowage::crew))
+        .route("/crew/{id}/ledger", get(stowage::crew_ledger))
         .route("/voyages", post(stowage::create_voyage))
         .route(
             "/voyages/{id}",

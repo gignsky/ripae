@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block content %}
+{# One member's ledger: every voyage they were on, newest first. The
+   running figures end, at the top, on their leaderboard row. #}
+<section class="panel rs" id="crew-ledger" data-user="{{ m.user_id }}">
+  <header><h2>Ledger · {{ m.name_upper }}</h2><span class="hint">{{ m.handle }} · every voyage they were on, newest first. Credit is the leaderboard's: what they kept as seller plus shares earned, less cargo they lost. Collected is the aUEC that reached them.</span>
+    <span class="actions">
+      <button class="cmd" type="button" hx-get="/crew/{{ m.user_id }}" hx-target="#overlay" hx-swap="innerHTML">Service record</button>
+      <a class="cmd" href="/board" data-go="board">Leaderboard</a>
+    </span></header>
+  <div class="tbl"><table class="cards" id="member-ledger">
+    <thead><tr><th>Voyage</th><th>Role</th><th class="num">Loads sold</th><th class="num">Kept as seller</th><th class="num">Shares earned</th><th class="num">Collected</th><th class="num">Losses</th><th class="num">Credit</th><th class="num">Running</th><th>Cmd</th></tr></thead>
+    {% for v in m.voyages %}
+    <tbody class="lvoyage" id="lv-{{ v.voyage_id }}">
+      <tr>
+        <td><b>Voyage {{ v.voyage_id }}</b> · {{ v.date_short }}{% if v.open %} <span class="kind-tag" title="Some of its cargo is still open">Open</span>{% endif %}<br /><span class="who">{{ v.ship }}</span></td>
+        <td>{{ v.roles }}{% if v.terms != "" %}<br /><span class="who">{{ v.terms }}</span>{% endif %}</td>
+        <td class="num">{{ v.loads_sold }}{% if v.scu_sold > 0 %} <span class="who">· {{ v.scu_sold }} SCU</span>{% endif %}</td>
+        <td class="num">{{ v.kept_fmt }}</td>
+        <td class="num">{{ v.share_fmt }}</td>
+        <td class="num">{{ v.collected_fmt }}</td>
+        <td class="num{% if v.losses_fmt != "0" %} neg{% endif %}">{{ v.losses_fmt }}</td>
+        <td class="num {% if v.credit_neg %}neg{% else %}pos{% endif %} credit">{{ v.credit_fmt }}</td>
+        <td class="num running" title="Credit · cash over this voyage and every one before it">{{ v.running_credit_fmt }}<br /><span class="who">cash {{ v.running_cash_fmt }}</span></td>
+        <td><span class="actions"><button class="cmd" type="button" data-expand="lv-loads-{{ v.voyage_id }}" aria-expanded="false">Loads {{ v.loads.len() }}</button> <button class="cmd" type="button" title="Ship, date, owner and crew" hx-get="/voyages/{{ v.voyage_id }}/details" hx-target="#overlay" hx-swap="innerHTML">Voyage</button></span></td>
+      </tr>
+      <tr class="lloads" id="lv-loads-{{ v.voyage_id }}" hidden><td colspan="10">
+        <ul class="ledger-loads">
+          {% for l in v.loads %}
+          <li{% if l.by_member %} class="mine"{% endif %}>
+            <span><b>{{ l.commodity_upper }}</b>{% if l.is_haul %}<span class="kind-tag">Haul</span>{% endif %} · {{ l.scu }} SCU · {{ l.route }} · {{ l.when }}{% if l.sold %} by <a class="who" href="/crew/{{ l.seller_id }}/ledger">{{ l.seller_upper }}</a>{% else %} · held by <a class="who" href="/crew/{{ l.seller_id }}/ledger">{{ l.seller_upper }}</a>{% endif %}</span>
+            <span class="figs">{% if l.sold %}profit <b class="{% if l.profit_neg %}neg{% else %}pos{% endif %}">{{ l.profit_fmt }}</b> · {% endif %}kept {{ l.kept_fmt }} · share {{ l.share_fmt }} · collected {{ l.received_fmt }}{% if l.has_losses %} · <span class="neg">lost {{ l.losses_fmt }}</span>{% endif %}</span>
+          </li>
+          {% endfor %}
+        </ul>
+      </td></tr>
+    </tbody>
+    {% else %}
+    <tbody><tr><td colspan="10"><em>Not on any voyage yet.</em></td></tr></tbody>
+    {% endfor %}
+    <tfoot><tr class="ltotals">
+      <td><b>Totals</b> · {{ m.voyage_count }} voyage{% if m.voyage_count != 1 %}s{% endif %}</td>
+      <td class="blank"></td>
+      <td class="num" data-l="Loads sold">{{ m.loads_sold }} <span class="who">· {{ m.scu_sold_fmt }} SCU</span></td>
+      <td class="num" data-l="Kept as seller">{{ m.kept_fmt }}</td>
+      <td class="num" data-l="Shares earned">{{ m.share_fmt }}</td>
+      <td class="num" data-l="Collected">{{ m.collected_fmt }}</td>
+      <td class="num{% if m.losses_fmt != "0" %} neg{% endif %}" data-l="Losses">{{ m.losses_fmt }}</td>
+      <td class="num {% if m.credit_neg %}neg{% else %}pos{% endif %}" data-l="Credit · the board" id="ledger-credit">{{ m.credit_fmt }}</td>
+      <td class="num" data-l="Cash" id="ledger-cash">cash {{ m.cash_fmt }}</td>
+      <td class="blank"></td>
+    </tr></tfoot>
+  </table></div>
+</section>
+<section class="totals rs" aria-label="Member totals">
+  <div class="tile"><div class="lbl">Lifetime profit · on the board</div><div class="val {% if m.credit_neg %}neg{% endif %}">{{ m.credit_fmt }}<small>aUEC</small></div></div>
+  <div class="tile sub"><div class="lbl">Cash position</div><div class="val{% if m.cash_neg %} neg{% endif %}">{{ m.cash_fmt }}<small>aUEC</small></div></div>
+  <div class="tile sub"><div class="lbl">Shares earned</div><div class="val">{{ m.share_fmt }}<small>aUEC</small></div></div>
+  <div class="tile sub"><div class="lbl">Losses</div><div class="val{% if m.losses_fmt != "0" %} neg{% endif %}">{{ m.losses_fmt }}<small>aUEC</small></div></div>
+</section>
+{% endblock %}

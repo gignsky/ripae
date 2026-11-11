@@ -159,6 +159,15 @@
     raster(secs, false, function () { location.href = href; });
   });
 
+  /* ---- [data-expand]: show / hide the element it names (a member ledger's loads under a voyage) ---- */
+  document.addEventListener("click", function (e) {
+    var b = e.target.closest("[data-expand]"); if (!b) return;
+    var t = document.getElementById(b.dataset.expand); if (!t) return;
+    var open = t.hidden; t.hidden = !open; b.setAttribute("aria-expanded", open ? "true" : "false");
+    b.classList.toggle("on", open);
+    if (open) { t.classList.add("ras"); t.classList.remove("lit"); raster([t], true); }
+  });
+
   /* ---- every panel header gets [HIDE]/[SHOW]; the body rasters out and in ---- */
   document.querySelectorAll(".panel > header").forEach(function (h) {
     var panel = h.parentNode;

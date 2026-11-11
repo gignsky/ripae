@@ -33,8 +33,9 @@ cargo build --release
 `scripts/smoke.mjs` spawns `target/debug/ripae` on `127.0.0.1:18080` with a
 throwaway database, walks the whole 0.2 story (gate → new run → crate
 manifest → a crewmate on the voyage's crew on 25 %, forfeited back → partial
-close split by the crew → SALE banner → leaderboard → service record →
-delete through the confirmation) and asserts there is no
+close split by the crew → SALE banner → leaderboard → a member's ledger,
+totals equal to their board row → service record → delete through the
+confirmation) and asserts there is no
 horizontal scroll at 1280 / 760 / 400 px. Set `RIPAE_URL` to run it against
 an already-running build instead. It needs `playwright` resolvable from
 Node (`npm i -g playwright && npx playwright install chromium`, or a
@@ -283,6 +284,19 @@ still hold come first.
   or re-splits it by the crew as it stands when asked (a seller who holds
   a share of that sale is refused, as before). No per-sale override: the
   close form shows the split read-only with `[EDIT CREW]`.
+- **A member's ledger** (`GET /crew/:id/ledger`; the leaderboard's names,
+  the service record's name and `[LEDGER]`, and the Ledger's *By* column
+  link to it). Every voyage the member was on -- crew, owner, a load's
+  buyer/holder/seller, or named on a share -- newest first (by bought-on
+  date, then id), open ones included. Per voyage: role (logged / bought /
+  sold / crew), their terms, loads they sold, *kept as seller* (their
+  profit credit), *shares earned* (credit, forfeited or not), *collected*
+  (aUEC that reached them: kept + shares paid to them), *losses* (lost
+  cargo they held), and *credit* = `board_credit` over that voyage alone,
+  with running credit and cash. The maths is `model::member_ledger` /
+  `ledger_voyage`, which call `board_credit`, `cash` and `losses` on a
+  one-voyage slice -- so the rows always sum to the leaderboard, whatever
+  those functions come to count. `[LOADS n]` opens a voyage's loads.
 - **Who's on the crew.** The run's owner, every load's buyer and holder (a
   sold row's seller), and anyone a share or a crew forfeit pays are always
   aboard (`repo::sync_crew` after every write; the voyage form shows them
