@@ -2,7 +2,7 @@ use argon2::password_hash::PasswordVerifier;
 use argon2::Argon2;
 use axum::extract::{FromRequestParts, Query, State};
 use axum::http::request::Parts;
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::Form;
 use base64::Engine;
@@ -19,6 +19,10 @@ const SESSION_USER_ID: &str = "user_id";
 /// Set once the welcome splash has played for this session, so it doesn't
 /// replay on every page load (RIPAE-ROLL7.md §3, 7.5).
 const SESSION_SPLASH_SEEN: &str = "splash_seen";
+/// Set by a sign-in for the redirect that follows it: the gate was the
+/// splash, so the ledger it lands on doesn't play it again, even when the
+/// redirect chain came back from Discord (a cross-site landing).
+const SESSION_JUST_SIGNED_IN: &str = "just_signed_in";
 /// The OAuth `state` of a Discord sign-in in flight; the callback must
 /// echo it back (the CSRF guard on the round trip).
 const SESSION_OAUTH_STATE: &str = "oauth_state";
@@ -61,13 +65,34 @@ impl SplashMode {
     }
 }
 
-/// Without a session the splash is the login; with one it welcomes the
-/// member back once, then stays out of the way.
-pub fn splash_mode(user: Option<&CurrentUser>, already_welcomed: bool) -> SplashMode {
+/// Without a session the splash is the login. With one, opening the site
+/// (`landing`) always lands on the welcome splash, whose `[ENTER]` lets the
+/// member in; moving around inside the site welcomes them once per
+/// session, then stays out of the way.
+pub fn splash_mode(user: Option<&CurrentUser>, already_welcomed: bool, landing: bool) -> SplashMode {
     match user {
         None => SplashMode::Gate,
+        Some(_) if landing => SplashMode::Welcome,
         Some(_) if already_welcomed => SplashMode::Hidden,
         Some(_) => SplashMode::Welcome,
+    }
+}
+
+/// Whether a page request is someone opening the site -- typed, bookmarked,
+/// a link from Discord -- rather than a move inside it (the rail's nav, the
+/// redirect after a form post). Browsers say so in `Sec-Fetch-Site`; one
+/// that doesn't send it is judged by its `Referer`.
+pub fn is_landing(headers: &HeaderMap) -> bool {
+    let get = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
+    match get("sec-fetch-site") {
+        Some(site) => site != "same-origin",
+        None => {
+            let host = get("host");
+            let from = get("referer")
+                .and_then(|r| r.split_once("://"))
+                .map(|(_, rest)| rest.split('/').next().unwrap_or(""));
+            !matches!((from, host), (Some(f), Some(h)) if f.eq_ignore_ascii_case(h))
+        }
     }
 }
 
@@ -96,10 +121,12 @@ pub async fn current_user(state: &AppState, session: &Session) -> Option<Current
 }
 
 /// Reads the welcome flag and sets it, so the first `/` of a session plays
-/// the welcome splash and later ones don't.
-pub async fn take_splash_mode(session: &Session, user: &CurrentUser) -> SplashMode {
+/// the welcome splash and later in-site ones don't; a `landing` plays it
+/// every time, except straight after signing in at the gate.
+pub async fn take_splash_mode(session: &Session, user: &CurrentUser, landing: bool) -> SplashMode {
     let seen: bool = session.get(SESSION_SPLASH_SEEN).await.ok().flatten().unwrap_or(false);
-    let mode = splash_mode(Some(user), seen);
+    let just_in: bool = session.remove(SESSION_JUST_SIGNED_IN).await.ok().flatten().unwrap_or(false);
+    let mode = splash_mode(Some(user), seen, landing && !just_in);
     if mode == SplashMode::Welcome {
         let _ = session.insert(SESSION_SPLASH_SEEN, true).await;
     }
@@ -161,6 +188,27 @@ pub async fn login(
     }
 }
 
+#[derive(Debug, Deserialize)]
+pub struct DevLoginForm {
+    pub user_id: i64,
+}
+
+/// `POST /login/dev` -- a one-click sign-in from the gate's account list.
+/// Only answers with `RIPAE_DEV_QUICK_LOGIN=1` (local dev).
+pub async fn dev_login(
+    State(state): State<AppState>,
+    session: Session,
+    Form(form): Form<DevLoginForm>,
+) -> Response {
+    if !state.dev_quick_login {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    match find_user_by_id(&state.pool, form.user_id).await {
+        Ok(Some(user)) => start_session(&state, &session, user.id).await,
+        _ => gate(&state, Some(DOOR_SHUT), StatusCode::UNAUTHORIZED).await,
+    }
+}
+
 /// Signs `user_id` in on a fresh session id and goes to the ledger.
 async fn start_session(state: &AppState, session: &Session, user_id: i64) -> Response {
     // a new id on sign-in, so a session id planted before it is worthless
@@ -169,6 +217,7 @@ async fn start_session(state: &AppState, session: &Session, user_id: i64) -> Res
     }
     // the gate itself was the splash: don't play the welcome as well
     let _ = session.insert(SESSION_SPLASH_SEEN, true).await;
+    let _ = session.insert(SESSION_JUST_SIGNED_IN, true).await;
     Redirect::to("/").into_response()
 }
 
@@ -264,7 +313,9 @@ async fn authenticate(
     }
 }
 
-pub async fn logout(session: Session) -> Redirect {
+pub async fn logout(State(state): State<AppState>, session: Session) -> Redirect {
+    // a sandbox nobody can get back to any more
+    crate::sandbox::leave(&state, &session).await;
     let _ = session.flush().await;
     Redirect::to("/login")
 }
@@ -334,10 +385,31 @@ mod tests {
     #[test]
     fn splash_mode_is_gate_without_session_and_welcome_with_one() {
         let gig = CurrentUser { id: 1, handle: "lordgig".into(), display_name: "Lord Gig".into() };
-        assert_eq!(splash_mode(None, false), SplashMode::Gate);
-        assert_eq!(splash_mode(None, true), SplashMode::Gate);
-        assert_eq!(splash_mode(Some(&gig), false), SplashMode::Welcome);
-        // once welcomed, the splash stays hidden until [CLOSE] replays it
-        assert_eq!(splash_mode(Some(&gig), true), SplashMode::Hidden);
+        assert_eq!(splash_mode(None, false, false), SplashMode::Gate);
+        assert_eq!(splash_mode(None, true, true), SplashMode::Gate);
+        assert_eq!(splash_mode(Some(&gig), false, false), SplashMode::Welcome);
+        // once welcomed, moving around the site keeps the splash hidden
+        assert_eq!(splash_mode(Some(&gig), true, false), SplashMode::Hidden);
+        // but opening the site always lands on it
+        assert_eq!(splash_mode(Some(&gig), true, true), SplashMode::Welcome);
+    }
+
+    fn headers(pairs: &[(&'static str, &'static str)]) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        for (k, v) in pairs {
+            h.insert(*k, v.parse().unwrap());
+        }
+        h
+    }
+
+    #[test]
+    fn landing_is_anything_but_a_move_inside_the_site() {
+        assert!(is_landing(&headers(&[("sec-fetch-site", "none")])));
+        assert!(is_landing(&headers(&[("sec-fetch-site", "cross-site")])));
+        assert!(!is_landing(&headers(&[("sec-fetch-site", "same-origin")])));
+        // no Sec-Fetch-Site: the Referer decides
+        assert!(is_landing(&headers(&[("host", "ripae.example")])));
+        assert!(!is_landing(&headers(&[("host", "ripae.example"), ("referer", "https://ripae.example/board")])));
+        assert!(is_landing(&headers(&[("host", "ripae.example"), ("referer", "https://discord.com/channels/1")])));
     }
 }

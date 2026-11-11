@@ -302,7 +302,13 @@ pub struct Load {
     pub price_mode: PriceMode,
     pub buy_price_scu: f64,
     pub buy_price_lot: Option<f64>,
-    pub stop_no: u32,
+    /// The route stop (`Voyage::route` index) it comes aboard at; 0 is the
+    /// voyage's start. `buy_terminal` is that stop's terminal.
+    pub pickup_stop: u32,
+    /// The route stop it comes off at, after `pickup_stop`; `None` while the
+    /// destination is undecided (it rides to the end of the route).
+    /// `destination` is that stop's terminal.
+    pub drop_stop: Option<u32>,
     pub destination: Option<String>,
     pub sold_at: Option<String>,
     pub sell_terminal: Option<String>,
@@ -338,6 +344,11 @@ pub struct Voyage {
     pub ship: Option<Ship>,
     pub bought_at: String,
     pub notes: Option<String>,
+    /// Where the voyage starts (index 0), then its stops in order: terminal
+    /// names. Loads point into it with `pickup_stop` / `drop_stop`.
+    pub route: Vec<String>,
+    /// The route stop the voyage last reached (0 = still at its start).
+    pub at_stop: u32,
     pub loads: Vec<Load>,
     /// Who flew it and on what terms the profit splits (`voyage_crew`):
     /// the run's owner first, then in the order they joined.
@@ -863,10 +874,12 @@ pub struct Totals {
     pub written_off: f64,
     /// `committed = Σ cost over open loads − written_off`.
     pub committed: f64,
-    /// Σ written_off over every load, open, sold or written off whole.
+    /// Σ written_off over every load (open, sold or written off whole) in a
+    /// closed voyage (`Voyage::is_fully_sold`). Write-offs in a voyage that is
+    /// still open stay out of it until that voyage closes.
     pub losses: f64,
     /// `realised = Σ profit over sold loads − losses`: lost cargo was paid
-    /// for, so it comes off the overall profit.
+    /// for, so once its voyage closes it comes off the overall profit.
     pub realised: f64,
     pub open_voyages: usize,
     pub open_loads: usize,
@@ -878,8 +891,11 @@ impl Totals {
         let mut t = Totals::default();
         for v in voyages {
             let mut any_open = false;
+            let closed = v.is_fully_sold();
             for l in &v.loads {
-                t.losses += l.written_off();
+                if closed {
+                    t.losses += l.written_off();
+                }
                 if l.is_open() {
                     any_open = true;
                     t.open_loads += 1;
@@ -914,28 +930,45 @@ pub struct Standing {
     pub display_name: String,
     /// Net of shares: kept as seller + shares earned (forfeited or not).
     pub board_credit: f64,
-    /// What the member actually holds: kept as seller + shares received.
+    /// aUEC actually received: sale revenue as seller, less the shares paid
+    /// out, plus shares paid to this member (see [`cash`]).
     pub cash: f64,
+    /// Shares this member earned but forfeited to someone else.
+    pub forfeited: f64,
+    /// Shares other members earned and forfeited to this one.
+    pub forfeits_received: f64,
     /// Voyages with every load sold, where this member took part in one
     /// (sold it or held a share).
     pub runs_closed: usize,
     pub loads_sold: usize,
     pub scu_hauled: u32,
     pub best_route: Option<Route>,
-    /// Share of the org's positive board credit, 0–100.
-    pub pct_of_org: f64,
+    /// This member's share of the org on the board's sort key, 0–100: see
+    /// [`standings`].
+    pub share_of_org: f64,
+}
+
+impl Standing {
+    /// Nothing sold, nothing shared, nothing lost: the row is dimmed.
+    pub fn is_idle(&self) -> bool {
+        self.loads_sold == 0 && self.board_credit == 0.0 && self.cash == 0.0
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SortKey {
     Profit,
+    Collected,
     Runs,
     Scu,
 }
 
 impl SortKey {
+    pub const ALL: [SortKey; 4] = [SortKey::Profit, SortKey::Collected, SortKey::Runs, SortKey::Scu];
+
     pub fn parse(s: &str) -> SortKey {
-        match s {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "collected" | "cash" => SortKey::Collected,
             "runs" => SortKey::Runs,
             "scu" => SortKey::Scu,
             _ => SortKey::Profit,
@@ -944,6 +977,7 @@ impl SortKey {
     pub fn as_str(&self) -> &'static str {
         match self {
             SortKey::Profit => "profit",
+            SortKey::Collected => "collected",
             SortKey::Runs => "runs",
             SortKey::Scu => "scu",
         }
@@ -963,25 +997,32 @@ pub fn board_credit(user_id: i64, voyages: &[Voyage]) -> f64 {
     sales - losses(user_id, voyages)
 }
 
-/// `cash(u) = Σ seller_keeps where u sold + Σ share.paid where share.paid_to
-/// = u − losses(u)`.
+/// `cash(u) = Σ (revenue − shares_paid) where u sold + Σ share.paid where
+/// share.paid_to = u`: the aUEC that landed in the member's wallet. What the
+/// cargo cost, lost crates included, doesn't come off it -- that's profit.
 pub fn cash(user_id: i64, voyages: &[Voyage]) -> f64 {
-    let sales: f64 = sold_loads(voyages)
-        .map(|l| {
-            let kept = if l.submitted_by == user_id { l.seller_keeps().unwrap_or(0.0) } else { 0.0 };
-            let received: f64 = l.shares.iter().filter(|s| s.paid_to == user_id).map(|s| s.paid_auec).sum();
-            kept + received
-        })
-        .sum();
-    sales - losses(user_id, voyages)
+    sold_loads(voyages).map(|l| collected_by(l, user_id)).sum()
 }
 
-/// `losses(u) = Σ written_off over every load u holds` (open, sold or
-/// written off whole): whoever's cargo it was paid for the crates that were
-/// lost. Shares aren't touched -- they're settled on the sale.
+/// One sold load's part of `cash`: what its seller took in less the shares
+/// they paid out, plus any share paid to `user_id`. 0 while it's open.
+pub fn collected_by(l: &Load, user_id: i64) -> f64 {
+    if !l.was_sold() {
+        return 0.0;
+    }
+    let taken = if l.submitted_by == user_id { l.revenue().unwrap_or(0.0) - l.shares_paid() } else { 0.0 };
+    taken + share_received_by(l, user_id)
+}
+
+/// `losses(u) = Σ written_off over every load u holds in a closed voyage`
+/// (open, sold or written off whole): whoever's cargo it was paid for the
+/// crates that were lost. Like `Totals::losses`, write-offs in a voyage that
+/// is still open land only once it closes. Shares aren't touched -- they're
+/// settled on the sale.
 pub fn losses(user_id: i64, voyages: &[Voyage]) -> f64 {
     voyages
         .iter()
+        .filter(|v| v.is_fully_sold())
         .flat_map(|v| v.loads.iter())
         .filter(|l| l.submitted_by == user_id)
         .map(|l| l.written_off())
@@ -1021,39 +1062,84 @@ fn best_route_of(user_id: i64, voyages: &[Voyage]) -> Option<Route> {
         .max_by(|a, b| a.profit.total_cmp(&b.profit))
 }
 
-/// One row per user, sorted by `key` (descending), ties by display name.
+/// `forfeited(u) = Σ share.paid where share.to_user = u and share.paid_to ≠ u`
+/// and `forfeits_received(u)` the other way round: what a forfeit moved
+/// between earner and receiver.
+fn forfeits(user_id: i64, voyages: &[Voyage]) -> (f64, f64) {
+    sold_loads(voyages).flat_map(|l| l.shares.iter()).fold((0.0, 0.0), |(out, inn), s| {
+        match (s.to_user == user_id, s.paid_to == user_id) {
+            (true, false) => (out + s.paid_auec, inn),
+            (false, true) => (out, inn + s.paid_auec),
+            _ => (out, inn),
+        }
+    })
+}
+
+/// `part / whole × 100`, clamped to 0–100; 0 when there is no whole.
+fn pct(part: f64, whole: f64) -> f64 {
+    if whole > 0.0 { (part.max(0.0) / whole * 100.0).min(100.0) } else { 0.0 }
+}
+
+/// One row per user, sorted by `key` (descending). Ties fall back, in
+/// order, to profit, collected, runs, SCU, then display name (A→Z,
+/// case-insensitive) and id, so the order never depends on input order.
+///
+/// `share_of_org` follows the key. Profit and collected are a share of the
+/// org's positive total (negatives count as 0), so they add up to 100 %.
+/// Runs and SCU are the fraction of the org's closed runs / SCU sold that
+/// the member took part in: a shared run counts for everyone aboard, so
+/// those don't add up to 100 %, but none ever exceeds it.
 pub fn standings(users: &[User], voyages: &[Voyage], key: SortKey) -> Vec<Standing> {
     let mut rows: Vec<Standing> = users
         .iter()
         .map(|u| {
             let mine: Vec<&Load> = sold_loads(voyages).filter(|l| took_part(l, u.id)).collect();
+            let (forfeited, forfeits_received) = forfeits(u.id, voyages);
             Standing {
                 user_id: u.id,
                 handle: u.handle.clone(),
                 display_name: u.display_name.clone(),
                 board_credit: board_credit(u.id, voyages),
                 cash: cash(u.id, voyages),
+                forfeited,
+                forfeits_received,
                 runs_closed: runs_closed_by(u.id, voyages),
                 loads_sold: mine.len(),
                 scu_hauled: mine.iter().map(|l| l.scu_sold()).sum(),
                 best_route: best_route_of(u.id, voyages),
-                pct_of_org: 0.0,
+                share_of_org: 0.0,
             }
         })
         .collect();
-    let positive: f64 = rows.iter().map(|r| r.board_credit.max(0.0)).sum();
+    let whole = match key {
+        SortKey::Profit => rows.iter().map(|r| r.board_credit.max(0.0)).sum(),
+        SortKey::Collected => rows.iter().map(|r| r.cash.max(0.0)).sum(),
+        SortKey::Runs => voyages.iter().filter(|v| v.is_fully_sold()).count() as f64,
+        SortKey::Scu => sold_loads(voyages).map(|l| l.scu_sold() as f64).sum(),
+    };
     for r in &mut rows {
-        r.pct_of_org = if positive > 0.0 { r.board_credit.max(0.0) / positive * 100.0 } else { 0.0 };
+        let part = match key {
+            SortKey::Profit => r.board_credit,
+            SortKey::Collected => r.cash,
+            SortKey::Runs => r.runs_closed as f64,
+            SortKey::Scu => r.scu_hauled as f64,
+        };
+        r.share_of_org = pct(part, whole);
     }
     rows.sort_by(|a, b| {
         let primary = match key {
             SortKey::Profit => b.board_credit.total_cmp(&a.board_credit),
+            SortKey::Collected => b.cash.total_cmp(&a.cash),
             SortKey::Runs => b.runs_closed.cmp(&a.runs_closed),
             SortKey::Scu => b.scu_hauled.cmp(&a.scu_hauled),
         };
         primary
             .then(b.board_credit.total_cmp(&a.board_credit))
-            .then_with(|| a.display_name.cmp(&b.display_name))
+            .then(b.cash.total_cmp(&a.cash))
+            .then(b.runs_closed.cmp(&a.runs_closed))
+            .then(b.scu_hauled.cmp(&a.scu_hauled))
+            .then_with(|| a.display_name.to_lowercase().cmp(&b.display_name.to_lowercase()))
+            .then(a.user_id.cmp(&b.user_id))
     });
     rows
 }
@@ -1075,7 +1161,8 @@ pub struct ServiceRecord {
     pub favourite_route: Option<(String, String, usize)>,
     pub crates_lost: usize,
     pub scu_lost: u32,
-    /// What those lost crates cost; already off `board_credit` and `cash`.
+    /// What those lost crates cost, open voyages included; only the part on
+    /// closed voyages (`losses`) is off `board_credit` so far.
     pub written_off: f64,
     pub shares_paid_out: f64,
     pub shares_received: f64,
@@ -1153,7 +1240,7 @@ pub fn service_record(user: &User, users: &[User], voyages: &[Voyage]) -> Servic
         favourite_route,
         crates_lost: lost.len(),
         scu_lost: lost.iter().map(|c| c.size_scu).sum(),
-        written_off: losses(user.id, voyages),
+        written_off: logged.iter().map(|l| l.written_off()).sum(),
         // only the seller pays shares out
         shares_paid_out: mine.iter().filter(|l| l.submitted_by == user.id).map(|l| l.shares_paid()).sum(),
         shares_received: sold_loads(voyages)
@@ -1272,7 +1359,10 @@ pub struct LedgerLoad {
     pub kept: f64,
     pub share_earned: f64,
     pub share_received: f64,
-    /// Lost cargo this member held on it.
+    /// aUEC that reached this member from it (`collected_by`).
+    pub collected: f64,
+    /// Lost cargo this member held on it, once its voyage has closed (as
+    /// `losses` counts it).
     pub losses: f64,
 }
 
@@ -1294,8 +1384,9 @@ pub struct LedgerVoyage {
     pub kept: f64,
     /// Shares earned (leaderboard credit, forfeited or not).
     pub share_earned: f64,
-    /// aUEC that actually reached them: the remainder they kept plus
-    /// shares paid to them (forfeits they made went elsewhere).
+    /// aUEC that actually reached them: sale takings as seller less shares
+    /// paid out, plus shares paid to them (forfeits they made went
+    /// elsewhere). Cargo costs don't come off it, so it equals `cash`.
     pub collected: f64,
     pub losses: f64,
     /// This voyage's part of `board_credit` / `cash`.
@@ -1354,12 +1445,12 @@ pub fn ledger_voyage(v: &Voyage, user_id: i64) -> LedgerVoyage {
             kept: kept_by(l, user_id),
             share_earned: share_earned_by(l, user_id),
             share_received: share_received_by(l, user_id),
-            losses: if l.submitted_by == user_id { l.written_off() } else { 0.0 },
+            collected: collected_by(l, user_id),
+            losses: if l.submitted_by == user_id && v.is_fully_sold() { l.written_off() } else { 0.0 },
         })
         .collect();
     let mine = || v.loads.iter().filter(|l| l.was_sold() && l.submitted_by == user_id);
     let kept: f64 = loads.iter().map(|l| l.kept).sum();
-    let received: f64 = loads.iter().map(|l| l.share_received).sum();
     LedgerVoyage {
         voyage_id: v.id,
         bought_at: v.bought_at.clone(),
@@ -1371,7 +1462,7 @@ pub fn ledger_voyage(v: &Voyage, user_id: i64) -> LedgerVoyage {
         scu_sold: mine().map(|l| l.scu_sold()).sum(),
         kept,
         share_earned: loads.iter().map(|l| l.share_earned).sum(),
-        collected: kept + received,
+        collected: loads.iter().map(|l| l.collected).sum(),
         losses: losses(user_id, one),
         credit: board_credit(user_id, one),
         cash: cash(user_id, one),
@@ -1506,16 +1597,32 @@ impl Depth {
 pub struct PlanEntry {
     pub load_id: i64,
     pub commodity: String,
-    pub stop_no: u32,
+    /// Route stop it comes aboard at.
+    pub pickup_stop: u32,
+    /// Route stop it comes off at; `None` = undecided, rides to the end.
+    pub drop_stop: Option<u32>,
     pub destination: Option<String>,
     /// Non-lost crate sizes.
     pub sizes: Vec<u32>,
     pub depth: Depth,
 }
 
-/// Loads sorted by `stop_no` descending (last stop loads first, deepest);
-/// within a stop, larger crates first. First entry `Deepest`, the
-/// lowest-stop entries `DoorSide`, anything between `MidHold`.
+/// When a load comes off, for ordering: undecided is "after everything".
+fn off_key(drop: Option<u32>) -> u32 {
+    drop.unwrap_or(u32::MAX)
+}
+
+/// `a` comes off strictly before `b`.
+fn leaves_before(a: Option<u32>, b: Option<u32>) -> bool {
+    off_key(a) < off_key(b)
+}
+
+/// The order loads that come aboard *together* go in: the one that comes
+/// off last first (deepest), undecided destinations deepest of all; within
+/// a drop stop, larger crates first. First entry `Deepest`, the entries that
+/// come off soonest `DoorSide`, anything between `MidHold`. With every load
+/// boarding at the start this is the whole 0.2 plan; `stowage_legs` runs it
+/// per boarding stop along a route.
 pub fn stowage_order(loads: &[&Load]) -> Vec<PlanEntry> {
     let mut entries: Vec<PlanEntry> = loads
         .iter()
@@ -1525,7 +1632,9 @@ pub fn stowage_order(loads: &[&Load]) -> Vec<PlanEntry> {
             PlanEntry {
                 load_id: l.id,
                 commodity: l.commodity.clone(),
-                stop_no: l.stop_no,
+                pickup_stop: l.pickup_stop,
+                // a drop at or before the pickup can't be flown; treat it as undecided
+                drop_stop: l.drop_stop.filter(|d| *d > l.pickup_stop),
                 destination: l.destination.clone(),
                 sizes,
                 depth: Depth::MidHold,
@@ -1533,22 +1642,259 @@ pub fn stowage_order(loads: &[&Load]) -> Vec<PlanEntry> {
         })
         .collect();
     entries.sort_by(|a, b| {
-        b.stop_no
-            .cmp(&a.stop_no)
+        off_key(b.drop_stop)
+            .cmp(&off_key(a.drop_stop))
             .then_with(|| b.sizes.first().cmp(&a.sizes.first()))
             .then_with(|| a.load_id.cmp(&b.load_id))
     });
-    let min_stop = entries.iter().map(|e| e.stop_no).min().unwrap_or(1);
+    let next_off = entries.iter().map(|e| off_key(e.drop_stop)).min().unwrap_or(u32::MAX);
     for (i, e) in entries.iter_mut().enumerate() {
         e.depth = if i == 0 {
             Depth::Deepest
-        } else if e.stop_no == min_stop {
+        } else if off_key(e.drop_stop) == next_off {
             Depth::DoorSide
         } else {
             Depth::MidHold
         };
     }
     entries
+}
+
+/// One load as it rides on one leg of the route.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LegEntry {
+    pub entry: PlanEntry,
+    /// Came aboard at the stop this leg starts from.
+    pub boarded: bool,
+    /// Something above it comes off later than it does, so it has to be dug
+    /// out (or that cargo moved aside) when its stop comes.
+    pub buried: bool,
+}
+
+/// Cargo that boarded on top of something that comes off before it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Conflict {
+    /// Comes off first, but sits underneath.
+    pub under: i64,
+    /// Boarded later, on top of it.
+    pub over: i64,
+}
+
+/// One leg of a route: from a stop to the next one (`to = None` past the
+/// last stop, when cargo with an undecided destination rides on).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Leg {
+    /// 1-based leg number.
+    pub n: usize,
+    pub from: u32,
+    pub to: Option<u32>,
+    /// What's aboard on this leg, deepest first, door side last.
+    pub aboard: Vec<LegEntry>,
+    /// Loads that came off at `from` before this leg (ids).
+    pub unloaded: Vec<i64>,
+    /// Restows forced by what boarded at `from`.
+    pub conflicts: Vec<Conflict>,
+}
+
+/// The stowage plan along a route, leg by leg. The hold is a stack: the
+/// deepest cargo went in first, the door-side cargo last. At every stop:
+///
+/// 1. cargo whose drop is this stop comes off (it should be at the door);
+/// 2. cargo boarding here goes **on top** of whatever is still aboard --
+///    cargo that boards later never goes deeper than cargo already aboard;
+///    among the loads boarding together, the one that comes off last goes
+///    in first (`stowage_order`);
+/// 3. if something boarding here comes off *after* cargo it now sits on, the
+///    plan can't be first-in-last-out: that's reported as a `Conflict` on
+///    the leg and the buried cargo is flagged, rather than pretending the
+///    later cargo could be slid underneath.
+///
+/// `route_len` is the number of stops including the start; loads pointing
+/// past it stretch the route. A load with no drop stop rides to the end.
+pub fn stowage_legs(route_len: usize, loads: &[&Load]) -> Vec<Leg> {
+    let order = stowage_order(loads);
+    let last = order
+        .iter()
+        .flat_map(|e| [Some(e.pickup_stop), e.drop_stop])
+        .flatten()
+        .max()
+        .unwrap_or(0)
+        .max(route_len.saturating_sub(1) as u32);
+    let mut stack: Vec<PlanEntry> = Vec::new();
+    let mut legs = Vec::new();
+    for s in 0..=last {
+        let unloaded: Vec<i64> = stack.iter().filter(|e| e.drop_stop == Some(s)).map(|e| e.load_id).collect();
+        stack.retain(|e| e.drop_stop != Some(s));
+        let boarding: Vec<PlanEntry> = order.iter().filter(|e| e.pickup_stop == s).cloned().collect();
+        let mut conflicts = Vec::new();
+        for b in &boarding {
+            for e in &stack {
+                if leaves_before(e.drop_stop, b.drop_stop) {
+                    conflicts.push(Conflict { under: e.load_id, over: b.load_id });
+                }
+            }
+        }
+        stack.extend(boarding);
+        let to = (s < last).then_some(s + 1);
+        if to.is_none() && stack.is_empty() {
+            break;
+        }
+        let next_off = stack.iter().map(|e| off_key(e.drop_stop)).min().unwrap_or(u32::MAX);
+        let aboard = stack
+            .iter()
+            .enumerate()
+            .map(|(i, e)| {
+                let mut entry = e.clone();
+                entry.depth = if i == 0 {
+                    Depth::Deepest
+                } else if off_key(e.drop_stop) == next_off && next_off != u32::MAX {
+                    Depth::DoorSide
+                } else {
+                    Depth::MidHold
+                };
+                LegEntry {
+                    boarded: e.pickup_stop == s,
+                    buried: stack[i + 1..].iter().any(|o| leaves_before(e.drop_stop, o.drop_stop)),
+                    entry,
+                }
+            })
+            .collect();
+        legs.push(Leg { n: legs.len() + 1, from: s, to, aboard, unloaded, conflicts });
+    }
+    legs
+}
+
+// ---------------------------------------------------------------------------
+// routes
+// ---------------------------------------------------------------------------
+
+fn same_terminal(a: &str, b: &str) -> bool {
+    a.trim().eq_ignore_ascii_case(b.trim())
+}
+
+/// What a load recorded before routes existed says about where it went.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LegacyLoad {
+    pub id: i64,
+    pub buy_terminal: String,
+    pub destination: Option<String>,
+    pub stop_no: u32,
+}
+
+/// A route derived from loads, and where each load sits on it:
+/// `(load id, pickup_stop, drop_stop)`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DerivedRoute {
+    pub stops: Vec<String>,
+    pub placed: Vec<(i64, u32, Option<u32>)>,
+}
+
+/// The route of a voyage recorded before routes existed (migration 0011),
+/// from its loads' buy terminals, destinations and stop №s. Nothing is
+/// invented and every terminal a load names lands on the route:
+///
+/// - the start is the buy terminal of the first load (lowest id) that has
+///   one, else unknown (`""`);
+/// - then each other buy terminal that isn't one of the destinations ahead
+///   of the load bought there, in load order (picked up on the way out);
+/// - then the destinations, ordered by the lowest stop № that names each
+///   one (ties by load id). Same destination, same stop.
+///
+/// A load comes aboard at the first stop carrying its buy terminal that is
+/// before its drop -- so cargo bought where other cargo is sold boards
+/// there, not at the start -- and comes off at its destination's stop.
+pub fn derive_route(loads: &[LegacyLoad]) -> DerivedRoute {
+    let mut loads: Vec<&LegacyLoad> = loads.iter().collect();
+    loads.sort_by_key(|l| l.id);
+    let start = loads
+        .iter()
+        .map(|l| l.buy_terminal.trim())
+        .find(|t| !t.is_empty())
+        .unwrap_or("")
+        .to_string();
+    // destinations in stop № order
+    let mut dests: Vec<(u32, i64, String)> = Vec::new();
+    for l in &loads {
+        let Some(d) = l.destination.as_deref().map(str::trim).filter(|d| !d.is_empty()) else { continue };
+        match dests.iter_mut().find(|(_, _, t)| same_terminal(t, d)) {
+            Some(e) => e.0 = e.0.min(l.stop_no),
+            None => dests.push((l.stop_no, l.id, d.to_string())),
+        }
+    }
+    dests.sort_by_key(|(stop, id, _)| (*stop, *id));
+    let dest_names: Vec<String> = dests.into_iter().map(|(_, _, t)| t).collect();
+    let dest_at = |t: &str| dest_names.iter().position(|d| same_terminal(d, t));
+    // where each load boards among the destinations, if it can
+    let boards_at_dest = |l: &LegacyLoad| -> Option<usize> {
+        let drop = l.destination.as_deref().and_then(|d| dest_at(d));
+        dest_names
+            .iter()
+            .enumerate()
+            .find(|(i, d)| same_terminal(d, &l.buy_terminal) && drop.map_or(true, |dr| *i < dr))
+            .map(|(i, _)| i)
+    };
+    let mut extras: Vec<String> = Vec::new();
+    for l in &loads {
+        let t = l.buy_terminal.trim();
+        if t.is_empty() || same_terminal(t, &start) || boards_at_dest(l).is_some() {
+            continue;
+        }
+        if !extras.iter().any(|e| same_terminal(e, t)) {
+            extras.push(t.to_string());
+        }
+    }
+    let base = 1 + extras.len() as u32;
+    let placed = loads
+        .iter()
+        .map(|l| {
+            let t = l.buy_terminal.trim();
+            let drop = l.destination.as_deref().and_then(|d| dest_at(d)).map(|i| base + i as u32);
+            let pickup = if t.is_empty() || same_terminal(t, &start) {
+                0
+            } else if let Some(i) = boards_at_dest(l) {
+                base + i as u32
+            } else {
+                1 + extras.iter().position(|e| same_terminal(e, t)).unwrap_or(0) as u32
+            };
+            (l.id, pickup, drop)
+        })
+        .collect();
+    let mut stops = vec![start];
+    stops.extend(extras);
+    stops.extend(dest_names);
+    DerivedRoute { stops, placed }
+}
+
+/// Puts a load picked up at `pickup` and bound for `drop` onto `route` (a
+/// merge into another voyage): it boards at the first stop with its pickup
+/// terminal and comes off at the first stop after that with its drop
+/// terminal; a terminal the route doesn't reach yet is added at the end.
+/// A blank pickup boards at the start.
+pub fn place_on_route(route: &mut Vec<String>, pickup: &str, drop: Option<&str>) -> (u32, Option<u32>) {
+    if route.is_empty() {
+        route.push(pickup.trim().to_string());
+    }
+    let p = if pickup.trim().is_empty() {
+        0
+    } else {
+        match route.iter().position(|t| same_terminal(t, pickup)) {
+            Some(i) => i,
+            None => {
+                route.push(pickup.trim().to_string());
+                route.len() - 1
+            }
+        }
+    };
+    let d = drop.map(str::trim).filter(|d| !d.is_empty()).map(|d| {
+        match route.iter().enumerate().skip(p + 1).find(|(_, t)| same_terminal(t, d)) {
+            Some((i, _)) => i,
+            None => {
+                route.push(d.to_string());
+                route.len() - 1
+            }
+        }
+    });
+    (p as u32, d.map(|i| i as u32))
 }
 
 /// `https://sc-cargo.space/#/viewer/<slug>-official[-q<n>][-w<n>]…`, sizes
@@ -1650,12 +1996,59 @@ impl Voyage {
         !self.loads.is_empty() && self.loads.iter().all(|l| l.is_sold())
     }
 
-    /// Distinct stop numbers across open loads.
+    /// Stops on the route after the start.
     pub fn stop_count(&self) -> usize {
-        let mut stops: Vec<u32> = self.open_loads().map(|l| l.stop_no).collect();
-        stops.sort_unstable();
-        stops.dedup();
-        stops.len()
+        self.route.len().saturating_sub(1)
+    }
+
+    /// The last stop on the route (0 when it's only a start).
+    pub fn last_stop(&self) -> u32 {
+        self.stop_count() as u32
+    }
+
+    /// A route stop's terminal; `"start"` / `"stop n"` when unnamed or
+    /// beyond the route.
+    pub fn stop_name(&self, seq: u32) -> String {
+        match self.route.get(seq as usize).map(|t| t.trim()).filter(|t| !t.is_empty()) {
+            Some(t) => t.to_string(),
+            None if seq == 0 => "start".into(),
+            None => format!("stop {seq}"),
+        }
+    }
+
+    /// The next stop the voyage flies to, if the route goes on.
+    pub fn next_stop(&self) -> Option<u32> {
+        (self.at_stop < self.last_stop()).then_some(self.at_stop + 1)
+    }
+
+    /// A load's where-now, told against the route: the crates' whereabouts
+    /// (`Load::where_now`) plus where the voyage is relative to the load's
+    /// pickup and drop stops.
+    pub fn where_now(&self, l: &Load) -> String {
+        let hull = self.hull_label();
+        let base = l.where_now(hull.as_deref());
+        match l.status() {
+            LoadStatus::AwaitingPickup if l.pickup_stop > self.at_stop => {
+                let n = l.pickup_stop - self.at_stop;
+                format!("{base} · {n} stop{} ahead", if n == 1 { "" } else { "s" })
+            }
+            LoadStatus::InTransit => match l.drop_stop {
+                Some(d) if d == self.at_stop => format!("{base} · unload here"),
+                Some(d) if d < self.at_stop => format!("{base} · past its stop"),
+                Some(d) => {
+                    let n = d - self.at_stop;
+                    format!("{base} · {n} stop{} to go", if n == 1 { "" } else { "s" })
+                }
+                None => base,
+            },
+            _ => base,
+        }
+    }
+
+    /// The stowage plan along this voyage's route, open loads only.
+    pub fn legs(&self) -> Vec<Leg> {
+        let loads: Vec<&Load> = self.open_loads().collect();
+        stowage_legs(self.route.len(), &loads)
     }
 
     /// Destinations named on open loads (trimmed, non-empty), deduplicated
@@ -1764,7 +2157,8 @@ pub(crate) mod fixtures {
             price_mode: PriceMode::Scu,
             buy_price_scu,
             buy_price_lot: None,
-            stop_no: 1,
+            pickup_stop: 0,
+            drop_stop: Some(1),
             destination: Some("Area18 TDD".into()),
             sold_at: None,
             sell_terminal: None,
@@ -1861,6 +2255,8 @@ pub(crate) mod fixtures {
             ship,
             bought_at: "2026-11-08".into(),
             notes: None,
+            route: vec!["ArcCorp Mining Area 141".into(), "Area18 TDD".into()],
+            at_stop: 0,
             loads: loads
                 .into_iter()
                 .map(|mut l| {
@@ -2167,7 +2563,8 @@ mod tests {
         assert_eq!(board_credit(GIG, &vs), 750.0);
         assert_eq!(board_credit(JT, &vs), 250.0);
         assert_eq!(board_credit(THIRD, &vs), 0.0);
-        assert_eq!(cash(GIG, &vs), 750.0);
+        // Gig took in 2000 and paid 250 of it out; it landed with Crew-03
+        assert_eq!(cash(GIG, &vs), 1750.0);
         assert_eq!(cash(JT, &vs), 0.0);
         assert_eq!(cash(THIRD, &vs), 250.0);
     }
@@ -2254,7 +2651,9 @@ mod tests {
             for line in &m.voyages {
                 // the breakdown adds up to the voyage's own figures
                 assert!(approx(line.kept + line.share_earned - line.losses, line.credit), "voyage {}", line.voyage_id);
-                assert!(approx(line.collected - line.losses, line.cash), "voyage {}", line.voyage_id);
+                assert!(approx(line.collected, line.cash), "voyage {}", line.voyage_id);
+                assert!(approx(line.loads.iter().map(|l| l.collected).sum::<f64>(), line.collected));
+                assert!(approx(line.loads.iter().map(|l| l.losses).sum::<f64>(), line.losses));
                 assert!(approx(line.loads.iter().map(|l| l.kept).sum::<f64>(), line.kept));
             }
         }
@@ -2267,7 +2666,8 @@ mod tests {
         assert_eq!(gig.voyages.iter().map(|v| v.voyage_id).collect::<Vec<_>>(), vec![3, 2, 1], "Gig was never on voyage 4");
         let v3 = &gig.voyages[0];
         assert!(v3.open);
-        assert_eq!((v3.losses, v3.credit), (400.0, -400.0), "the lost crate on an open load is Gig's loss");
+        assert_eq!((v3.losses, v3.credit), (0.0, 0.0), "the lost crate waits for the voyage to close, as on the board");
+        assert_eq!(v3.loads[0].losses, 0.0);
         assert_eq!(gig.voyages[1].roles, vec![Role::Crew]);
         assert_eq!(gig.voyages[1].share_earned, 10.0, "the 1,000 flat fee on the losing sale pays nothing");
         assert_eq!(gig.voyages[2].roles, vec![Role::Logged, Role::Sold]);
@@ -2286,7 +2686,7 @@ mod tests {
     }
 
     #[test]
-    fn board_credit_and_cash_sum_to_same_org_total() {
+    fn credit_sums_to_profit_and_cash_to_revenue() {
         let vs = vec![
             voyage(1, GIG, None, vec![sold_load(1, GIG, 10.0, 20.0, &[32, 32], vec![(JT, Some(THIRD), ShareKind::Pct, 30.0)])]),
             voyage(2, JT, None, vec![sold_load(2, JT, 10.0, 5.0, &[8], vec![(GIG, None, ShareKind::Flat, 1000.0)])]),
@@ -2294,9 +2694,11 @@ mod tests {
         ];
         let credit: f64 = [GIG, JT, THIRD].iter().map(|&u| board_credit(u, &vs)).sum();
         let money: f64 = [GIG, JT, THIRD].iter().map(|&u| cash(u, &vs)).sum();
-        assert!(approx(credit, money), "{credit} vs {money}");
         let realised: f64 = vs.iter().flat_map(|v| v.loads.iter()).filter_map(|l| l.profit()).sum();
         assert!(approx(credit, realised));
+        // shares only move takings between members: the org collected every sale
+        let revenue: f64 = vs.iter().flat_map(|v| v.loads.iter()).filter_map(|l| l.revenue()).sum();
+        assert!(approx(money, revenue), "{money} vs {revenue}");
     }
 
     #[test]
@@ -2337,10 +2739,11 @@ mod tests {
         sold.crates.push(crate_(3, 8, Condition::Lost, Whereabouts::Aboard));
         // written off whole, never sold: 4 SCU at 25 → 100
         let gone = load(3, 25.0, vec![crate_(4, 4, Condition::Lost, Whereabouts::Aboard)]);
-        let vs = vec![voyage(1, GIG, None, vec![open, sold, gone])];
+        // voyage 2 is closed (nothing open), so its write-offs are off realised
+        let vs = vec![voyage(1, GIG, None, vec![open]), voyage(2, GIG, None, vec![sold, gone])];
         let t = Totals::from_voyages(&vs);
-        assert_eq!(t.losses, 260.0);
-        assert_eq!(t.realised, 80.0 - 260.0);
+        assert_eq!(t.losses, 180.0);
+        assert_eq!(t.realised, 80.0 - 180.0);
         // committed is still what's afloat, write-offs already off it
         assert_eq!(t.written_off, 80.0);
         assert_eq!(t.committed, 320.0);
@@ -2350,15 +2753,45 @@ mod tests {
     fn write_offs_come_off_the_owner_not_the_share_holders() {
         // JT on 50 % of a +160 sale; Gig also lost 8 SCU at 10 on an open load
         let sold = sold_load(1, GIG, 10.0, 20.0, &[16], vec![(JT, None, ShareKind::Pct, 50.0)]);
-        let open = load(2, 10.0, vec![sound(1, 8), crate_(2, 8, Condition::Lost, Whereabouts::Aboard)]);
-        let vs = vec![voyage(1, GIG, None, vec![sold, open])];
+        let gone = load(2, 10.0, vec![crate_(2, 8, Condition::Lost, Whereabouts::Aboard)]);
+        let vs = vec![voyage(1, GIG, None, vec![sold, gone])];
         assert_eq!(losses(GIG, &vs), 80.0);
         assert_eq!(board_credit(GIG, &vs), 80.0 - 80.0);
-        assert_eq!(cash(GIG, &vs), 80.0 - 80.0);
+        // took in 320, paid JT 80; the lost crate cost money, it wasn't taken
+        assert_eq!(cash(GIG, &vs), 320.0 - 80.0);
         assert_eq!(board_credit(JT, &vs), 80.0);
         let rec = service_record(&users()[0], &users(), &vs);
         assert_eq!(rec.written_off, 80.0);
         assert_eq!(rec.board_credit, 0.0);
+    }
+
+    #[test]
+    fn open_voyage_write_off_waits_until_the_voyage_closes() {
+        // one voyage: a +80 sale, plus an open load with 8 SCU lost at 10
+        let sold = sold_load(1, GIG, 10.0, 15.0, &[16], vec![]);
+        let open = load(2, 10.0, vec![sound(1, 8), crate_(2, 8, Condition::Lost, Whereabouts::Aboard)]);
+        let mut vs = vec![voyage(1, GIG, None, vec![sold, open])];
+        let t = Totals::from_voyages(&vs);
+        assert_eq!((t.losses, t.realised), (0.0, 80.0));
+        // still off what's afloat
+        assert_eq!((t.written_off, t.committed), (80.0, 80.0));
+        assert_eq!(losses(GIG, &vs), 0.0);
+        assert_eq!(board_credit(GIG, &vs), 80.0);
+        assert_eq!(cash(GIG, &vs), 240.0);
+        // the record still shows the lost crate
+        assert_eq!(service_record(&users()[0], &users(), &vs).written_off, 80.0);
+
+        // sell the sound crate at cost: nothing open left, the write-off lands
+        let l = &mut vs[0].loads[1];
+        l.crates[0].condition = Condition::Sold;
+        l.sell_price_scu = Some(10.0);
+        l.sold_at = Some("2955-01-02".into());
+        assert!(vs[0].is_fully_sold());
+        let t = Totals::from_voyages(&vs);
+        assert_eq!((t.losses, t.realised, t.committed), (80.0, 0.0, 0.0));
+        assert_eq!(board_credit(GIG, &vs), 0.0);
+        // the write-off is off profit, not off what the two sales took in
+        assert_eq!(cash(GIG, &vs), 240.0 + 80.0);
     }
 
     // -- standings -----------------------------------------------------------
@@ -2393,7 +2826,7 @@ mod tests {
         assert_eq!(rows[1].best_route.as_ref().map(|r| r.profit), Some(640.0));
         assert_eq!(rows[2].display_name, "Crew-03");
         assert_eq!(rows[2].board_credit, 0.0);
-        let pct: f64 = rows.iter().map(|r| r.pct_of_org).sum();
+        let pct: f64 = rows.iter().map(|r| r.share_of_org).sum();
         assert!(approx(pct, 100.0));
 
         // one closed run each: the tie goes to net profit
@@ -2441,6 +2874,101 @@ mod tests {
         assert_eq!((rec.runs_closed, rec.loads_sold), (2, 2));
         assert_eq!(rec.shares_paid_out, 0.0, "Gig paid nobody; JT paid Gig");
         assert_eq!(rec.shares_received, 180.0);
+    }
+
+    /// Gig holds 100 % of JT's +640 sale and forfeits it to JT; Gig also
+    /// sells +80 of his own; Gig has a third, unsold voyage.
+    fn forfeit_ledger() -> Vec<Voyage> {
+        vec![
+            voyage(1, JT, None, vec![sold_load(1, JT, 10.0, 30.0, &[32], vec![(GIG, Some(JT), ShareKind::Pct, 100.0)])]),
+            voyage(2, GIG, None, vec![sold_load(2, GIG, 10.0, 20.0, &[8], vec![])]),
+            voyage(3, GIG, None, vec![load(3, 10.0, vec![sound(1, 8)])]),
+        ]
+    }
+
+    fn row_of(rows: &[Standing], id: i64) -> &Standing {
+        rows.iter().find(|r| r.user_id == id).unwrap()
+    }
+
+    #[test]
+    fn profit_counts_a_forfeited_share_and_collected_does_not() {
+        let vs = forfeit_ledger();
+        let rows = standings(&users(), &vs, SortKey::Profit);
+        let (gig, jt) = (row_of(&rows, GIG), row_of(&rows, JT));
+        // Gig: the 160 Gig sold for; JT: took 960, "paid" Gig 640 that came back to JT
+        assert_eq!((gig.board_credit, gig.cash, gig.forfeited, gig.forfeits_received), (720.0, 160.0, 640.0, 0.0));
+        assert_eq!((jt.board_credit, jt.cash, jt.forfeited, jt.forfeits_received), (0.0, 960.0, 0.0, 640.0));
+        // profit: Gig has all of it; collected: JT holds most of the cash
+        assert_eq!(rows[0].user_id, GIG);
+        assert!(approx(rows[0].share_of_org, 100.0));
+        let by_cash = standings(&users(), &vs, SortKey::Collected);
+        assert_eq!(by_cash.iter().map(|r| r.user_id).collect::<Vec<_>>(), vec![JT, GIG, THIRD]);
+        assert!(approx(by_cash[0].share_of_org, 960.0 / 1120.0 * 100.0));
+        assert!(approx(by_cash.iter().map(|r| r.share_of_org).sum::<f64>(), 100.0));
+    }
+
+    #[test]
+    fn the_share_bar_follows_the_sort() {
+        let vs = forfeit_ledger();
+        // two closed runs (voyage 3 is still open); Gig flew both, JT one
+        let by_runs = standings(&users(), &vs, SortKey::Runs);
+        assert_eq!(by_runs.iter().map(|r| (r.user_id, r.runs_closed)).collect::<Vec<_>>(), vec![(GIG, 2), (JT, 1), (THIRD, 0)]);
+        assert_eq!(by_runs.iter().map(|r| r.share_of_org).collect::<Vec<_>>(), vec![100.0, 50.0, 0.0]);
+        // 40 SCU sold; Gig was on all of it, JT on his 32
+        let by_scu = standings(&users(), &vs, SortKey::Scu);
+        assert_eq!(by_scu.iter().map(|r| (r.user_id, r.scu_hauled)).collect::<Vec<_>>(), vec![(GIG, 40), (JT, 32), (THIRD, 0)]);
+        assert_eq!(by_scu.iter().map(|r| r.share_of_org).collect::<Vec<_>>(), vec![100.0, 80.0, 0.0]);
+        for key in SortKey::ALL {
+            assert!(standings(&users(), &vs, key).iter().all(|r| (0.0..=100.0).contains(&r.share_of_org)), "{key:?}");
+        }
+    }
+
+    #[test]
+    fn a_loss_takes_no_share_and_an_empty_board_is_all_zero() {
+        // Gig loses 80 on his only sale: no negative share, no NaN
+        let vs = vec![voyage(1, GIG, None, vec![sold_load(1, GIG, 20.0, 10.0, &[8], vec![])])];
+        let rows = standings(&users(), &vs, SortKey::Profit);
+        assert!(rows.iter().all(|r| r.share_of_org == 0.0));
+        assert_eq!(rows.last().unwrap().user_id, GIG, "the loss sorts last");
+        // the 80 it sold for still came in
+        let by_cash = standings(&users(), &vs, SortKey::Collected);
+        assert_eq!((by_cash[0].user_id, by_cash[0].cash, by_cash[0].share_of_org), (GIG, 80.0, 100.0));
+        for key in SortKey::ALL {
+            let rows = standings(&users(), &[], key);
+            assert!(rows.iter().all(|r| r.share_of_org == 0.0 && r.is_idle()));
+            // everything tied: A→Z, ignoring case
+            assert_eq!(rows.iter().map(|r| r.display_name.as_str()).collect::<Vec<_>>(), vec!["Crew-03", "JT", "Lord Gig"]);
+        }
+    }
+
+    #[test]
+    fn ties_on_the_sort_key_fall_back_to_profit_then_collected() {
+        // both flew both runs; the tie on runs goes to profit
+        let vs = vec![
+            voyage(1, GIG, None, vec![sold_load(1, GIG, 10.0, 20.0, &[16], vec![(JT, Some(GIG), ShareKind::Pct, 50.0)])]),
+            voyage(2, JT, None, vec![sold_load(2, JT, 10.0, 20.0, &[16], vec![(GIG, Some(JT), ShareKind::Pct, 25.0)])]),
+        ];
+        let rows = standings(&users(), &vs, SortKey::Runs);
+        // Gig: 80 kept + 40 earned = 120 credit, 320 taken − 80 paid + 80 forfeited back = 320 cash;
+        // JT: 120 kept + 80 earned = 200 credit, 320 − 40 + 40 = 320 cash
+        assert_eq!((row_of(&rows, GIG).board_credit, row_of(&rows, GIG).cash), (120.0, 320.0));
+        assert_eq!((row_of(&rows, JT).board_credit, row_of(&rows, JT).cash), (200.0, 320.0));
+        assert_eq!(rows.iter().map(|r| r.user_id).collect::<Vec<_>>(), vec![JT, GIG, THIRD]);
+        // equal cash: the tie on collected goes to profit
+        let by_cash = standings(&users(), &vs, SortKey::Collected);
+        assert_eq!(by_cash.iter().map(|r| r.user_id).collect::<Vec<_>>(), vec![JT, GIG, THIRD]);
+    }
+
+    #[test]
+    fn sort_keys_parse_forgivingly() {
+        assert_eq!(SortKey::parse("collected"), SortKey::Collected);
+        assert_eq!(SortKey::parse("cash"), SortKey::Collected);
+        assert_eq!(SortKey::parse(" SCU "), SortKey::Scu);
+        assert_eq!(SortKey::parse("Runs"), SortKey::Runs);
+        assert_eq!(SortKey::parse("nonsense"), SortKey::Profit);
+        for k in SortKey::ALL {
+            assert_eq!(SortKey::parse(k.as_str()), k);
+        }
     }
 
     #[test]
@@ -2497,20 +3025,20 @@ mod tests {
         let mut a = load(1, 1.0, vec![sound(1, 32)]); // stop 1
         a.commodity = "Quantainium".into();
         let mut b = load(2, 1.0, vec![sound(2, 32), sound(3, 32)]); // stop 2
-        b.stop_no = 2;
+        b.drop_stop = Some(2);
         b.commodity = "Agricium".into();
         let mut c = load(3, 1.0, vec![sound(4, 8), sound(5, 8), sound(6, 8), sound(7, 8), sound(8, 8)]); // stop 1, 40 SCU of small boxes
         c.commodity = "Aluminum".into();
         let order = stowage_order(&[&a, &b, &c]);
         assert_eq!(order.iter().map(|e| e.load_id).collect::<Vec<_>>(), vec![2, 1, 3]);
-        assert_eq!(order[0].stop_no, 2);
+        assert_eq!(order[0].drop_stop, Some(2));
     }
 
     #[test]
     fn stowage_labels_deepest_doorside_midhold() {
         let mk = |id: i64, stop: u32, size: u32| {
             let mut l = load(id, 1.0, vec![sound(id * 10, size)]);
-            l.stop_no = stop;
+            l.drop_stop = Some(stop);
             l
         };
         let (a, b, c, d) = (mk(1, 3, 32), mk(2, 2, 32), mk(3, 1, 32), mk(4, 1, 8));
@@ -2527,6 +3055,171 @@ mod tests {
         let mut g = mk(7, 1, 32);
         g.crates.push(crate_(71, 8, Condition::Lost, Whereabouts::Aboard));
         assert_eq!(stowage_order(&[&g])[0].sizes, vec![32]);
+    }
+
+    // -- stowage along a route ----------------------------------------------
+
+    /// A load on the route: boards at `pickup`, comes off at `drop`.
+    fn routed(id: i64, commodity: &str, pickup: u32, drop: Option<u32>, sizes: &[u32]) -> Load {
+        let crates = sizes.iter().enumerate().map(|(i, &s)| sound(id * 100 + i as i64, s)).collect();
+        let mut l = load(id, 1.0, crates);
+        l.commodity = commodity.into();
+        l.pickup_stop = pickup;
+        l.drop_stop = drop;
+        l
+    }
+
+    fn ids(leg: &Leg) -> Vec<i64> {
+        leg.aboard.iter().map(|e| e.entry.load_id).collect()
+    }
+
+    #[test]
+    fn cargo_picked_up_at_a_later_stop_is_not_stowed_before_it_boards() {
+        // The bug that started routes: a run out of Shubin with Laranite for
+        // Area18, where the Agricium sold at Lorville is *bought* at Area18.
+        // The old flat plan sorted by stop № alone and put the Agricium
+        // deepest -- in a hold it hadn't been loaded into yet.
+        let laranite = routed(1, "Laranite", 0, Some(1), &[8, 8, 8]);
+        let agricium = routed(2, "Agricium", 1, Some(2), &[32, 32]);
+        let legs = stowage_legs(3, &[&laranite, &agricium]);
+        assert_eq!(legs.len(), 2);
+        assert_eq!((legs[0].from, legs[0].to), (0, Some(1)));
+        assert_eq!(ids(&legs[0]), vec![1], "leg 1 carries only what boarded at the start");
+        assert_eq!(legs[0].aboard[0].entry.depth, Depth::Deepest);
+        assert_eq!(ids(&legs[1]), vec![2]);
+        assert_eq!(legs[1].unloaded, vec![1]);
+        assert!(legs[1].aboard[0].boarded);
+        assert!(legs.iter().all(|l| l.conflicts.is_empty()));
+    }
+
+    #[test]
+    fn cargo_that_boards_later_never_goes_deeper_than_cargo_already_aboard() {
+        // start → A → B: Titanium rides start → B, Gold start → A, and
+        // Agricium boards at A for B. Agricium goes on top of the Titanium,
+        // even though it's the bigger lot and both come off at B.
+        let titanium = routed(1, "Titanium", 0, Some(2), &[8]);
+        let gold = routed(2, "Gold", 0, Some(1), &[4]);
+        let agricium = routed(3, "Agricium", 1, Some(2), &[32, 32]);
+        let legs = stowage_legs(3, &[&titanium, &gold, &agricium]);
+        assert_eq!(ids(&legs[0]), vec![1, 2]);
+        assert_eq!(
+            legs[0].aboard.iter().map(|e| e.entry.depth).collect::<Vec<_>>(),
+            vec![Depth::Deepest, Depth::DoorSide]
+        );
+        assert_eq!(ids(&legs[1]), vec![1, 3]);
+        assert_eq!(legs[1].unloaded, vec![2]);
+        assert!(legs[1].conflicts.is_empty(), "both come off at B: no restow");
+    }
+
+    #[test]
+    fn cargo_boarding_on_top_of_cargo_that_leaves_first_is_flagged() {
+        // start → A → B → C: Laranite start → C, Gold start → B; Agricium
+        // boards at A for C and has to sit on the Gold, which leaves first.
+        let laranite = routed(1, "Laranite", 0, Some(3), &[8]);
+        let gold = routed(2, "Gold", 0, Some(2), &[4]);
+        let agricium = routed(3, "Agricium", 1, Some(3), &[32]);
+        let legs = stowage_legs(4, &[&laranite, &gold, &agricium]);
+        assert_eq!(ids(&legs[1]), vec![1, 2, 3]);
+        assert_eq!(legs[1].conflicts, vec![Conflict { under: 2, over: 3 }]);
+        assert!(legs[1].aboard[1].buried);
+        assert!(!legs[1].aboard[0].buried && !legs[1].aboard[2].buried);
+        assert_eq!(legs[1].aboard[1].entry.depth, Depth::DoorSide, "it still comes off next");
+        assert_eq!(ids(&legs[2]), vec![1, 3]);
+    }
+
+    #[test]
+    fn everything_boarding_at_the_start_is_the_old_plan_on_leg_one() {
+        let a = routed(1, "Quantainium", 0, Some(1), &[32]);
+        let b = routed(2, "Agricium", 0, Some(2), &[32, 32]);
+        let c = routed(3, "Aluminum", 0, Some(1), &[8, 8, 8, 8, 8]);
+        let legs = stowage_legs(3, &[&a, &b, &c]);
+        let flat = stowage_order(&[&a, &b, &c]);
+        assert_eq!(legs[0].aboard.iter().map(|e| e.entry.clone()).collect::<Vec<_>>(), flat);
+    }
+
+    #[test]
+    fn an_undecided_destination_rides_deepest_to_the_end() {
+        let open = routed(1, "Gold", 0, None, &[4]);
+        let sold_at_a = routed(2, "Laranite", 0, Some(1), &[32]);
+        let legs = stowage_legs(2, &[&open, &sold_at_a]);
+        assert_eq!(ids(&legs[0]), vec![1, 2]);
+        assert_eq!(legs.len(), 2, "a last, open-ended leg carries it on");
+        assert_eq!(legs[1].to, None);
+        assert_eq!(ids(&legs[1]), vec![1]);
+        // a route that is only a start: one open-ended leg, or none at all
+        assert_eq!(stowage_legs(1, &[&open]).len(), 1);
+        assert!(stowage_legs(1, &[]).is_empty());
+    }
+
+    #[test]
+    fn legacy_voyages_get_a_route_from_their_loads() {
+        let ll = |id: i64, buy: &str, dest: Option<&str>, stop: u32| LegacyLoad {
+            id,
+            buy_terminal: buy.into(),
+            destination: dest.map(Into::into),
+            stop_no: stop,
+        };
+        // the motivating run: Agricium bought where the Laranite is sold
+        let r = derive_route(&[
+            ll(1, "Shubin SCD-1", Some("Area18 TDD"), 1),
+            ll(2, "Area18 TDD", Some("Lorville TDD"), 2),
+        ]);
+        assert_eq!(r.stops, vec!["Shubin SCD-1", "Area18 TDD", "Lorville TDD"]);
+        assert_eq!(r.placed, vec![(1, 0, Some(1)), (2, 1, Some(2))]);
+        // a second buy terminal nobody is bound for is picked up on the way out
+        let r = derive_route(&[
+            ll(1, "ArcCorp 141", Some("Area18 TDD"), 1),
+            ll(2, "Shubin SCD-1", Some("Lorville TDD"), 2),
+            ll(3, "", None, 1),
+        ]);
+        assert_eq!(r.stops, vec!["ArcCorp 141", "Shubin SCD-1", "Area18 TDD", "Lorville TDD"]);
+        assert_eq!(r.placed, vec![(1, 0, Some(2)), (2, 1, Some(3)), (3, 0, None)]);
+        // shared destinations are one stop, at the lowest stop № naming it;
+        // a buy terminal that is only reached *after* the drop is an extra pickup
+        let r = derive_route(&[
+            ll(4, "Levski", Some("Grim HEX"), 2),
+            ll(5, "Levski", Some("Grim HEX"), 1),
+            ll(6, "Grim HEX", Some("Levski"), 1),
+        ]);
+        assert_eq!(r.stops, vec!["Levski", "Grim HEX", "Levski"]);
+        assert_eq!(r.placed, vec![(4, 0, Some(1)), (5, 0, Some(1)), (6, 1, Some(2))]);
+        let r = derive_route(&[ll(7, "", None, 1)]);
+        assert_eq!(r.stops, vec![""]);
+        assert_eq!(r.placed, vec![(7, 0, None)]);
+    }
+
+    #[test]
+    fn merging_a_load_places_it_on_the_target_route() {
+        let mut route: Vec<String> = vec!["Levski".into(), "Grim HEX".into()];
+        assert_eq!(place_on_route(&mut route, "Levski", Some("Grim HEX")), (0, Some(1)));
+        assert_eq!(place_on_route(&mut route, "grim hex", Some("Area18 TDD")), (1, Some(2)));
+        assert_eq!(route, vec!["Levski", "Grim HEX", "Area18 TDD"]);
+        // its drop comes before its pickup on this route: the drop is added after
+        assert_eq!(place_on_route(&mut route, "Area18 TDD", Some("Levski")), (2, Some(3)));
+        assert_eq!(place_on_route(&mut route, "", None), (0, None));
+        assert_eq!(route.len(), 4);
+    }
+
+    #[test]
+    fn where_now_reads_the_route() {
+        let mut v = voyage(1, GIG, None, vec![]);
+        v.route = vec!["Shubin SCD-1".into(), "Area18 TDD".into(), "Lorville TDD".into()];
+        let mut later = routed(2, "Agricium", 1, Some(2), &[32]);
+        later.buy_terminal = "Area18 TDD".into();
+        for c in &mut later.crates {
+            c.whereabouts = Whereabouts::AwaitingPickup;
+        }
+        let aboard = routed(1, "Laranite", 0, Some(1), &[8]);
+        assert_eq!(v.where_now(&later), "awaiting pickup at Area18 TDD · 1 stop ahead");
+        assert_eq!(v.where_now(&aboard), "aboard · no hull yet · 1 stop to go");
+        v.at_stop = 1;
+        assert_eq!(v.where_now(&aboard), "aboard · no hull yet · unload here");
+        assert_eq!(v.where_now(&later), "awaiting pickup at Area18 TDD");
+        v.at_stop = 2;
+        assert_eq!(v.where_now(&aboard), "aboard · no hull yet · past its stop");
+        assert_eq!(v.next_stop(), None);
+        assert_eq!(v.stop_name(1), "Area18 TDD");
+        assert_eq!(v.stop_name(7), "stop 7");
     }
 
     #[test]
@@ -2739,8 +3432,9 @@ mod properties {
             prop_assert_eq!(sale.sold.len() + sale.kept.len(), l.crates.len());
         }
 
-        /// 3. Σ board_credit == Σ cash == realised over the org, write-offs
-        /// included.
+        /// 3. Σ board_credit == realised over the org, write-offs on closed
+        /// voyages included (open-voyage ones on neither side); Σ cash == the
+        /// revenue of every sale, shares and write-offs aside.
         #[test]
         fn credit_and_cash_agree_across_the_org(cases in prop::collection::vec(sale_case(), 1..=4)) {
             let mut voyages = Vec::new();
@@ -2754,9 +3448,12 @@ mod properties {
                 sold.crates.extend(sale.kept.iter().filter(|c| c.is_lost()).cloned());
                 voyages.push(voyage(id, seller, None, vec![sold]));
             }
+            // an open voyage with a write-off stays out of both sides
+            voyages.push(voyage(99, GIG, None, vec![load(99, 10.0, vec![sound(991, 8), crate_(992, 8, Condition::Lost, Whereabouts::Aboard)])]));
             let credit: f64 = [GIG, JT, THIRD].iter().map(|&u| board_credit(u, &voyages)).sum();
             let money: f64 = [GIG, JT, THIRD].iter().map(|&u| cash(u, &voyages)).sum();
-            prop_assert!(approx(credit, money), "{} vs {}", credit, money);
+            let revenue: f64 = voyages.iter().flat_map(|v| v.loads.iter()).filter_map(|l| l.revenue()).sum();
+            prop_assert!(approx(money, revenue), "{} vs {}", money, revenue);
             let realised = Totals::from_voyages(&voyages).realised;
             prop_assert!(approx(credit, realised), "{} vs {}", credit, realised);
         }
@@ -2790,7 +3487,7 @@ mod properties {
                 prop_assert!(approx(m.totals.cash, cash(u, &voyages)), "cash {} vs {}", m.totals.cash, cash(u, &voyages));
                 for line in &m.voyages {
                     prop_assert!(approx(line.kept + line.share_earned - line.losses, line.credit));
-                    prop_assert!(approx(line.collected - line.losses, line.cash));
+                    prop_assert!(approx(line.collected, line.cash));
                 }
             }
         }
@@ -2811,12 +3508,12 @@ mod properties {
             prop_assert_eq!(parse_boxes(&format_boxes(&m)).unwrap(), m);
         }
 
-        /// 6. stowage_order is a permutation of the loads, non-increasing in stop_no.
+        /// 6. stowage_order is a permutation of the loads, non-increasing in drop stop.
         #[test]
         fn stowage_order_is_a_permutation_by_stop(stops in prop::collection::vec((1u32..=6, size()), 1..=8)) {
             let loads: Vec<Load> = stops.iter().enumerate().map(|(i, &(stop, sz))| {
                 let mut l = load(i as i64 + 1, 1.0, vec![sound(i as i64 * 10 + 1, sz)]);
-                l.stop_no = stop;
+                l.drop_stop = Some(stop);
                 l
             }).collect();
             let refs: Vec<&Load> = loads.iter().collect();
@@ -2824,8 +3521,36 @@ mod properties {
             let mut ids: Vec<i64> = order.iter().map(|e| e.load_id).collect();
             ids.sort_unstable();
             prop_assert_eq!(ids, (1..=loads.len() as i64).collect::<Vec<_>>());
-            prop_assert!(order.windows(2).all(|w| w[0].stop_no >= w[1].stop_no));
+            prop_assert!(order.windows(2).all(|w| off_key(w[0].drop_stop) >= off_key(w[1].drop_stop)));
             prop_assert_eq!(order[0].depth, Depth::Deepest);
+        }
+
+        /// 6b. Along a route, each leg carries exactly the loads boarded at or
+        /// before its start and not yet off, and cargo that boarded later is
+        /// never deeper than cargo already aboard.
+        #[test]
+        fn legs_carry_what_is_aboard_and_stack_by_boarding(spec in prop::collection::vec((0u32..=3, 0u32..=4, size()), 1..=8)) {
+            let loads: Vec<Load> = spec.iter().enumerate().map(|(i, &(pickup, off, sz))| {
+                let mut l = load(i as i64 + 1, 1.0, vec![sound(i as i64 * 10 + 1, sz)]);
+                l.pickup_stop = pickup;
+                // 0 = undecided, otherwise `off` stops after the pickup
+                l.drop_stop = (off > 0).then_some(pickup + off);
+                l
+            }).collect();
+            let refs: Vec<&Load> = loads.iter().collect();
+            let legs = stowage_legs(4, &refs);
+            for leg in &legs {
+                let mut got: Vec<i64> = leg.aboard.iter().map(|e| e.entry.load_id).collect();
+                got.sort_unstable();
+                let want: Vec<i64> = loads.iter()
+                    .filter(|l| l.pickup_stop <= leg.from && l.drop_stop.map_or(true, |d| d > leg.from))
+                    .map(|l| l.id).collect();
+                prop_assert_eq!(got, want);
+                prop_assert!(leg.aboard.windows(2).all(|w| w[0].entry.pickup_stop <= w[1].entry.pickup_stop));
+                if let Some(first) = leg.aboard.first() {
+                    prop_assert_eq!(first.entry.depth, Depth::Deepest);
+                }
+            }
         }
 
         /// 8. Clustering partitions the unassigned voyages; shared destinations always cluster.

@@ -1,0 +1,26 @@
+{# The route editor: where the voyage starts, then its stops in order. Expects
+   `r: RouteFormView`. Each row is a `stop_key` (which row it is, whatever its
+   position) and a `stop_terminal`; loads pick their stops by key. Used by New
+   Run and the inline Edit of an open voyage, which also says where the voyage
+   is now and lets each open load be re-assigned. static/ripae.js adds,
+   removes and moves rows and keeps every stop pick-list in step. #}
+<div class="route-editor" data-route>
+  <div class="ras sub-h"><span>Route</span><span>Where you start, then each stop in order. Every load comes aboard at one stop and comes off at a later one.</span></div>
+  <ol class="route-stops">
+    {% for s in r.stops %}
+    <li class="ras route-stop"><span class="ln">{% if loop.first %}Start{% else %}{{ loop.index0 }}{% endif %}</span><input type="hidden" name="stop_key" value="{{ s.key }}" /><input name="stop_terminal" type="text" list="pick-terminals" data-pick autocomplete="off" value="{{ s.terminal }}" placeholder="{% if loop.first %}where you start{% else %}terminal{% endif %}" aria-label="{% if loop.first %}Start{% else %}Stop {{ loop.index0 }}{% endif %}" /><span class="line-cmd"><button class="cmd up" type="button" title="Move this stop earlier">Up</button><button class="cmd danger rm-stop" type="button">Remove</button></span></li>
+    {% endfor %}
+  </ol>
+  <template class="stop-tpl"><li class="ras route-stop"><span class="ln"></span><input type="hidden" name="stop_key" value="" /><input name="stop_terminal" type="text" list="pick-terminals" data-pick autocomplete="off" value="" placeholder="terminal" /><span class="line-cmd"><button class="cmd up" type="button" title="Move this stop earlier">Up</button><button class="cmd danger rm-stop" type="button">Remove</button></span></li></template>
+  <div class="ras"><button class="cmd" type="button" data-add-stop>+ Add stop</button></div>
+  {% if r.show_at %}
+  <div class="ras sub-h"><span>On the route</span><span>Where the voyage is now, and where each open load comes aboard and off</span></div>
+  <div class="ras fields route-now">
+    <label>Now at<select name="at_stop" data-stop-pick="at" data-sel="{{ r.at }}" title="The stop the voyage last reached">{% for o in r.options() %}<option value="{{ o.0 }}"{% if r.at == o.0 %} selected{% endif %}>{{ o.1 }}</option>{% endfor %}</select></label>
+    {% for a in r.loads %}
+    <label>{{ a.label }} · picked up<input type="hidden" name="assign_load" value="{{ a.load_id }}" /><select name="assign_pickup" data-stop-pick="pickup" data-sel="{{ a.pickup }}">{% for o in r.options() %}<option value="{{ o.0 }}"{% if a.pickup == o.0 %} selected{% endif %}>{{ o.1 }}</option>{% endfor %}</select></label>
+    <label>{{ a.label }} · off at<select name="assign_drop" data-stop-pick="drop" data-sel="{{ a.drop }}"><option value=""{% if a.drop == "" %} selected{% endif %}>undecided</option>{% for o in r.options() %}{% if !loop.first %}<option value="{{ o.0 }}"{% if a.drop == o.0 %} selected{% endif %}>{{ o.1 }}</option>{% endif %}{% endfor %}</select></label>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>

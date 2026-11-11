@@ -21,6 +21,11 @@ pub async fn connect(db_path: &str) -> Result<SqlitePool> {
 
 pub async fn migrate(pool: &SqlitePool) -> Result<()> {
     sqlx::migrate!("./migrations").run(pool).await?;
+    // 0011 gave voyages routes; the ones recorded before it get theirs here
+    let derived = crate::stowage::repo::backfill_routes(pool).await?;
+    if derived > 0 {
+        tracing::info!(voyages = derived, "derived routes for voyages recorded before routes");
+    }
     Ok(())
 }
 
@@ -120,6 +125,7 @@ mod tests {
             cookie_secure: true,
             discord: None,
             dev_reset_logins: None,
+            dev_quick_login: false,
         }
     }
 

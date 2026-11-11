@@ -3,7 +3,7 @@
 {# One member's ledger: every voyage they were on, newest first. The
    running figures end, at the top, on their leaderboard row. #}
 <section class="panel rs" id="crew-ledger" data-user="{{ m.user_id }}">
-  <header><h2>Ledger · {{ m.name_upper }}</h2><span class="hint">{{ m.handle }} · every voyage they were on, newest first. Credit is the leaderboard's: what they kept as seller plus shares earned, less cargo they lost. Collected is the aUEC that reached them.</span>
+  <header><h2>Ledger · {{ m.name_upper }}</h2><span class="hint">{{ m.handle }} · every voyage they were on, newest first. Credit is the leaderboard's: what they kept as seller plus shares earned, less cargo they lost. Collected is the aUEC that reached them, before cargo costs -- the board's Collected.</span>
     <span class="actions">
       <button class="cmd" type="button" hx-get="/crew/{{ m.user_id }}" hx-target="#overlay" hx-swap="innerHTML">Service record</button>
       <a class="cmd" href="/board" data-go="board">Leaderboard</a>
@@ -21,7 +21,7 @@
         <td class="num">{{ v.collected_fmt }}</td>
         <td class="num{% if v.losses_fmt != "0" %} neg{% endif %}">{{ v.losses_fmt }}</td>
         <td class="num {% if v.credit_neg %}neg{% else %}pos{% endif %} credit">{{ v.credit_fmt }}</td>
-        <td class="num running" title="Credit · cash over this voyage and every one before it">{{ v.running_credit_fmt }}<br /><span class="who">cash {{ v.running_cash_fmt }}</span></td>
+        <td class="num running" title="Credit · collected over this voyage and every one before it">{{ v.running_credit_fmt }}<br /><span class="who">collected {{ v.running_cash_fmt }}</span></td>
         <td><span class="actions"><button class="cmd" type="button" data-expand="lv-loads-{{ v.voyage_id }}" aria-expanded="false">Loads {{ v.loads.len() }}</button> <button class="cmd" type="button" title="Ship, date, owner and crew" hx-get="/voyages/{{ v.voyage_id }}/details" hx-target="#overlay" hx-swap="innerHTML">Voyage</button></span></td>
       </tr>
       <tr class="lloads" id="lv-loads-{{ v.voyage_id }}" hidden><td colspan="10">
@@ -47,14 +47,14 @@
       <td class="num" data-l="Collected">{{ m.collected_fmt }}</td>
       <td class="num{% if m.losses_fmt != "0" %} neg{% endif %}" data-l="Losses">{{ m.losses_fmt }}</td>
       <td class="num {% if m.credit_neg %}neg{% else %}pos{% endif %}" data-l="Credit · the board" id="ledger-credit">{{ m.credit_fmt }}</td>
-      <td class="num" data-l="Cash" id="ledger-cash">cash {{ m.cash_fmt }}</td>
+      <td class="num" data-l="Collected · the board" id="ledger-cash">collected {{ m.cash_fmt }}</td>
       <td class="blank"></td>
     </tr></tfoot>
   </table></div>
 </section>
 <section class="totals rs" aria-label="Member totals">
   <div class="tile"><div class="lbl">Lifetime profit · on the board</div><div class="val {% if m.credit_neg %}neg{% endif %}">{{ m.credit_fmt }}<small>aUEC</small></div></div>
-  <div class="tile sub"><div class="lbl">Cash position</div><div class="val{% if m.cash_neg %} neg{% endif %}">{{ m.cash_fmt }}<small>aUEC</small></div></div>
+  <div class="tile sub"><div class="lbl">Collected · on the board</div><div class="val{% if m.cash_neg %} neg{% endif %}">{{ m.cash_fmt }}<small>aUEC</small></div></div>
   <div class="tile sub"><div class="lbl">Shares earned</div><div class="val">{{ m.share_fmt }}<small>aUEC</small></div></div>
   <div class="tile sub"><div class="lbl">Losses</div><div class="val{% if m.losses_fmt != "0" %} neg{% endif %}">{{ m.losses_fmt }}<small>aUEC</small></div></div>
 </section>
