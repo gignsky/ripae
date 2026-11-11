@@ -3,9 +3,9 @@
     <td{% if l.notes != "" %} title="{{ l.notes }}"{% endif %}>{{ l.commodity_upper }}{% if l.is_haul %}<span class="kind-tag" title="Hauling contract">Haul</span>{% endif %}</td>
     <td class="num">{{ l.scu }}</td>
     <td class="boxes">{% for b in l.boxes %}<b>{{ b.0 }}</b>×{{ b.1 }} {% endfor %}{% if l.glitched_count > 0 %}<span class="glitch">· {{ l.glitched_count }} glitched</span>{% endif %}{% if l.lost_count > 0 %} <span class="loss">· {{ l.lost_count }} lost</span>{% endif %}</td>
-    <td class="where" title="{{ l.buy_terminal }}">{{ l.buy_terminal_short }}</td>
+    <td class="where" title="{% if l.pickup_stop > 0 %}Picked up at stop {{ l.pickup_stop }} · {% endif %}{{ l.buy_terminal }}">{% if l.pickup_stop > 0 %}<span class="stop">{{ l.pickup_stop }}</span>{% endif %}{{ l.buy_terminal_short }}</td>
     <td><span class="status {{ l.status_css }}">{{ l.status_label }}</span></td>
-    <td><span class="stop">{{ l.stop_no }}</span>{{ l.destination_label }}</td>
+    <td><span class="stop">{{ l.drop_label }}</span>{{ l.destination_label }}</td>
     <td class="where">{{ l.where_now }}</td>
     {% if l.is_haul %}<td class="num pos" title="Contract reward, paid on delivery">{% if l.haul_reward_fmt != "" %}{{ l.haul_reward_fmt }}{% else %}—{% endif %}<small class="per-scu">reward</small></td>{% else %}<td class="num">{{ l.cost_fmt }}<small class="per-scu">{{ l.buy_price_scu_fmt }} / SCU</small></td>{% endif %}
     <td class="who">{{ l.by_upper }}</td>

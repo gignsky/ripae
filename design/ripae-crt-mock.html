@@ -258,7 +258,7 @@ tr.manifest td{padding:.6rem 1.9rem .8rem;background:rgba(125,255,138,.03)}
   </section>
 
   <section class="panel rs">
-    <header><h2>Open Cargo</h2><span class="hint">Bought, not yet sold, grouped by voyage. Oldest first. Stop № is the order you mean to sell. Loads move between voyages with Merge and Detach.</span></header>
+    <header><h2>Open Cargo</h2><span class="hint">Bought, not yet sold, grouped by voyage. Oldest first. Each voyage flies a route; the numbers are the stops a load comes aboard (when not the start) and comes off at. [Next stop] moves a voyage along it. Loads move between voyages with Merge and Detach.</span></header>
     <div class="tbl"><table class="cards">
       <thead><tr><th>Voyage / commodity</th><th class="num">SCU</th><th>Boxes</th><th>Bought at / pickup</th><th>Status</th><th>Stop · bound for</th><th>Where now</th><th class="num">Cost / reward</th><th>By</th><th>Cmd</th></tr></thead>
       <tbody>
@@ -312,7 +312,7 @@ tr.manifest td{padding:.6rem 1.9rem .8rem;background:rgba(125,255,138,.03)}
   </section>
 
   <section class="panel rs">
-    <header><h2>Stowage Plan</h2><span class="hint">Live, from Open Cargo. Last stop loads first, deepest in the hold. Unassigned voyages bound the same way are offered as one.</span></header>
+    <header><h2>Stowage Plan</h2><span class="hint">Live, from Open Cargo, leg by leg along each route. What comes off first sits by the door; what boards later goes on top of what is already aboard. Unassigned voyages bound the same way are offered as one.</span></header>
     <div class="plans" id="plans"></div>
   </section>
 

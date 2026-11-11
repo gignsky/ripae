@@ -28,8 +28,16 @@ pub fn channel() -> broadcast::Sender<String> {
 
 /// Middleware: announce every successful write after it's done.
 pub async fn announce(State(state): State<AppState>, req: Request, next: Next) -> Response {
-    let writes = !matches!(*req.method(), Method::GET | Method::HEAD | Method::OPTIONS)
-        && !matches!(req.uri().path(), "/login" | "/logout");
+    let mut writes = !matches!(*req.method(), Method::GET | Method::HEAD | Method::OPTIONS)
+        && !matches!(req.uri().path(), "/login" | "/logout")
+        // test mode announces its own push to live (sandbox::keep)
+        && !req.uri().path().starts_with("/test-mode");
+    // a write to a test mode sandbox changes nobody else's books
+    if writes {
+        if let Some(session) = req.extensions().get::<tower_sessions::Session>() {
+            writes = crate::sandbox::session_sandbox(session).await.is_none();
+        }
+    }
     let tab = req
         .headers()
         .get(TAB_HEADER)
