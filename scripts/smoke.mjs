@@ -213,6 +213,38 @@ const run = async () => {
   check("leaderboard ranks JT first (his 67,200 beats Gig's 9,600 + 3,200)", (await page.textContent("#board tbody tr >> nth=0")).includes("JT"));
   check("JT's row carries his profit", (await page.textContent("#board tbody tr >> nth=0")).includes("+70,400"));
   check("recent shares shows the forfeit", (await page.textContent("#view-board")).includes("JT → LORD GIG"));
+  const jtRow = () => page.locator("#board tbody tr", { hasText: "firstofficer" });
+  check("profit and collected differ by JT's forfeit", (await jtRow().locator("td.collected").textContent()).includes("+67,200"));
+  check("JT's row shows what he forfeited", (await jtRow().locator("td.collected .forfeit").textContent()).includes("−3,200 forfeited"));
+  check("Gig's row shows what was forfeited to him", (await page.locator("#board tbody tr", { hasText: "lordgig" }).locator(".forfeit-in").textContent()).includes("+3,200 from forfeits"));
+  check("Profit and Collected headers explain themselves", (await page.getAttribute("#board th:has-text('Collected')", "title")).includes("Forfeited shares go to someone else"));
+  check("by profit: the bar is the share of org profit", (await page.textContent("#board th.bar")).trim() === "Share of org profit");
+  check("by profit: active sort is marked", (await page.getAttribute("#board th.sorted", "aria-sort")) === "descending" && (await page.textContent("#board th.sorted")).includes("Profit"));
+  // the bar's label stays inside its cell and the panel at every width, on every sort
+  const barsFit = () => page.evaluate(() => {
+    const panel = document.querySelector("#board").closest(".panel").getBoundingClientRect();
+    return Array.from(document.querySelectorAll("#board td.bar")).every((td) => {
+      const c = td.getBoundingClientRect();
+      const l = td.querySelector(".pct").getBoundingClientRect();
+      return l.width > 0 && l.left >= c.left - 0.5 && l.right <= c.right + 0.5 && l.right <= panel.right - 0.5;
+    });
+  });
+  for (const [sort, head] of [["runs", "Share of org runs"], ["scu", "Share of org SCU hauled"], ["collected", "Share of org collected"], ["profit", "Share of org profit"]]) {
+    await page.locator(".sortby a.cmd", { hasText: `By ${sort === "scu" ? "SCU" : sort}` }).click();
+    await page.waitForURL(`**/board?sort=${sort}`);
+    await page.waitForSelector("#board");
+    check(`by ${sort}: bar header follows the sort`, (await page.textContent("#board th.bar")).trim() === head);
+    check(`by ${sort}: its sort command is lit`, (await page.getAttribute(".sortby a.on", "href")) === `/board?sort=${sort}` && (await page.getAttribute(".sortby a.on", "aria-current")) === "true");
+    if (sort === "runs") check("by runs: someone on every closed run reads 100%", (await page.textContent("#board tbody tr >> nth=0")).includes("100%"));
+    for (const w of [1280, 760, 400]) {
+      await page.setViewportSize({ width: w, height: 900 });
+      await page.waitForTimeout(100);
+      const [sw, cw] = await page.evaluate(() => [document.documentElement.scrollWidth, document.documentElement.clientWidth]);
+      check(`board by ${sort}: no horizontal scroll at ${w}px`, sw === cw, `scrollWidth ${sw}, clientWidth ${cw}`);
+      check(`board by ${sort}: share labels stay inside their cells at ${w}px`, await barsFit());
+    }
+    await page.setViewportSize({ width: 1280, height: 900 });
+  }
   await page.locator("#board .crew", { hasText: "Lord Gig" }).click();
   await page.waitForSelector("#overlay:not([hidden]) .record");
   check("service record visible", await page.isVisible("#overlay .record"));
