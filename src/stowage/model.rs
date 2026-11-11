@@ -789,26 +789,42 @@ pub struct Standing {
     pub board_credit: f64,
     /// What the member actually holds: kept as seller + shares received.
     pub cash: f64,
+    /// Shares this member earned but forfeited to someone else.
+    pub forfeited: f64,
+    /// Shares other members earned and forfeited to this one.
+    pub forfeits_received: f64,
     /// Voyages with every load sold, where this member took part in one
     /// (sold it or held a share).
     pub runs_closed: usize,
     pub loads_sold: usize,
     pub scu_hauled: u32,
     pub best_route: Option<Route>,
-    /// Share of the org's positive board credit, 0–100.
-    pub pct_of_org: f64,
+    /// This member's share of the org on the board's sort key, 0–100: see
+    /// [`standings`].
+    pub share_of_org: f64,
+}
+
+impl Standing {
+    /// Nothing sold, nothing shared, nothing lost: the row is dimmed.
+    pub fn is_idle(&self) -> bool {
+        self.loads_sold == 0 && self.board_credit == 0.0 && self.cash == 0.0
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SortKey {
     Profit,
+    Collected,
     Runs,
     Scu,
 }
 
 impl SortKey {
+    pub const ALL: [SortKey; 4] = [SortKey::Profit, SortKey::Collected, SortKey::Runs, SortKey::Scu];
+
     pub fn parse(s: &str) -> SortKey {
-        match s {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "collected" | "cash" => SortKey::Collected,
             "runs" => SortKey::Runs,
             "scu" => SortKey::Scu,
             _ => SortKey::Profit,
@@ -817,6 +833,7 @@ impl SortKey {
     pub fn as_str(&self) -> &'static str {
         match self {
             SortKey::Profit => "profit",
+            SortKey::Collected => "collected",
             SortKey::Runs => "runs",
             SortKey::Scu => "scu",
         }
@@ -894,39 +911,84 @@ fn best_route_of(user_id: i64, voyages: &[Voyage]) -> Option<Route> {
         .max_by(|a, b| a.profit.total_cmp(&b.profit))
 }
 
-/// One row per user, sorted by `key` (descending), ties by display name.
+/// `forfeited(u) = Σ share.paid where share.to_user = u and share.paid_to ≠ u`
+/// and `forfeits_received(u)` the other way round, so
+/// `board_credit − cash = forfeited − forfeits_received`.
+fn forfeits(user_id: i64, voyages: &[Voyage]) -> (f64, f64) {
+    sold_loads(voyages).flat_map(|l| l.shares.iter()).fold((0.0, 0.0), |(out, inn), s| {
+        match (s.to_user == user_id, s.paid_to == user_id) {
+            (true, false) => (out + s.paid_auec, inn),
+            (false, true) => (out, inn + s.paid_auec),
+            _ => (out, inn),
+        }
+    })
+}
+
+/// `part / whole × 100`, clamped to 0–100; 0 when there is no whole.
+fn pct(part: f64, whole: f64) -> f64 {
+    if whole > 0.0 { (part.max(0.0) / whole * 100.0).min(100.0) } else { 0.0 }
+}
+
+/// One row per user, sorted by `key` (descending). Ties fall back, in
+/// order, to profit, collected, runs, SCU, then display name (A→Z,
+/// case-insensitive) and id, so the order never depends on input order.
+///
+/// `share_of_org` follows the key. Profit and collected are a share of the
+/// org's positive total (negatives count as 0), so they add up to 100 %.
+/// Runs and SCU are the fraction of the org's closed runs / SCU sold that
+/// the member took part in: a shared run counts for everyone aboard, so
+/// those don't add up to 100 %, but none ever exceeds it.
 pub fn standings(users: &[User], voyages: &[Voyage], key: SortKey) -> Vec<Standing> {
     let mut rows: Vec<Standing> = users
         .iter()
         .map(|u| {
             let mine: Vec<&Load> = sold_loads(voyages).filter(|l| took_part(l, u.id)).collect();
+            let (forfeited, forfeits_received) = forfeits(u.id, voyages);
             Standing {
                 user_id: u.id,
                 handle: u.handle.clone(),
                 display_name: u.display_name.clone(),
                 board_credit: board_credit(u.id, voyages),
                 cash: cash(u.id, voyages),
+                forfeited,
+                forfeits_received,
                 runs_closed: runs_closed_by(u.id, voyages),
                 loads_sold: mine.len(),
                 scu_hauled: mine.iter().map(|l| l.scu_sold()).sum(),
                 best_route: best_route_of(u.id, voyages),
-                pct_of_org: 0.0,
+                share_of_org: 0.0,
             }
         })
         .collect();
-    let positive: f64 = rows.iter().map(|r| r.board_credit.max(0.0)).sum();
+    let whole = match key {
+        SortKey::Profit => rows.iter().map(|r| r.board_credit.max(0.0)).sum(),
+        SortKey::Collected => rows.iter().map(|r| r.cash.max(0.0)).sum(),
+        SortKey::Runs => voyages.iter().filter(|v| v.is_fully_sold()).count() as f64,
+        SortKey::Scu => sold_loads(voyages).map(|l| l.scu_sold() as f64).sum(),
+    };
     for r in &mut rows {
-        r.pct_of_org = if positive > 0.0 { r.board_credit.max(0.0) / positive * 100.0 } else { 0.0 };
+        let part = match key {
+            SortKey::Profit => r.board_credit,
+            SortKey::Collected => r.cash,
+            SortKey::Runs => r.runs_closed as f64,
+            SortKey::Scu => r.scu_hauled as f64,
+        };
+        r.share_of_org = pct(part, whole);
     }
     rows.sort_by(|a, b| {
         let primary = match key {
             SortKey::Profit => b.board_credit.total_cmp(&a.board_credit),
+            SortKey::Collected => b.cash.total_cmp(&a.cash),
             SortKey::Runs => b.runs_closed.cmp(&a.runs_closed),
             SortKey::Scu => b.scu_hauled.cmp(&a.scu_hauled),
         };
         primary
             .then(b.board_credit.total_cmp(&a.board_credit))
-            .then_with(|| a.display_name.cmp(&b.display_name))
+            .then(b.cash.total_cmp(&a.cash))
+            .then(b.runs_closed.cmp(&a.runs_closed))
+            .then(b.scu_hauled.cmp(&a.scu_hauled))
+            .then_with(|| a.display_name.to_lowercase().cmp(&b.display_name.to_lowercase()))
+            .then(a.user_id.cmp(&b.user_id))
     });
     rows
 }
@@ -1899,7 +1961,7 @@ mod tests {
         assert_eq!(rows[1].best_route.as_ref().map(|r| r.profit), Some(640.0));
         assert_eq!(rows[2].display_name, "Crew-03");
         assert_eq!(rows[2].board_credit, 0.0);
-        let pct: f64 = rows.iter().map(|r| r.pct_of_org).sum();
+        let pct: f64 = rows.iter().map(|r| r.share_of_org).sum();
         assert!(approx(pct, 100.0));
 
         // one closed run each: the tie goes to net profit
@@ -1947,6 +2009,101 @@ mod tests {
         assert_eq!((rec.runs_closed, rec.loads_sold), (2, 2));
         assert_eq!(rec.shares_paid_out, 0.0, "Gig paid nobody; JT paid Gig");
         assert_eq!(rec.shares_received, 180.0);
+    }
+
+    /// Gig holds 100 % of JT's +640 sale and forfeits it to JT; Gig also
+    /// sells +80 of his own; Gig has a third, unsold voyage.
+    fn forfeit_ledger() -> Vec<Voyage> {
+        vec![
+            voyage(1, JT, None, vec![sold_load(1, JT, 10.0, 30.0, &[32], vec![(GIG, Some(JT), ShareKind::Pct, 100.0)])]),
+            voyage(2, GIG, None, vec![sold_load(2, GIG, 10.0, 20.0, &[8], vec![])]),
+            voyage(3, GIG, None, vec![load(3, 10.0, vec![sound(1, 8)])]),
+        ]
+    }
+
+    fn row_of(rows: &[Standing], id: i64) -> &Standing {
+        rows.iter().find(|r| r.user_id == id).unwrap()
+    }
+
+    #[test]
+    fn profit_counts_a_forfeited_share_and_collected_does_not() {
+        let vs = forfeit_ledger();
+        let rows = standings(&users(), &vs, SortKey::Profit);
+        let (gig, jt) = (row_of(&rows, GIG), row_of(&rows, JT));
+        assert_eq!((gig.board_credit, gig.cash, gig.forfeited, gig.forfeits_received), (720.0, 80.0, 640.0, 0.0));
+        assert_eq!((jt.board_credit, jt.cash, jt.forfeited, jt.forfeits_received), (0.0, 640.0, 0.0, 640.0));
+        for r in &rows {
+            assert!(approx(r.board_credit - r.cash, r.forfeited - r.forfeits_received), "{}", r.display_name);
+        }
+        // profit: Gig has all of it; collected: JT holds most of the cash
+        assert_eq!(rows[0].user_id, GIG);
+        assert!(approx(rows[0].share_of_org, 100.0));
+        let by_cash = standings(&users(), &vs, SortKey::Collected);
+        assert_eq!(by_cash.iter().map(|r| r.user_id).collect::<Vec<_>>(), vec![JT, GIG, THIRD]);
+        assert!(approx(by_cash[0].share_of_org, 640.0 / 720.0 * 100.0));
+        assert!(approx(by_cash.iter().map(|r| r.share_of_org).sum::<f64>(), 100.0));
+    }
+
+    #[test]
+    fn the_share_bar_follows_the_sort() {
+        let vs = forfeit_ledger();
+        // two closed runs (voyage 3 is still open); Gig flew both, JT one
+        let by_runs = standings(&users(), &vs, SortKey::Runs);
+        assert_eq!(by_runs.iter().map(|r| (r.user_id, r.runs_closed)).collect::<Vec<_>>(), vec![(GIG, 2), (JT, 1), (THIRD, 0)]);
+        assert_eq!(by_runs.iter().map(|r| r.share_of_org).collect::<Vec<_>>(), vec![100.0, 50.0, 0.0]);
+        // 40 SCU sold; Gig was on all of it, JT on his 32
+        let by_scu = standings(&users(), &vs, SortKey::Scu);
+        assert_eq!(by_scu.iter().map(|r| (r.user_id, r.scu_hauled)).collect::<Vec<_>>(), vec![(GIG, 40), (JT, 32), (THIRD, 0)]);
+        assert_eq!(by_scu.iter().map(|r| r.share_of_org).collect::<Vec<_>>(), vec![100.0, 80.0, 0.0]);
+        for key in SortKey::ALL {
+            assert!(standings(&users(), &vs, key).iter().all(|r| (0.0..=100.0).contains(&r.share_of_org)), "{key:?}");
+        }
+    }
+
+    #[test]
+    fn a_loss_takes_no_share_and_an_empty_board_is_all_zero() {
+        // Gig loses 80 on his only sale: no negative share, no NaN
+        let vs = vec![voyage(1, GIG, None, vec![sold_load(1, GIG, 20.0, 10.0, &[8], vec![])])];
+        for key in [SortKey::Profit, SortKey::Collected] {
+            let rows = standings(&users(), &vs, key);
+            assert!(rows.iter().all(|r| r.share_of_org == 0.0), "{key:?}");
+            assert_eq!(rows.last().unwrap().user_id, GIG, "the loss sorts last");
+        }
+        for key in SortKey::ALL {
+            let rows = standings(&users(), &[], key);
+            assert!(rows.iter().all(|r| r.share_of_org == 0.0 && r.is_idle()));
+            // everything tied: A→Z, ignoring case
+            assert_eq!(rows.iter().map(|r| r.display_name.as_str()).collect::<Vec<_>>(), vec!["Crew-03", "JT", "Lord Gig"]);
+        }
+    }
+
+    #[test]
+    fn ties_on_the_sort_key_fall_back_to_profit_then_collected() {
+        // both flew both runs; the tie on runs goes to profit
+        let vs = vec![
+            voyage(1, GIG, None, vec![sold_load(1, GIG, 10.0, 20.0, &[16], vec![(JT, Some(GIG), ShareKind::Pct, 50.0)])]),
+            voyage(2, JT, None, vec![sold_load(2, JT, 10.0, 20.0, &[16], vec![(GIG, Some(JT), ShareKind::Pct, 25.0)])]),
+        ];
+        let rows = standings(&users(), &vs, SortKey::Runs);
+        // Gig: 80 kept + 40 earned = 120 credit, 80 + 80 = 160 cash; JT: 120 + 80 = 200 credit, 120 + 40 = 160 cash
+        assert_eq!((row_of(&rows, GIG).board_credit, row_of(&rows, GIG).cash), (120.0, 160.0));
+        assert_eq!((row_of(&rows, JT).board_credit, row_of(&rows, JT).cash), (200.0, 160.0));
+        assert_eq!(rows.iter().map(|r| r.user_id).collect::<Vec<_>>(), vec![JT, GIG, THIRD]);
+        // equal cash: the tie on collected goes to profit
+        let by_cash = standings(&users(), &vs, SortKey::Collected);
+        assert_eq!(by_cash.iter().map(|r| r.user_id).collect::<Vec<_>>(), vec![JT, GIG, THIRD]);
+    }
+
+    #[test]
+    fn sort_keys_parse_forgivingly() {
+        assert_eq!(SortKey::parse("collected"), SortKey::Collected);
+        assert_eq!(SortKey::parse("cash"), SortKey::Collected);
+        assert_eq!(SortKey::parse(" SCU "), SortKey::Scu);
+        assert_eq!(SortKey::parse("Runs"), SortKey::Runs);
+        assert_eq!(SortKey::parse("nonsense"), SortKey::Profit);
+        for k in SortKey::ALL {
+            assert_eq!(SortKey::parse(k.as_str()), k);
+        }
     }
 
     #[test]
