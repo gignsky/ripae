@@ -241,10 +241,36 @@ still hold come first.
   rest, lost crates included, and its lot price is recomputed for what's
   left. Selling every sellable crate closes the row in place; lost crates
   ride along on it as the ledger's write-off record.
-- **Crates define the SCU.** The New Run / Add Load forms derive SCU from
-  the boxes and let you type over it, but a figure that disagrees with the
-  boxes is refused (422) rather than silently kept -- there is nowhere to
-  store an SCU that isn't crates.
+- **Crates define the SCU.** The New Run / Add Load / Edit Load forms show
+  SCU as a generated, read-only figure that follows the boxes as they are
+  typed; it has no form name and no tab stop, and the server derives it from
+  the boxes again (a posted `scu` is ignored) -- there is nowhere to store
+  an SCU that isn't crates. (It used to be typed over, and a
+  mismatch was refused.)
+- **Open Cargo: one block per voyage.** There is no table-wide header; each
+  voyage's `tbody#vhead-{id}` ends in its own column-header row
+  (`tr.colhead`), so the banner, any open voyage form and the headers swap
+  together and the load tbodies stay where they are. One table (not one per
+  voyage) keeps the columns aligned across voyages and leaves every htmx
+  target (`#vhead-{id}`, `#load-{id}`, `#open-cargo`, the oob swaps) as it
+  was. Under ~980 px the header rows are hidden and cells label themselves
+  from the first `tr.colhead`, as cards.
+- **"Bought at / pickup" and "Cost / reward".** A haul's pickup terminal
+  lives in the buy-terminal column; its cost cell (Open Cargo and the
+  ledger) shows the contract reward, `+`-signed with a `reward` sub-line,
+  falling back to what the delivery paid when no reward was noted.
+- **New loads default to awaiting pickup**, trade and haul alike (a run is
+  logged at the terminal, before it is loaded; a contract's cargo waits at
+  its pickup too). Where-now reads "awaiting pickup at <buy / pickup
+  terminal>" derived from the load's terminal, so it follows an edit of that
+  field until the crates go aboard. `[LOADED]` on the row (shown while any
+  live crate isn't aboard) is the manifest's `[ALL ABOARD]` in one click
+  (`POST /loads/:id/where`, `view=row` answers with the plain row).
+- **Keyboard flow in load forms**: DOM order is visual order; generated and
+  read-only bits take no tab stop; an opened form focuses its first field;
+  after a save or cancel focus returns to the button that opened it (else
+  the row's first command); pick-lists are ARIA comboboxes (arrows to move,
+  Enter picks, Tab keeps what was typed); Enter in a text field submits.
 - **Crate mixes are normalised**: `1×32, 2×32` is stored as three 32 SCU
   crates and reads back as `3×32`; sizes are listed largest first.
 - **A ship name must be one of the 80 known hulls, or blank.** A hull needs
