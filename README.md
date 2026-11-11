@@ -34,11 +34,26 @@ cargo build --release
 throwaway database, walks the whole 0.2 story (gate → new run → crate
 manifest → partial close with a forfeited share → SALE banner → leaderboard
 → service record → delete through the confirmation) and asserts there is no
-horizontal scroll at 1280 / 760 / 400 px. Set `RIPAE_URL` to run it against
+horizontal scroll at 1280 / 760 / 400 px, then test mode (enter, log a
+run, discard, live untouched; enter, log a run, keep, confirm, it's live).
+Set `RIPAE_URL` to run it against
 an already-running build instead. It needs `playwright` resolvable from
 Node (`npm i -g playwright && npx playwright install chromium`, or a
 preinstalled copy on `NODE_PATH`). The raster reveal is not something a
 script can judge; eyeball it.
+
+## Test mode
+
+`[ENTER TEST MODE]` on the rail (any signed-in member, deployed or local)
+gives that browser session a private copy of the books: the server
+`VACUUM INTO`s the live database into a *baseline* and a *sandbox* file in
+`sandboxes/` next to `RIPAE_DB_PATH` (or `RIPAE_SANDBOX_DIR`), and every
+ledger request from that session reads and writes the sandbox. An amber
+TEST banner stays on screen with `[DISCARD]` (delete the copy, back to
+live) and `[KEEP / PUSH LIVE]` (a readable diff of the sandbox against its
+baseline, grouped by voyage; confirming applies it to live in one
+transaction and deletes the copy). Everyone else stays on live throughout.
+Sandboxes are deleted after 24 h (boot sweep, then hourly) and on log out.
 
 ## Discord sign-in
 
@@ -299,3 +314,37 @@ still hold come first.
 - **`nix flake check` in a sandbox that blocks GitHub tarballs**: override
   the inputs to their `git+https://…?rev=…&shallow=1` forms; nothing in the
   flake itself changes.
+
+0.3.1 roll 3, test mode:
+
+- **One sandbox per session, a file pair per sandbox.** `<id>.db` is what
+  the session writes, `<id>.base.db` the untouched copy it started as (the
+  diff's left side). The id is `<unix seconds>-<32 hex>`, so expiry (24 h
+  from creation) needs no metadata and a session value can't name a path.
+  Sandboxes survive a restart (reopened, and migrated, on first use); at
+  most 32 exist at once. The copies' `tower_sessions` rows are deleted.
+- **Per-request database: the `sandbox::Db` extractor.** Ledger handlers
+  take `Db(state)` instead of `State(state)`; it hands back the app state
+  with `pool` swapped for the session's sandbox. Sign-in, `CurrentUser`
+  and the session store keep using the router's state, i.e. live. A write
+  from a session whose sandbox has expired is refused (409 + `HX-Refresh`)
+  instead of quietly landing on live; a read just falls back to live.
+- **Only ledger tables merge**: `voyages`, `loads`, `crates`, `shares`,
+  `voyage_shares` (`sandbox::merge::LEDGER_TABLES`, parents first). Users,
+  sessions, Discord links and the pick-lists are never diffed or written
+  back. A new ledger table takes part once it's added to that list; new
+  *columns* need nothing (rows are read with `SELECT *`, foreign keys come
+  from `pragma_foreign_key_list`).
+- **The merge is row-level by primary key.** Inserted rows get fresh ids in
+  live (live may have used the sandbox's ids meanwhile) and their foreign
+  keys are remapped; updates write only the columns test mode changed;
+  deletes run child-first. All in one transaction, finished with
+  `PRAGMA foreign_key_check`.
+- **Conflicts refuse the whole push, nothing is clobbered.** A row test
+  mode changed or deleted must still be as the baseline had it in live (or
+  already be what test mode wants). Also refused: writing a row whose
+  parent live has deleted, and deleting a row live has since hung a new
+  child on. The review page lists each conflict in words; the way out is
+  Discard.
+- **Sandbox writes aren't announced on `/live`**; a successful push is,
+  once, so everyone else's screens refresh.

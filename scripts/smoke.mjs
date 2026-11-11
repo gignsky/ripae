@@ -14,7 +14,10 @@
 // with a 25 % share forfeited to the other crew member → SALE banner shows
 // the profit → leaderboard → a crew name → service record → delete the
 // second voyage through the confirmation → gone. Then asserts no
-// horizontal scroll at 1280 / 760 / 400 px. Motion is reduced so the run is
+// horizontal scroll at 1280 / 760 / 400 px. Then test mode: enter it, log
+// a run, the TEST banner is up and another member still sees live, discard
+// leaves live untouched; enter again, log a run, Keep shows the diff in
+// words, confirm puts it in live. Motion is reduced so the run is
 // deterministic; the raster itself has to be eyeballed.
 
 import { createRequire } from "node:module";
@@ -245,6 +248,49 @@ const run = async () => {
     const [sw, cw] = await page.evaluate(() => [document.documentElement.scrollWidth, document.documentElement.clientWidth]);
     check(`no horizontal scroll at ${w}px`, sw === cw, `scrollWidth ${sw}, clientWidth ${cw}`);
   }
+
+  // -- test mode: a sandbox for this session only; discard, then keep --
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(base + "/");
+  const liveHeads = await page.locator("#open-cargo tbody.vhead").count();
+  const sandboxRun = [{ commodity: "Quartz", boxes: "2x16", mode: "scu", price: "300", terminal: "Levski", stop: 1, dest: "Grim HEX" }];
+  check("no TEST banner on live", (await page.locator("#test-banner").count()) === 0);
+  await Promise.all([page.waitForURL(base + "/"), page.click("#test-enter")]);
+  check("TEST banner up in test mode", await page.isVisible("#test-banner"));
+  await newRun(page, "Caterpillar", sandboxRun);
+  check("the sandbox run shows in test mode", (await page.locator("#open-cargo tbody.vhead").count()) === liveHeads + 1);
+  check("TEST banner stays up after a write", await page.isVisible("#test-banner"));
+  // another member, on live meanwhile, sees none of it
+  const jtCtx = await browser.newContext({ viewport: { width: 1280, height: 900 }, reducedMotion: "reduce" });
+  const jtPage = await jtCtx.newPage();
+  await jtPage.goto(base + "/login");
+  await jtPage.fill("#g-handle", JT.handle);
+  await jtPage.fill("#g-pass", JT.pw);
+  await Promise.all([jtPage.waitForURL(base + "/"), jtPage.click("#g-enter")]);
+  await jtPage.waitForSelector("#open-cargo");
+  check("other members stay on live", (await jtPage.locator("#open-cargo tbody.vhead").count()) === liveHeads && (await jtPage.locator("#test-banner").count()) === 0);
+  await page.setViewportSize({ width: 400, height: 900 });
+  await page.waitForTimeout(150);
+  const [tsw, tcw] = await page.evaluate(() => [document.documentElement.scrollWidth, document.documentElement.clientWidth]);
+  check("TEST banner fits at 400px", tsw === tcw && (await page.isVisible("#test-discard")), `scrollWidth ${tsw}, clientWidth ${tcw}`);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await Promise.all([page.waitForURL(base + "/"), page.click("#test-discard")]);
+  check("discard: back on live, banner gone", (await page.locator("#test-banner").count()) === 0);
+  check("discard: live untouched", (await page.locator("#open-cargo tbody.vhead").count()) === liveHeads);
+
+  await Promise.all([page.waitForURL(base + "/"), page.click("#test-enter")]);
+  await newRun(page, "Caterpillar", sandboxRun);
+  await Promise.all([page.waitForURL(base + "/test-mode/keep"), page.click("#test-keep")]);
+  const diffText = (await page.textContent("#test-diff")).replace(/\s+/g, " ");
+  check("keep shows the diff in words", diffText.includes("New voyage · Caterpillar") && diffText.includes("New load Quartz 32 SCU bought at Levski for 9,600 aUEC"), diffText.slice(0, 160));
+  check("still in test mode while reviewing", await page.isVisible("#test-banner"));
+  await Promise.all([page.waitForURL(base + "/"), page.click("#test-confirm")]);
+  check("confirm: back on live, banner gone", (await page.locator("#test-banner").count()) === 0);
+  const pushedHeads = await page.locator("#open-cargo tbody.vhead").count();
+  check("confirm: the run is in live", pushedHeads === liveHeads + 1 && (await page.textContent("#open-cargo")).toUpperCase().includes("QUARTZ"), `${pushedHeads} voyages open, ${liveHeads} before`);
+  await jtPage.goto(base + "/");
+  check("other members see the pushed run", (await jtPage.textContent("#open-cargo")).toUpperCase().includes("QUARTZ"));
+  await jtCtx.close();
 
   check("no page errors", pageErrors.length === 0, pageErrors.join(" | "));
   await browser.close();
