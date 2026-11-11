@@ -2,13 +2,30 @@
   {% for p in cards %}
   <div class="plan ras{% if p.suggest %} suggest{% endif %}">
     <h3>{{ p.title }} <span>{{ p.sub }}</span></h3>
+    {% for g in p.legs %}
+    <div class="leg{% if g.now %} now{% else if g.past %} past{% endif %}">
+      <h4>{% if g.now %}▸ {% endif %}{{ g.title }}{% if g.entries.is_empty() %} <span>flying empty</span>{% endif %}</h4>
+      {% if g.unloaded != "" %}<p class="off">{{ g.unloaded }}</p>{% endif %}
+      {% if !g.entries.is_empty() %}
+      <ol>
+        {% for e in g.entries %}
+        <li{% if e.buried %} class="buried"{% endif %}><span class="n">{{ e.n }}</span><span class="what">{{ e.commodity_upper }} <span class="boxes">{% for b in e.boxes %}<b>{{ b.0 }}</b>×{{ b.1 }} {% endfor %}</span><small>{% if e.boarded %}loaded here · {% endif %}{{ e.route_label }}</small></span><span class="depth">{{ e.depth }}</span></li>
+        {% endfor %}
+      </ol>
+      {% endif %}
+      {% for w in g.warnings %}<p class="warn">⚠ {{ w }}</p>{% endfor %}
+      {% if let Some(link) = g.link %}{% if !g.now %}<p class="leg-link"><a href="{{ link }}" target="_blank" rel="noopener">this leg in sc-cargo.space ↗</a></p>{% endif %}{% endif %}
+    </div>
+    {% endfor %}
+    {% if !p.entries.is_empty() %}
     <ol>
       {% for e in p.entries %}
-      <li><span class="n">{{ e.n }}</span><span class="what">{{ e.commodity_upper }} <span class="boxes">{% for b in e.boxes %}<b>{{ b.0 }}</b>×{{ b.1 }} {% endfor %}</span><small>stop {{ e.stop_no }} · {{ e.destination_label }}</small></span><span class="depth">{{ e.depth }}</span></li>
+      <li><span class="n">{{ e.n }}</span><span class="what">{{ e.commodity_upper }} <span class="boxes">{% for b in e.boxes %}<b>{{ b.0 }}</b>×{{ b.1 }} {% endfor %}</span><small>{{ e.route_label }}</small></span><span class="depth">{{ e.depth }}</span></li>
       {% endfor %}
     </ol>
+    {% endif %}
     {% if let Some(link) = p.link %}
-    <p><a href="{{ link }}" target="_blank" rel="noopener">Open this load-out in sc-cargo.space ↗</a></p>
+    <p><a href="{{ link }}" target="_blank" rel="noopener">Open the leg you're on in sc-cargo.space ↗</a></p>
     {% endif %}
     {% if p.foot != "" %}<p>{{ p.foot }}</p>{% endif %}
     {% if let Some(m) = p.merge %}

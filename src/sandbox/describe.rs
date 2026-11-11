@@ -98,7 +98,7 @@ impl Ctx<'_> {
     fn key(&self, table: &str, row: &RowMap) -> Key {
         match table {
             "voyages" => int(row, "id").map_or(Key::Other, Key::Voyage),
-            "loads" | "voyage_shares" => int(row, "voyage_id").map_or(Key::Other, Key::Voyage),
+            "loads" | "voyage_shares" | "voyage_stops" => int(row, "voyage_id").map_or(Key::Other, Key::Voyage),
             "crates" | "shares" => int(row, "load_id").map_or(Key::Other, |l| self.voyage_of_load(l)),
             _ => Key::Other,
         }
@@ -118,6 +118,17 @@ impl Ctx<'_> {
             Some(v) => format!("{} · {}", self.ship(int(v, "ship_id")), text(v, "bought_at")),
             None => format!("Voyage {id}"),
         }
+    }
+
+    /// A voyage's route in `snap`, `start → stop 1 → …`; empty without one.
+    fn route(snap: &Snapshot, voyage: i64) -> String {
+        let mut stops: Vec<(i64, &str)> = snap
+            .rows("voyage_stops")
+            .filter(|(_, s)| int(s, "voyage_id") == Some(voyage))
+            .map(|(_, s)| (int(s, "seq").unwrap_or(0), text(s, "terminal")))
+            .collect();
+        stops.sort();
+        stops.iter().map(|(_, t)| if t.is_empty() { "?" } else { t }).collect::<Vec<_>>().join(" → ")
     }
 
     fn load_name(&self, l: &RowMap) -> String {
@@ -223,6 +234,36 @@ pub fn describe(ch: &ChangeSet, base: &Snapshot, sb: &Snapshot, names: &Names) -
         if !f.is_empty() {
             push(Key::Voyage(*id), format!("Voyage details: {}", f.join(" · ")));
         }
+    }
+
+    // routes, whole: a rewrite deletes and re-adds every stop, so compare
+    // what the route reads as rather than row by row
+    let stops = ch.table("voyage_stops");
+    let mut routed: Vec<i64> = stops
+        .inserted
+        .values()
+        .chain(stops.deleted.values())
+        .chain(stops.updated.values().flat_map(|(b, a)| [b, a]))
+        .filter_map(|s| int(s, "voyage_id"))
+        .collect();
+    routed.sort_unstable();
+    routed.dedup();
+    for v in routed {
+        if voyages.deleted.contains_key(&v) {
+            continue; // said by the voyage's own line
+        }
+        let (before, after) = (Ctx::route(base, v), Ctx::route(sb, v));
+        if before == after {
+            continue;
+        }
+        let line = if before.is_empty() || voyages.inserted.contains_key(&v) {
+            format!("Route: {after}")
+        } else if after.is_empty() {
+            format!("Route {before} removed")
+        } else {
+            format!("Route: {before} becomes {after}")
+        };
+        push(Key::Voyage(v), line);
     }
 
     for (id, l) in &loads.inserted {
@@ -355,7 +396,7 @@ pub fn describe(ch: &ChangeSet, base: &Snapshot, sb: &Snapshot, names: &Names) -
 
     // anything a later table adds, plainly
     for (table, t) in &ch.tables {
-        if matches!(table.as_str(), "voyages" | "loads" | "crates" | "shares" | "voyage_shares") {
+        if matches!(table.as_str(), "voyages" | "voyage_stops" | "loads" | "crates" | "shares" | "voyage_shares") {
             continue;
         }
         for id in t.inserted.keys() {
@@ -414,6 +455,7 @@ fn row_label(cx: &Ctx, table: &str, id: i64) -> String {
             None => format!("{}'s share", cx.user(int(r, "to_user"))),
         },
         "voyage_shares" => format!("{}'s voyage split on {}", cx.user(int(r, "to_user")), voyage(int(r, "voyage_id"))),
+        "voyage_stops" => format!("the route of {} (stop {}, {})", voyage(int(r, "voyage_id")), int(r, "seq").unwrap_or(0), text(r, "terminal")),
         _ => format!("{table} row {id}"),
     }
 }

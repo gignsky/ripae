@@ -12,8 +12,8 @@ use sqlx::{Row, SqliteConnection, SqlitePool};
 use std::collections::HashMap;
 
 use super::model::{
-    expand_boxes, BoxMix, Condition, Crate, Load, LoadKind, PriceMode, Resale, Sale, Share, ShareInput, Ship, User,
-    Voyage, Whereabouts,
+    derive_route, expand_boxes, place_on_route, BoxMix, Condition, Crate, LegacyLoad, Load, LoadKind, PriceMode, Resale,
+    Sale, Share, ShareInput, Ship, User, Voyage, Whereabouts,
 };
 
 // ---------------------------------------------------------------------------
@@ -25,6 +25,8 @@ pub struct NewVoyage {
     pub ship_id: Option<i64>,
     pub bought_at: String,
     pub notes: Option<String>,
+    /// Start, then the stops in order (at least the start).
+    pub route: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -35,7 +37,8 @@ pub struct NewLoad {
     pub price_mode: PriceMode,
     pub buy_price_scu: f64,
     pub buy_price_lot: f64,
-    pub stop_no: u32,
+    pub pickup_stop: u32,
+    pub drop_stop: Option<u32>,
     pub destination: Option<String>,
     pub boxes: BoxMix,
     /// A haul's promised payout.
@@ -58,6 +61,21 @@ pub struct EditVoyage {
     pub entered_by: i64,
     /// Replaces the voyage-wide shares every close starts from.
     pub shares: Vec<ShareInput>,
+    /// A new route, when the form carried one.
+    pub route: Option<RouteEdit>,
+}
+
+/// A voyage's route replaced: the new stops, where every old stop went
+/// (so loads not reassigned follow their stop), the open loads' new pickup
+/// and drop stops, and where the voyage now is.
+#[derive(Debug, Clone)]
+pub struct RouteEdit {
+    pub stops: Vec<String>,
+    /// `(old seq, new seq)` for every old stop that survives.
+    pub remap: Vec<(u32, u32)>,
+    /// `(load id, pickup_stop, drop_stop)` in the new numbering.
+    pub assign: Vec<(i64, u32, Option<u32>)>,
+    pub at_stop: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -68,7 +86,8 @@ pub struct EditLoad {
     pub price_mode: PriceMode,
     pub buy_price_scu: f64,
     pub buy_price_lot: f64,
-    pub stop_no: u32,
+    pub pickup_stop: u32,
+    pub drop_stop: Option<u32>,
     pub destination: Option<String>,
     pub reward: Option<f64>,
     /// `Some` moves every live crate there (the edit form's status field);
@@ -114,6 +133,8 @@ fn row_to_voyage(row: &SqliteRow) -> Result<Voyage> {
         ship: row_to_ship(row, "ship_")?,
         bought_at: row.try_get("bought_at")?,
         notes: row.try_get("notes")?,
+        route: Vec::new(),
+        at_stop: row.try_get::<i64, _>("at_stop")?.max(0) as u32,
         loads: Vec::new(),
     })
 }
@@ -121,7 +142,8 @@ fn row_to_voyage(row: &SqliteRow) -> Result<Voyage> {
 fn row_to_load(row: &SqliteRow) -> Result<Load> {
     let mode: String = row.try_get("price_mode")?;
     let kind: String = row.try_get("kind")?;
-    let stop_no: i64 = row.try_get("stop_no")?;
+    let pickup: i64 = row.try_get("pickup_stop")?;
+    let drop: Option<i64> = row.try_get("drop_stop")?;
     Ok(Load {
         id: row.try_get("id")?,
         voyage_id: row.try_get("voyage_id")?,
@@ -135,7 +157,8 @@ fn row_to_load(row: &SqliteRow) -> Result<Load> {
         price_mode: mode.parse().map_err(|e| anyhow!("bad price_mode in db: {e}"))?,
         buy_price_scu: row.try_get("buy_price_scu")?,
         buy_price_lot: row.try_get("buy_price_lot")?,
-        stop_no: stop_no.max(1) as u32,
+        pickup_stop: pickup.max(0) as u32,
+        drop_stop: drop.map(|d| d.max(1) as u32),
         destination: row.try_get("destination")?,
         sold_at: row.try_get("sold_at")?,
         sell_terminal: row.try_get("sell_terminal")?,
@@ -181,7 +204,7 @@ fn row_to_share(row: &SqliteRow) -> Result<Share> {
 
 const SELECT_VOYAGE: &str = "SELECT v.id, v.logged_by, u.display_name AS logged_by_name,
     COALESCE(v.entered_by, v.logged_by) AS entered_by, e.display_name AS entered_by_name,
-    v.bought_at, v.notes,
+    v.bought_at, v.notes, v.at_stop,
     s.id AS ship_id, s.manufacturer AS ship_manufacturer, s.name AS ship_name, s.short AS ship_short,
     s.sc_cargo_slug AS ship_sc_cargo_slug, s.capacity_scu AS ship_capacity_scu, s.concept AS ship_concept
     FROM voyages v JOIN users u ON u.id = v.logged_by
@@ -189,8 +212,8 @@ const SELECT_VOYAGE: &str = "SELECT v.id, v.logged_by, u.display_name AS logged_
 
 const SELECT_LOAD: &str = "SELECT l.id, l.voyage_id, l.submitted_by, u.display_name AS submitted_by_name,
     COALESCE(l.bought_by, l.submitted_by) AS bought_by, b.display_name AS bought_by_name,
-    l.kind, l.commodity, l.buy_terminal, l.price_mode, l.buy_price_scu, l.buy_price_lot, l.stop_no,
-    l.destination, l.sold_at, l.sell_terminal, l.sell_price_scu, l.sell_price_lot, l.reward, l.notes
+    l.kind, l.commodity, l.buy_terminal, l.price_mode, l.buy_price_scu, l.buy_price_lot, l.pickup_stop,
+    l.drop_stop, l.destination, l.sold_at, l.sell_terminal, l.sell_price_scu, l.sell_price_lot, l.reward, l.notes
     FROM loads l JOIN users u ON u.id = l.submitted_by
     JOIN users b ON b.id = COALESCE(l.bought_by, l.submitted_by)";
 
@@ -231,7 +254,153 @@ pub async fn list_voyages(pool: &SqlitePool) -> Result<Vec<Voyage>> {
         .map(row_to_share)
         .collect::<Result<Vec<_>>>()?;
     assemble(&mut voyages, loads, crates, shares);
+    let stops = sqlx::query("SELECT voyage_id, terminal FROM voyage_stops ORDER BY voyage_id, seq")
+        .fetch_all(pool)
+        .await?;
+    attach_routes(&mut voyages, &stops)?;
     Ok(voyages)
+}
+
+/// Fills each voyage's route from `voyage_stops` rows (in seq order). A
+/// voyage with none (only before the backfill has run) gets an unknown start.
+fn attach_routes(voyages: &mut [Voyage], stops: &[SqliteRow]) -> Result<()> {
+    let mut by_voyage: HashMap<i64, Vec<String>> = HashMap::new();
+    for r in stops {
+        by_voyage.entry(r.try_get("voyage_id")?).or_default().push(r.try_get("terminal")?);
+    }
+    for v in voyages.iter_mut() {
+        v.route = by_voyage.remove(&v.id).unwrap_or_else(|| vec![String::new()]);
+    }
+    Ok(())
+}
+
+/// A voyage's route as stored, start first.
+async fn route_of(conn: &mut SqliteConnection, voyage_id: i64) -> Result<Vec<String>> {
+    Ok(sqlx::query_scalar("SELECT terminal FROM voyage_stops WHERE voyage_id = ? ORDER BY seq")
+        .bind(voyage_id)
+        .fetch_all(&mut *conn)
+        .await?)
+}
+
+async fn write_route(conn: &mut SqliteConnection, voyage_id: i64, stops: &[String]) -> Result<()> {
+    sqlx::query("DELETE FROM voyage_stops WHERE voyage_id = ?").bind(voyage_id).execute(&mut *conn).await?;
+    for (seq, t) in stops.iter().enumerate() {
+        sqlx::query("INSERT INTO voyage_stops (voyage_id, seq, terminal) VALUES (?, ?, ?)")
+            .bind(voyage_id)
+            .bind(seq as i64)
+            .bind(t.trim())
+            .execute(&mut *conn)
+            .await?;
+    }
+    Ok(())
+}
+
+/// Every load's `buy_terminal` / `destination` made the terminals of its
+/// pickup / drop stops (the route is the truth; the columns are what the
+/// ledger and the board read). An unnamed start leaves a blank pickup.
+async fn sync_terminals(conn: &mut SqliteConnection, voyage_id: i64) -> Result<()> {
+    sqlx::query(
+        "UPDATE loads SET
+            buy_terminal = COALESCE((SELECT terminal FROM voyage_stops s WHERE s.voyage_id = loads.voyage_id AND s.seq = loads.pickup_stop), buy_terminal),
+            destination = CASE WHEN drop_stop IS NULL THEN NULL ELSE
+                COALESCE((SELECT terminal FROM voyage_stops s WHERE s.voyage_id = loads.voyage_id AND s.seq = loads.drop_stop), destination) END,
+            stop_no = MAX(COALESCE(drop_stop, 1), 1)
+         WHERE voyage_id = ?",
+    )
+    .bind(voyage_id)
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
+}
+
+/// Moves the voyage to route stop `at`, and puts aboard every open load due
+/// to be picked up there (or earlier) whose crates are still awaiting pickup.
+async fn set_at_stop_in(conn: &mut SqliteConnection, voyage_id: i64, at: u32) -> Result<()> {
+    sqlx::query("UPDATE voyages SET at_stop = ?, updated_at = datetime('now') WHERE id = ?")
+        .bind(at as i64)
+        .bind(voyage_id)
+        .execute(&mut *conn)
+        .await?;
+    sqlx::query(
+        "UPDATE crates SET whereabouts = 'aboard', stored_at = NULL
+         WHERE whereabouts = 'awaiting_pickup' AND condition IN ('sound','glitched')
+           AND load_id IN (SELECT id FROM loads WHERE voyage_id = ? AND sold_at IS NULL AND pickup_stop <= ?)",
+    )
+    .bind(voyage_id)
+    .bind(at as i64)
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
+}
+
+/// `[NEXT STOP]`: the voyage arrives at the stop after `at_stop` (no-op at
+/// the end of the route). Returns the stop it's now at.
+pub async fn advance_voyage(pool: &SqlitePool, voyage_id: i64) -> Result<u32> {
+    let mut tx = pool.begin().await?;
+    let at: i64 = sqlx::query_scalar("SELECT at_stop FROM voyages WHERE id = ?")
+        .bind(voyage_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or_else(|| anyhow!("no such voyage"))?;
+    let stops = route_of(&mut tx, voyage_id).await?.len() as i64;
+    let next = (at + 1).min((stops - 1).max(0)) as u32;
+    set_at_stop_in(&mut tx, voyage_id, next).await?;
+    tx.commit().await?;
+    Ok(next)
+}
+
+/// Gives every voyage without a route one derived from its loads (see
+/// `model::derive_route`), placing each load on it and putting the voyage
+/// at the furthest stop anything has already been sold at. Idempotent:
+/// voyages that have stops are left alone. Runs after the migrations.
+pub async fn backfill_routes(pool: &SqlitePool) -> Result<usize> {
+    let ids: Vec<i64> = sqlx::query_scalar(
+        "SELECT id FROM voyages v WHERE NOT EXISTS (SELECT 1 FROM voyage_stops s WHERE s.voyage_id = v.id) ORDER BY id",
+    )
+    .fetch_all(pool)
+    .await?;
+    if ids.is_empty() {
+        return Ok(0);
+    }
+    let mut tx = pool.begin().await?;
+    for &id in &ids {
+        let rows = sqlx::query("SELECT id, buy_terminal, destination, stop_no, sold_at FROM loads WHERE voyage_id = ? ORDER BY id")
+            .bind(id)
+            .fetch_all(&mut *tx)
+            .await?;
+        let mut legacy = Vec::new();
+        let mut sold = Vec::new();
+        for r in &rows {
+            let stop: i64 = r.try_get("stop_no")?;
+            let load_id: i64 = r.try_get("id")?;
+            legacy.push(LegacyLoad {
+                id: load_id,
+                buy_terminal: r.try_get("buy_terminal")?,
+                destination: r.try_get("destination")?,
+                stop_no: stop.max(1) as u32,
+            });
+            if r.try_get::<Option<String>, _>("sold_at")?.is_some() {
+                sold.push(load_id);
+            }
+        }
+        let route = derive_route(&legacy);
+        write_route(&mut tx, id, &route.stops).await?;
+        let mut at = 0;
+        for (load_id, pickup, drop) in &route.placed {
+            sqlx::query("UPDATE loads SET pickup_stop = ?, drop_stop = ? WHERE id = ?")
+                .bind(*pickup as i64)
+                .bind(drop.map(|d| d as i64))
+                .bind(load_id)
+                .execute(&mut *tx)
+                .await?;
+            if sold.contains(load_id) {
+                at = at.max(drop.unwrap_or(0));
+            }
+        }
+        sqlx::query("UPDATE voyages SET at_stop = ? WHERE id = ?").bind(at as i64).bind(id).execute(&mut *tx).await?;
+    }
+    tx.commit().await?;
+    Ok(ids.len())
 }
 
 fn assemble(voyages: &mut [Voyage], loads: Vec<Load>, crates: Vec<Crate>, shares: Vec<Share>) {
@@ -290,6 +459,11 @@ pub async fn find_voyage(pool: &SqlitePool, id: i64) -> Result<Option<Voyage>> {
     .map(row_to_share)
     .collect::<Result<Vec<_>>>()?;
     assemble(&mut voyages, loads, crates, shares);
+    let stops = sqlx::query("SELECT voyage_id, terminal FROM voyage_stops WHERE voyage_id = ? ORDER BY seq")
+        .bind(id)
+        .fetch_all(pool)
+        .await?;
+    attach_routes(&mut voyages, &stops)?;
     Ok(voyages.pop())
 }
 
@@ -388,8 +562,8 @@ async fn insert_load(
 ) -> Result<i64> {
     let row = sqlx::query(
         "INSERT INTO loads (voyage_id, submitted_by, bought_by, kind, commodity, buy_terminal, price_mode,
-            buy_price_scu, buy_price_lot, stop_no, destination, reward, notes)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+            buy_price_scu, buy_price_lot, stop_no, pickup_stop, drop_stop, destination, reward, notes)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
     )
     .bind(voyage_id)
     .bind(submitted_by)
@@ -400,7 +574,9 @@ async fn insert_load(
     .bind(new.price_mode.as_str())
     .bind(new.buy_price_scu)
     .bind(new.buy_price_lot)
-    .bind(new.stop_no as i64)
+    .bind(new.drop_stop.unwrap_or(1).max(1) as i64)
+    .bind(new.pickup_stop as i64)
+    .bind(new.drop_stop.map(|d| d as i64))
     .bind(new.destination.as_deref())
     .bind(new.reward)
     .bind(new.notes.as_deref())
@@ -443,6 +619,7 @@ pub async fn create_voyage(
     .fetch_one(&mut *tx)
     .await?;
     let voyage_id: i64 = row.try_get("id")?;
+    write_route(&mut tx, voyage_id, &voyage.route).await?;
     for load in loads {
         insert_load(&mut tx, voyage_id, logged_by, load).await?;
     }
@@ -496,6 +673,31 @@ pub async fn update_voyage(pool: &SqlitePool, id: i64, edit: &EditVoyage) -> Res
     .bind(id)
     .execute(&mut *tx)
     .await?;
+    if let Some(r) = &edit.route {
+        // renumber every load by where its stop went, then the open loads'
+        // own picks; a load whose stop is gone keeps nothing it can't find
+        let loads: Vec<(i64, i64, Option<i64>)> =
+            sqlx::query_as("SELECT id, pickup_stop, drop_stop FROM loads WHERE voyage_id = ?")
+                .bind(id)
+                .fetch_all(&mut *tx)
+                .await?;
+        let map = |seq: i64| r.remap.iter().find(|(o, _)| *o as i64 == seq).map(|(_, n)| *n);
+        for (load_id, pickup, drop) in loads {
+            let (p, d) = match r.assign.iter().find(|(l, _, _)| *l == load_id) {
+                Some((_, p, d)) => (*p, *d),
+                None => (map(pickup).unwrap_or(0), drop.and_then(map)),
+            };
+            sqlx::query("UPDATE loads SET pickup_stop = ?, drop_stop = ?, updated_at = datetime('now') WHERE id = ?")
+                .bind(p as i64)
+                .bind(d.map(|d| d as i64))
+                .bind(load_id)
+                .execute(&mut *tx)
+                .await?;
+        }
+        write_route(&mut tx, id, &r.stops).await?;
+        sync_terminals(&mut tx, id).await?;
+        set_at_stop_in(&mut tx, id, r.at_stop).await?;
+    }
     sqlx::query("DELETE FROM voyage_shares WHERE voyage_id = ?").bind(id).execute(&mut *tx).await?;
     for s in &edit.shares {
         sqlx::query(
@@ -542,7 +744,7 @@ pub async fn update_load(pool: &SqlitePool, id: i64, edit: &EditLoad) -> Result<
     let mut tx = pool.begin().await?;
     sqlx::query(
         "UPDATE loads SET kind = ?, commodity = ?, buy_terminal = ?, price_mode = ?, buy_price_scu = ?,
-            buy_price_lot = ?, stop_no = ?, destination = ?, reward = ?, notes = ?, bought_by = ?,
+            buy_price_lot = ?, pickup_stop = ?, drop_stop = ?, destination = ?, reward = ?, notes = ?, bought_by = ?,
             submitted_by = CASE WHEN sold_at IS NULL THEN ? ELSE submitted_by END, updated_at = datetime('now')
          WHERE id = ?",
     )
@@ -552,7 +754,8 @@ pub async fn update_load(pool: &SqlitePool, id: i64, edit: &EditLoad) -> Result<
     .bind(edit.price_mode.as_str())
     .bind(edit.buy_price_scu)
     .bind(edit.buy_price_lot)
-    .bind(edit.stop_no as i64)
+    .bind(edit.pickup_stop as i64)
+    .bind(edit.drop_stop.map(|d| d as i64))
     .bind(edit.destination.as_deref())
     .bind(edit.reward)
     .bind(edit.notes.as_deref())
@@ -613,8 +816,8 @@ pub async fn move_load(
         }
         MoveTarget::New => {
             let row = sqlx::query(
-                "INSERT INTO voyages (logged_by, entered_by, ship_id, bought_at, notes)
-                 SELECT ?, ?, ship_id, bought_at, NULL FROM voyages WHERE id = ? RETURNING id",
+                "INSERT INTO voyages (logged_by, entered_by, ship_id, bought_at, notes, at_stop)
+                 SELECT ?, ?, ship_id, bought_at, NULL, at_stop FROM voyages WHERE id = ? RETURNING id",
             )
             .bind(actor)
             .bind(actor)
@@ -631,24 +834,42 @@ pub async fn move_load(
             .bind(from)
             .execute(&mut *tx)
             .await?;
+            // same route, same stops: the load keeps its pickup and drop
+            let route = route_of(&mut tx, from).await?;
+            write_route(&mut tx, id, &route).await?;
             id
         }
     };
+    let detached = matches!(target, MoveTarget::New);
     if to != from {
         sqlx::query("UPDATE loads SET voyage_id = ?, updated_at = datetime('now') WHERE id = ?")
             .bind(to)
             .bind(load_id)
             .execute(&mut *tx)
             .await?;
+        if !detached {
+            // onto the target's route by terminal, stretching it if need be
+            let (buy, dest): (String, Option<String>) =
+                sqlx::query_as("SELECT buy_terminal, destination FROM loads WHERE id = ?")
+                    .bind(load_id)
+                    .fetch_one(&mut *tx)
+                    .await?;
+            let mut route = route_of(&mut tx, to).await?;
+            let (p, d) = place_on_route(&mut route, &buy, dest.as_deref());
+            write_route(&mut tx, to, &route).await?;
+            sqlx::query("UPDATE loads SET pickup_stop = ?, drop_stop = ? WHERE id = ?")
+                .bind(p as i64)
+                .bind(d.map(|d| d as i64))
+                .bind(load_id)
+                .execute(&mut *tx)
+                .await?;
+        }
         let left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM loads WHERE voyage_id = ?")
             .bind(from)
             .fetch_one(&mut *tx)
             .await?;
         if left == 0 {
-            sqlx::query("DELETE FROM voyages WHERE id = ?")
-                .bind(from)
-                .execute(&mut *tx)
-                .await?;
+            delete_voyage_rows(&mut tx, from).await?;
         } else {
             touch_voyage(&mut tx, from).await?;
         }
@@ -740,10 +961,10 @@ pub async fn close_load(
     } else {
         let row = sqlx::query(
             "INSERT INTO loads (voyage_id, submitted_by, bought_by, kind, commodity, buy_terminal, price_mode,
-                buy_price_scu, buy_price_lot, stop_no, destination, reward, notes,
+                buy_price_scu, buy_price_lot, stop_no, pickup_stop, drop_stop, destination, reward, notes,
                 sold_at, sell_terminal, sell_price_scu, sell_price_lot)
              SELECT voyage_id, ?, COALESCE(bought_by, submitted_by), kind, commodity, buy_terminal, price_mode,
-                buy_price_scu, buy_price_lot, stop_no, destination, reward, notes, ?, ?, ?, ?
+                buy_price_scu, buy_price_lot, stop_no, pickup_stop, drop_stop, destination, reward, notes, ?, ?, ?, ?
              FROM loads WHERE id = ? RETURNING id",
         )
         .bind(seller)
@@ -866,10 +1087,7 @@ pub async fn delete_load(pool: &SqlitePool, id: i64) -> Result<()> {
             .fetch_one(&mut *tx)
             .await?;
         if left == 0 {
-            sqlx::query("DELETE FROM voyages WHERE id = ?")
-                .bind(v)
-                .execute(&mut *tx)
-                .await?;
+            delete_voyage_rows(&mut tx, v).await?;
         }
     }
     tx.commit().await?;
@@ -883,11 +1101,15 @@ pub async fn delete_voyage(pool: &SqlitePool, id: i64) -> Result<()> {
         .bind(id)
         .execute(&mut *tx)
         .await?;
-    sqlx::query("DELETE FROM voyages WHERE id = ?")
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
+    delete_voyage_rows(&mut tx, id).await?;
     tx.commit().await?;
+    Ok(())
+}
+
+/// The voyage row and its route (its loads must already be gone).
+async fn delete_voyage_rows(conn: &mut SqliteConnection, id: i64) -> Result<()> {
+    sqlx::query("DELETE FROM voyage_stops WHERE voyage_id = ?").bind(id).execute(&mut *conn).await?;
+    sqlx::query("DELETE FROM voyages WHERE id = ?").bind(id).execute(&mut *conn).await?;
     Ok(())
 }
 
@@ -924,7 +1146,8 @@ mod tests {
             price_mode: PriceMode::Scu,
             buy_price_scu: 10.0,
             buy_price_lot: 10.0 * scu as f64,
-            stop_no: 1,
+            pickup_stop: 0,
+            drop_stop: dest.map(|_| 1),
             destination: dest.map(Into::into),
             boxes,
             reward: None,
@@ -935,7 +1158,12 @@ mod tests {
     }
 
     fn new_voyage(ship_id: Option<i64>) -> NewVoyage {
-        NewVoyage { ship_id, bought_at: "2026-11-08".into(), notes: None }
+        NewVoyage {
+            ship_id,
+            bought_at: "2026-11-08".into(),
+            notes: None,
+            route: vec!["ArcCorp Mining Area 141".into(), "Area18 TDD".into()],
+        }
     }
 
     #[tokio::test]
@@ -1203,7 +1431,8 @@ mod tests {
                 price_mode: PriceMode::Lot,
                 buy_price_scu: 12.5,
                 buy_price_lot: 200.0,
-                stop_no: 3,
+                pickup_stop: 0,
+                drop_stop: Some(3),
                 destination: Some("Lorville TDD".into()),
                 whereabouts: Some(Whereabouts::AwaitingPickup),
                 stored_at: None,
@@ -1215,7 +1444,7 @@ mod tests {
         .unwrap();
         let l = find_load(&pool, load.id).await.unwrap().unwrap();
         assert_eq!(l.commodity, "Titanium");
-        assert_eq!(l.stop_no, 3);
+        assert_eq!(l.drop_stop, Some(3));
         assert_eq!(l.price_mode, PriceMode::Lot);
         assert_eq!(l.status(), LoadStatus::AwaitingPickup);
         assert_eq!(l.notes.as_deref(), Some("freight elevator 2"));
@@ -1228,7 +1457,7 @@ mod tests {
         let v = create_voyage(&pool, jt, jt, &new_voyage(None), &[new_load("Laranite", vec![(1, 8)], None)])
             .await
             .unwrap();
-        let edit = EditVoyage { ship_id: None, bought_at: "2026-11-08".into(), notes: None, logged_by: jt, move_loads: false, entered_by: gig, shares: vec![] };
+        let edit = EditVoyage { ship_id: None, bought_at: "2026-11-08".into(), notes: None, logged_by: jt, move_loads: false, entered_by: gig, shares: vec![], route: None };
         update_voyage(&pool, v, &edit).await.unwrap();
         let voyage = find_voyage(&pool, v).await.unwrap().unwrap();
         assert_eq!((voyage.logged_by, voyage.entered_by), (jt, gig));
@@ -1256,7 +1485,7 @@ mod tests {
         close_load(&pool, sold.id, gig, &sale, "2026-11-09", "Area18 TDD").await.unwrap();
 
         // by default only the run changes hands
-        let edit = EditVoyage { ship_id: None, bought_at: "2026-11-08".into(), notes: None, logged_by: jt, move_loads: false, entered_by: gig, shares: vec![] };
+        let edit = EditVoyage { ship_id: None, bought_at: "2026-11-08".into(), notes: None, logged_by: jt, move_loads: false, entered_by: gig, shares: vec![], route: None };
         update_voyage(&pool, v, &edit).await.unwrap();
         let voyage = find_voyage(&pool, v).await.unwrap().unwrap();
         assert_eq!((voyage.logged_by, voyage.logged_by_name.as_str(), voyage.entered_by), (jt, "JT", gig));
@@ -1412,7 +1641,7 @@ mod tests {
             ShareInput { to_user: jt, paid_to: None, kind: ShareKind::Pct, amount: 50.0, reason: Some("crew".into()) },
             ShareInput { to_user: jt, paid_to: Some(gig), kind: ShareKind::Flat, amount: 1000.0, reason: None },
         ];
-        let edit = EditVoyage { ship_id: None, bought_at: "2026-11-08".into(), notes: None, logged_by: gig, move_loads: false, entered_by: gig, shares: split.clone() };
+        let edit = EditVoyage { ship_id: None, bought_at: "2026-11-08".into(), notes: None, logged_by: gig, move_loads: false, entered_by: gig, shares: split.clone(), route: None };
         update_voyage(&pool, v, &edit).await.unwrap();
         assert_eq!(voyage_shares(&pool, v).await.unwrap(), split);
 
@@ -1428,5 +1657,192 @@ mod tests {
         delete_voyage(&pool, detached).await.unwrap();
         let left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM voyage_shares").fetch_one(&pool).await.unwrap();
         assert_eq!(left, 0, "a voyage's shares go with it");
+    }
+
+    /// A load on a route: picked up at stop `pickup` (terminal `buy`),
+    /// dropped at `drop` (terminal `dest`).
+    fn routed_load(commodity: &str, buy: &str, pickup: u32, dest: Option<&str>, drop: Option<u32>, w: Whereabouts) -> NewLoad {
+        NewLoad {
+            buy_terminal: buy.into(),
+            pickup_stop: pickup,
+            drop_stop: drop,
+            whereabouts: w,
+            ..new_load(commodity, vec![(1, 8)], dest)
+        }
+    }
+
+    #[tokio::test]
+    async fn a_route_round_trips_and_the_next_stop_brings_its_cargo_aboard() {
+        let (pool, gig, _) = test_pool().await;
+        let voyage = NewVoyage {
+            route: vec!["Shubin Mining Facility SCD-1".into(), "Area18 TDD".into(), "Lorville TDD".into()],
+            ..new_voyage(None)
+        };
+        let v = create_voyage(
+            &pool,
+            gig,
+            gig,
+            &voyage,
+            &[
+                routed_load("Laranite", "Shubin Mining Facility SCD-1", 0, Some("Area18 TDD"), Some(1), Whereabouts::Aboard),
+                routed_load("Agricium", "Area18 TDD", 1, Some("Lorville TDD"), Some(2), Whereabouts::AwaitingPickup),
+            ],
+        )
+        .await
+        .unwrap();
+        let got = find_voyage(&pool, v).await.unwrap().unwrap();
+        assert_eq!(got.route, voyage.route);
+        assert_eq!(got.at_stop, 0);
+        assert_eq!((got.loads[1].pickup_stop, got.loads[1].drop_stop), (1, Some(2)));
+        assert_eq!(got.loads[1].status(), LoadStatus::AwaitingPickup);
+        assert_eq!(list_voyages(&pool).await.unwrap()[0].route, voyage.route);
+
+        assert_eq!(advance_voyage(&pool, v).await.unwrap(), 1);
+        let got = find_voyage(&pool, v).await.unwrap().unwrap();
+        assert_eq!(got.at_stop, 1);
+        assert_eq!(got.loads[1].status(), LoadStatus::InTransit, "picked up on arrival");
+        advance_voyage(&pool, v).await.unwrap();
+        assert_eq!(advance_voyage(&pool, v).await.unwrap(), 2, "the end of the route is as far as it goes");
+    }
+
+    #[tokio::test]
+    async fn voyages_from_before_routes_get_one_from_their_loads() {
+        let (pool, gig, _) = test_pool().await;
+        // as 0.3.0 left it: no stops, loads with buy terminals, destinations, stop №s
+        let v: i64 = sqlx::query_scalar("INSERT INTO voyages (logged_by, bought_at) VALUES (?, '2026-11-08') RETURNING id")
+            .bind(gig)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        for (commodity, buy, dest, stop, sold) in [
+            ("Laranite", "Shubin Mining Facility SCD-1", Some("Area18 TDD"), 1, true),
+            ("Agricium", "Area18 TDD", Some("Lorville TDD"), 2, false),
+            ("Gold", "", None, 1, false),
+        ] {
+            sqlx::query(
+                "INSERT INTO loads (voyage_id, submitted_by, bought_by, commodity, buy_terminal, price_mode, buy_price_scu,
+                    stop_no, destination, sold_at, sell_terminal, sell_price_scu)
+                 VALUES (?, ?, ?, ?, ?, 'scu', 10, ?, ?, ?, ?, ?)",
+            )
+            .bind(v)
+            .bind(gig)
+            .bind(gig)
+            .bind(commodity)
+            .bind(buy)
+            .bind(stop)
+            .bind(dest)
+            .bind(sold.then_some("2026-11-09"))
+            .bind(sold.then_some("Area18 TDD"))
+            .bind(sold.then_some(12.0))
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        assert_eq!(backfill_routes(&pool).await.unwrap(), 1);
+        assert_eq!(backfill_routes(&pool).await.unwrap(), 0, "only voyages without a route");
+        let got = find_voyage(&pool, v).await.unwrap().unwrap();
+        assert_eq!(got.route, vec!["Shubin Mining Facility SCD-1", "Area18 TDD", "Lorville TDD"]);
+        let stops: Vec<(u32, Option<u32>)> = got.loads.iter().map(|l| (l.pickup_stop, l.drop_stop)).collect();
+        assert_eq!(stops, vec![(0, Some(1)), (1, Some(2)), (0, None)]);
+        assert_eq!(got.at_stop, 1, "the Laranite was already sold at stop 1");
+        // nothing it recorded changed
+        assert_eq!(got.loads[1].buy_terminal, "Area18 TDD");
+        assert_eq!(got.loads[1].destination.as_deref(), Some("Lorville TDD"));
+        let old: Vec<i64> = sqlx::query_scalar("SELECT stop_no FROM loads ORDER BY id").fetch_all(&pool).await.unwrap();
+        assert_eq!(old, vec![1, 2, 1]);
+    }
+
+    #[tokio::test]
+    async fn editing_the_route_renumbers_loads_and_renames_their_terminals() {
+        let (pool, gig, _) = test_pool().await;
+        let v = create_voyage(
+            &pool,
+            gig,
+            gig,
+            &NewVoyage { route: vec!["Levski".into(), "Grim HEX".into(), "Area18 TDD".into()], ..new_voyage(None) },
+            &[
+                routed_load("Laranite", "Levski", 0, Some("Grim HEX"), Some(1), Whereabouts::Aboard),
+                routed_load("Gold", "Levski", 0, Some("Area18 TDD"), Some(2), Whereabouts::Aboard),
+            ],
+        )
+        .await
+        .unwrap();
+        let ids: Vec<i64> = find_voyage(&pool, v).await.unwrap().unwrap().loads.iter().map(|l| l.id).collect();
+        // Area18 moves ahead of Grim HEX, which is renamed Everus Harbor; a
+        // new last stop is added and the Gold is re-assigned to it
+        let route = RouteEdit {
+            stops: vec!["Levski".into(), "Area18 TDD".into(), "Everus Harbor".into(), "Lorville TDD".into()],
+            remap: vec![(0, 0), (1, 2), (2, 1)],
+            assign: vec![(ids[1], 1, Some(3))],
+            at_stop: 1,
+        };
+        let edit = EditVoyage {
+            ship_id: None,
+            bought_at: "2026-11-08".into(),
+            notes: None,
+            logged_by: gig,
+            move_loads: false,
+            entered_by: gig,
+            shares: vec![],
+            route: Some(route),
+        };
+        update_voyage(&pool, v, &edit).await.unwrap();
+        let got = find_voyage(&pool, v).await.unwrap().unwrap();
+        assert_eq!(got.route.len(), 4);
+        assert_eq!(got.at_stop, 1);
+        let laranite = &got.loads[0];
+        assert_eq!((laranite.pickup_stop, laranite.drop_stop), (0, Some(2)));
+        assert_eq!(laranite.destination.as_deref(), Some("Everus Harbor"));
+        let gold = &got.loads[1];
+        assert_eq!((gold.pickup_stop, gold.drop_stop), (1, Some(3)));
+        assert_eq!(gold.buy_terminal, "Area18 TDD");
+        assert_eq!(gold.destination.as_deref(), Some("Lorville TDD"));
+    }
+
+    #[tokio::test]
+    async fn merging_puts_a_load_on_the_target_route_and_detaching_keeps_the_route() {
+        let (pool, gig, _) = test_pool().await;
+        let a = create_voyage(
+            &pool,
+            gig,
+            gig,
+            &NewVoyage { route: vec!["Levski".into(), "Grim HEX".into()], ..new_voyage(None) },
+            &[routed_load("Laranite", "Levski", 0, Some("Grim HEX"), Some(1), Whereabouts::Aboard)],
+        )
+        .await
+        .unwrap();
+        let b = create_voyage(
+            &pool,
+            gig,
+            gig,
+            &NewVoyage { route: vec!["Grim HEX".into(), "Area18 TDD".into()], ..new_voyage(None) },
+            &[
+                routed_load("Gold", "Grim HEX", 0, Some("Area18 TDD"), Some(1), Whereabouts::Aboard),
+                routed_load("Titanium", "Grim HEX", 0, Some("Area18 TDD"), Some(1), Whereabouts::Aboard),
+            ],
+        )
+        .await
+        .unwrap();
+        let gold = find_voyage(&pool, b).await.unwrap().unwrap().loads[0].id;
+        move_load(&pool, gold, MoveTarget::Voyage(a), gig).await.unwrap();
+        let got = find_voyage(&pool, a).await.unwrap().unwrap();
+        assert_eq!(got.route, vec!["Levski", "Grim HEX", "Area18 TDD"]);
+        let moved = got.loads.iter().find(|l| l.id == gold).unwrap();
+        assert_eq!((moved.pickup_stop, moved.drop_stop), (1, Some(2)));
+
+        let titanium = find_voyage(&pool, b).await.unwrap().unwrap().loads[0].id;
+        let lone = move_load(&pool, gold, MoveTarget::New, gig).await.unwrap();
+        let got = find_voyage(&pool, lone).await.unwrap().unwrap();
+        assert_eq!(got.route, vec!["Levski", "Grim HEX", "Area18 TDD"], "a detached load keeps its route");
+        assert_eq!((got.loads[0].pickup_stop, got.loads[0].drop_stop), (1, Some(2)));
+        // b's last load leaves: b and its route go
+        move_load(&pool, titanium, MoveTarget::Voyage(a), gig).await.unwrap();
+        assert!(find_voyage(&pool, b).await.unwrap().is_none());
+        let orphans: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM voyage_stops WHERE voyage_id = ?")
+            .bind(b)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(orphans, 0);
     }
 }

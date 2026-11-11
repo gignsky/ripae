@@ -17,7 +17,7 @@ use sqlx::{Column, Row, SqliteConnection, SqlitePool, TypeInfo, ValueRef};
 /// The mergeable tables, parents before children. Users, sessions, auth
 /// and the pick-lists are deliberately absent: they're never diffed and
 /// never written back.
-pub const LEDGER_TABLES: &[&str] = &["voyages", "loads", "crates", "shares", "voyage_shares"];
+pub const LEDGER_TABLES: &[&str] = &["voyages", "voyage_stops", "loads", "crates", "shares", "voyage_shares"];
 
 /// One SQLite value, exactly as stored (no float formatting round trip).
 #[derive(Debug, Clone, PartialEq)]
@@ -346,10 +346,34 @@ fn remap(table: &str, row: &RowMap, fks: &[Fk], ids: &IdMap) -> RowMap {
     row
 }
 
-/// Writes `changes` to `conn` (inside the caller's transaction): inserts
-/// parent-first under fresh ids (live may have used the sandbox's ids since
-/// it was made), then updates, then deletes child-first. Returns the id map.
+async fn delete_rows(conn: &mut SqliteConnection, table: &str, changes: &ChangeSet) -> Result<()> {
+    let ch = changes.table(table);
+    if ch.deleted.is_empty() {
+        return Ok(());
+    }
+    let key = pk(conn, table).await?;
+    let sql = format!("DELETE FROM {} WHERE {} = ?", ident(table), ident(&key));
+    for id in ch.deleted.keys() {
+        sqlx::query(&sql).bind(*id).execute(&mut *conn).await?;
+    }
+    Ok(())
+}
+
+/// Writes `changes` to `conn` (inside the caller's transaction): deletes
+/// from tables nothing points at, then inserts parent-first under fresh ids
+/// (live may have used the sandbox's ids since it was made), then updates,
+/// then the remaining deletes child-first. Returns the id map.
+///
+/// Leaf rows go first because a rewrite in the sandbox (delete a voyage's
+/// stops, insert them again) lands as deletes plus inserts, and the new
+/// rows would hit a unique key the old ones still hold. A parent's delete
+/// has to wait: its children may be re-pointed by the updates, and an
+/// `ON DELETE CASCADE` would take them first.
 pub async fn apply(conn: &mut SqliteConnection, changes: &ChangeSet, fks: &[Fk]) -> Result<IdMap> {
+    let leaf = |t: &str| !fks.iter().any(|f| f.parent == t);
+    for &t in LEDGER_TABLES.iter().rev().filter(|t| leaf(t)) {
+        delete_rows(conn, t, changes).await?;
+    }
     let mut ids = IdMap::new();
     for &t in LEDGER_TABLES {
         let ch = changes.table(t);
@@ -403,16 +427,8 @@ pub async fn apply(conn: &mut SqliteConnection, changes: &ChangeSet, fks: &[Fk])
             q.bind(*id).execute(&mut *conn).await?;
         }
     }
-    for &t in LEDGER_TABLES.iter().rev() {
-        let ch = changes.table(t);
-        if ch.deleted.is_empty() {
-            continue;
-        }
-        let key = pk(conn, t).await?;
-        let sql = format!("DELETE FROM {} WHERE {} = ?", ident(t), ident(&key));
-        for id in ch.deleted.keys() {
-            sqlx::query(&sql).bind(*id).execute(&mut *conn).await?;
-        }
+    for &t in LEDGER_TABLES.iter().rev().filter(|t| !leaf(t)) {
+        delete_rows(conn, t, changes).await?;
     }
     Ok(ids)
 }

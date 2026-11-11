@@ -403,3 +403,44 @@ async fn a_partial_close_reads_as_a_sale_and_what_was_kept() {
     let Outcome::Merged { .. } = merge::merge(&w.live, &base, &after).await.unwrap() else { panic!() };
     assert_eq!(count(&w.live, "SELECT COUNT(*) FROM crates WHERE condition = 'sold' AND load_id = (SELECT MAX(id) FROM loads)").await, 1);
 }
+
+#[tokio::test]
+async fn a_rewritten_route_pushes_live_and_reads_as_one_line() {
+    let w = world().await;
+    let stops = |pool: SqlitePool, v: i64| async move {
+        sqlx::query_scalar::<_, String>(&format!("SELECT terminal FROM voyage_stops WHERE voyage_id = {v} ORDER BY seq"))
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+    };
+    // voyage 1's stops are not the newest rows, so a rewrite in the
+    // sandbox gives them fresh ids: deletes plus inserts on (voyage_id, seq)
+    let v1 = voyage(&w.live, Some("Caterpillar")).await;
+    let v2 = voyage(&w.live, None).await;
+    for (v, route) in [(v1, ["Levski", "Grim HEX"]), (v2, ["Area18 TDD", "Lorville TDD"])] {
+        for (seq, t) in route.iter().enumerate() {
+            exec(&w.live, &format!("INSERT INTO voyage_stops (voyage_id, seq, terminal) VALUES ({v}, {seq}, '{t}')")).await;
+        }
+    }
+    let id = w.boxes.create(&w.live).await.unwrap();
+    let sb = w.boxes.get(&id).await.unwrap();
+    // what repo::write_route does: every stop out, the new route in
+    exec(&sb.pool, &format!("DELETE FROM voyage_stops WHERE voyage_id = {v1}")).await;
+    for (seq, t) in ["Levski", "Pyro Gateway", "Grim HEX"].iter().enumerate() {
+        exec(&sb.pool, &format!("INSERT INTO voyage_stops (voyage_id, seq, terminal) VALUES ({v1}, {seq}, '{t}')")).await;
+    }
+    exec(&sb.pool, &format!("UPDATE voyages SET at_stop = 1 WHERE id = {v1}")).await;
+
+    let (base, after, _) = snaps(&w, &id).await;
+    let lines: Vec<String> = describe(&diff(&base, &after), &base, &after, &names(&sb.pool).await)
+        .into_iter()
+        .flat_map(|g| g.lines)
+        .collect();
+    assert!(lines.contains(&"Route: Levski → Grim HEX becomes Levski → Pyro Gateway → Grim HEX".to_string()), "{lines:?}");
+    assert!(!lines.iter().any(|l| l.contains("voyage_stops")), "{lines:?}");
+
+    assert!(matches!(merge::merge(&w.live, &base, &after).await.unwrap(), Outcome::Merged { .. }));
+    assert_eq!(stops(w.live.clone(), v1).await, ["Levski", "Pyro Gateway", "Grim HEX"]);
+    assert_eq!(stops(w.live.clone(), v2).await, ["Area18 TDD", "Lorville TDD"], "the other route is untouched");
+    assert_eq!(count(&w.live, &format!("SELECT at_stop FROM voyages WHERE id = {v1}")).await, 1);
+}

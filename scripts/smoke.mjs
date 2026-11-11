@@ -9,9 +9,11 @@
 // NODE_PATH; `playwright` must resolve from this file or from NODE_PATH).
 //
 // Walks the whole 0.2 story: gate login → ledger → new run with two loads
-// (one priced per lot) → a second run → crate manifest: one crate lost, one
-// stored (written off, but kept out of Realised while its voyage is open) →
-// status reads SPLIT → close the first load selling two crates
+// (one priced per lot) on a three-stop route, the second picked up at the
+// first's drop → per-leg stowage plan → [NEXT STOP] → a second run → crate
+// manifest: one crate lost, one stored (written off, but kept out of
+// Realised while its voyage is open) → status reads SPLIT → close the first
+// load selling two crates
 // with a 25 % share forfeited to the other crew member → SALE banner shows
 // the profit → leaderboard → a crew name → service record → close the other
 // load at a loss: the voyage closes, the write-off lands and Realised turns
@@ -93,20 +95,27 @@ async function fillLoadLine(line, f) {
   await line.locator("[name=price_mode]").selectOption(f.mode);
   if (f.mode === "lot") await line.locator("[name=price_lot]").fill(f.price);
   else await line.locator("[name=price_scu]").fill(f.price);
-  await line.locator("[name=terminal]").fill(f.terminal);
-  await line.locator("[name=stop_no]").fill(String(f.stop));
-  await line.locator("[name=destination]").fill(f.dest);
+  // stops by number on the route: the pickup list starts at the start (0),
+  // the drop list at "undecided" (0) then stop 1, 2, ...
+  await line.locator("[name=pickup]").selectOption({ index: f.pickup });
+  await line.locator("[name=drop]").selectOption({ index: f.drop });
 }
 
 const realisedVal = (page) => page.locator("#totals .tile").nth(1).locator(".val");
 const realisedText = async (page) => (await realisedVal(page).innerText()).replace(/aUEC/, "").trim();
 
-async function newRun(page, ship, loads, crew) {
+// route = [start, stop 1, stop 2, ...], built like a UEX route
+async function newRun(page, ship, route, loads, crew) {
   await page.goto(base + "/");
   await page.click("#newrun-toggle");
   await page.waitForSelector("#newrun-body:not([hidden])");
   if (crew) await page.selectOption("#newrun-form [name=logged_by]", { label: crew });
   await page.fill("#newrun-form [name=ship]", ship);
+  const stops = page.locator("#newrun-form .route-stops > .route-stop");
+  for (let i = 0; i < route.length; i++) {
+    if ((await stops.count()) <= i) await page.click("#newrun-form [data-add-stop]");
+    await stops.nth(i).locator("[name=stop_terminal]").fill(route[i]);
+  }
   for (let i = 1; i < loads.length; i++) await page.click("#add-load");
   const lines = page.locator("#loads .cargo-line");
   for (let i = 0; i < loads.length; i++) await fillLoadLine(lines.nth(i), loads[i]);
@@ -140,19 +149,38 @@ const run = async () => {
   check("ledger visible after login", await page.isVisible("#open-cargo-panel"));
   check("rail names the crew member", (await page.textContent("#rail")).includes("LORD GIG"));
 
-  // -- new run with two loads, one per lot --
-  await newRun(page, "Hull-C", [
-    { commodity: "Laranite", boxes: "3×8", mode: "scu", price: "2800", terminal: "ArcCorp Mining Area 141", stop: 1, dest: "Area18 TDD" },
-    { commodity: "Agricium", boxes: "2x32", mode: "lot", price: "1612800", terminal: "Shubin Mining Facility SCD-1", stop: 2, dest: "Lorville TDD" },
+  // -- new run with two loads on a three-stop route, one per lot: the
+  //    Agricium is bought at Area18, where the Laranite is sold --
+  await newRun(page, "Hull-C", ["ArcCorp Mining Area 141", "Area18 TDD", "Lorville TDD"], [
+    { commodity: "Laranite", boxes: "3×8", mode: "scu", price: "2800", pickup: 0, drop: 1 },
+    { commodity: "Agricium", boxes: "2x32", mode: "lot", price: "1612800", pickup: 1, drop: 2 },
   ]);
   const loadRows = page.locator("#open-cargo tbody.load");
   check("two loads on the voyage", (await loadRows.count()) === 2, `${await loadRows.count()} rows`);
   check("per-lot buy stored and shown", (await page.textContent("#open-cargo")).includes("1,612,800"));
   check("stowage plan links sc-cargo.space for the hull", (await page.getAttribute("#plans a[href*='sc-cargo.space']", "href")).includes("hull-c-official"));
+  check("the voyage header shows its route", (await page.textContent("#open-cargo tbody.vhead .vroute")).includes("Area18 TDD → Lorville TDD"));
+  check("cargo picked up later waits for its stop", (await loadRows.nth(1).locator(".status").textContent()).trim() === "Awaiting pickup");
+  const legs = page.locator("#plans .plan").first().locator(".leg");
+  check("the plan runs leg by leg", (await legs.count()) === 2, `${await legs.count()} legs`);
+  const leg1 = await legs.nth(0).textContent(), leg2 = await legs.nth(1).textContent();
+  check("leg 1 carries only what boards at the start", leg1.includes("LARANITE") && !leg1.includes("AGRICIUM"), leg1.replace(/\s+/g, " "));
+  check("leg 2 loads the Agricium at Area18", leg2.includes("AGRICIUM") && leg2.includes("loaded here") && leg2.includes("Off at Area18 TDD: LARANITE"));
+  await page.locator("#open-cargo tbody.vhead .cmd", { hasText: "Next stop" }).click();
+  await page.waitForSelector("#open-cargo tbody.load >> nth=1 >> .status.transit");
+  check("[NEXT STOP] brings the Agricium aboard", (await loadRows.nth(1).locator("td.where >> nth=1").textContent()).includes("1 stop to go"));
+  check("the header moves along the route", (await page.textContent("#open-cargo tbody.vhead .vroute .here")).includes("Area18"));
+  // the route editor comes up with the voyage's stops and loads
+  await page.locator("#open-cargo tbody.vhead .cmd", { hasText: "Edit" }).first().click();
+  await page.waitForSelector("#open-cargo tbody.vhead form .route-stops");
+  check("edit voyage shows the route", (await page.locator("#open-cargo tbody.vhead form .route-stop").count()) === 3);
+  check("edit voyage assigns each open load", (await page.locator("#open-cargo tbody.vhead form [name=assign_pickup]").count()) === 2);
+  await page.locator("#open-cargo tbody.vhead form .cmd", { hasText: "Cancel" }).click();
+  await page.waitForSelector("#open-cargo tbody.vhead form", { state: "detached" });
 
   // -- a second run, no hull, kept for JT (JT buys and sells; Gig only does the books) --
-  await newRun(page, "", [
-    { commodity: "Titanium", boxes: "6x8", mode: "scu", price: "7600", terminal: "Shubin Mining Facility SCD-1", stop: 1, dest: "Area18 TDD" },
+  await newRun(page, "", ["Shubin Mining Facility SCD-1", "Area18 TDD"], [
+    { commodity: "Titanium", boxes: "6x8", mode: "scu", price: "7600", pickup: 0, drop: 1 },
   ], "JT");
   check("second voyage listed", (await page.locator("#open-cargo tbody.vhead").count()) === 2);
   const jtHead = page.locator("#open-cargo tbody.vhead").nth(1);
@@ -283,8 +311,8 @@ const run = async () => {
   check("a net-loss Realised is red", (await realisedVal(page).getAttribute("class")).includes("neg") && negColor !== committedColor, negColor);
 
   // -- delete the remaining hull-less voyage through the confirmation --
-  await newRun(page, "", [
-    { commodity: "Gold", boxes: "2x4", mode: "scu", price: "5000", terminal: "Levski", stop: 1, dest: "Grim HEX" },
+  await newRun(page, "", ["Levski", "Grim HEX"], [
+    { commodity: "Gold", boxes: "2x4", mode: "scu", price: "5000", pickup: 0, drop: 1 },
   ]);
   const heads = page.locator("#open-cargo tbody.vhead");
   const secondHead = await heads.last().getAttribute("id");
@@ -312,11 +340,12 @@ const run = async () => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto(base + "/");
   const liveHeads = await page.locator("#open-cargo tbody.vhead").count();
-  const sandboxRun = [{ commodity: "Quartz", boxes: "2x16", mode: "scu", price: "300", terminal: "Levski", stop: 1, dest: "Grim HEX" }];
+  const sandboxRoute = ["Levski", "Grim HEX"];
+  const sandboxRun = [{ commodity: "Quartz", boxes: "2x16", mode: "scu", price: "300", pickup: 0, drop: 1 }];
   check("no TEST banner on live", (await page.locator("#test-banner").count()) === 0);
   await Promise.all([page.waitForURL(base + "/"), page.click("#test-enter")]);
   check("TEST banner up in test mode", await page.isVisible("#test-banner"));
-  await newRun(page, "Caterpillar", sandboxRun);
+  await newRun(page, "Caterpillar", sandboxRoute, sandboxRun);
   check("the sandbox run shows in test mode", (await page.locator("#open-cargo tbody.vhead").count()) === liveHeads + 1);
   check("TEST banner stays up after a write", await page.isVisible("#test-banner"));
   // another member, on live meanwhile, sees none of it
@@ -338,7 +367,7 @@ const run = async () => {
   check("discard: live untouched", (await page.locator("#open-cargo tbody.vhead").count()) === liveHeads);
 
   await Promise.all([page.waitForURL(base + "/"), page.click("#test-enter")]);
-  await newRun(page, "Caterpillar", sandboxRun);
+  await newRun(page, "Caterpillar", sandboxRoute, sandboxRun);
   await Promise.all([page.waitForURL(base + "/test-mode/keep"), page.click("#test-keep")]);
   const diffText = (await page.textContent("#test-diff")).replace(/\s+/g, " ");
   check("keep shows the diff in words", diffText.includes("New voyage · Caterpillar") && diffText.includes("New load Quartz 32 SCU bought at Levski for 9,600 aUEC"), diffText.slice(0, 160));

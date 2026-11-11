@@ -3,12 +3,12 @@
 {{ totals_html|safe }}
 
 <section class="panel" id="open-cargo-panel">
-  <header><h2>Open Cargo</h2><span class="hint">Bought, not yet sold, grouped by voyage. Oldest first. Stop № is the order you mean to sell. Loads move between voyages with Merge and Detach.</span></header>
+  <header><h2>Open Cargo</h2><span class="hint">Bought, not yet sold, grouped by voyage. Oldest first. Each voyage flies a route; the numbers are the stops a load comes aboard (when not the start) and comes off at. [Next stop] moves a voyage along it. Loads move between voyages with Merge and Detach.</span></header>
   {{ open_cargo_html|safe }}
 </section>
 
 <section class="panel" id="plans-panel">
-  <header><h2>Stowage Plan</h2><span class="hint">Live, from Open Cargo. Last stop loads first, deepest in the hold. Unassigned voyages bound the same way are offered as one.</span></header>
+  <header><h2>Stowage Plan</h2><span class="hint">Live, from Open Cargo, leg by leg along each route. What comes off first sits by the door; what boards later goes on top of what is already aboard. Unassigned voyages bound the same way are offered as one.</span></header>
   {{ plans_html|safe }}
 </section>
 

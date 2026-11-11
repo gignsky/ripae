@@ -31,11 +31,11 @@ use model::{
     parse_boxes, parse_date, service_record, resettle, settle, today, Load, LoadKind, PriceMode, Sale, SaleInput, ShareInput,
     ShareKind, SortKey, Totals, User, Voyage, Whereabouts,
 };
-use repo::{EditLoad, EditVoyage, MoveTarget, NewLoad, NewVoyage};
+use repo::{EditLoad, EditVoyage, MoveTarget, NewLoad, NewVoyage, RouteEdit};
 use views::{
-    board_view, ledger_rows, plan_cards, record_view, CloseFormView, LoadExtra, LoadFormView,
-    LoadView, MergeChoice, NewRunFormView, ShareFormRow, ShareView, TotalsView, VoyageExtra,
-    VoyageFormView, VoyageView,
+    board_view, ledger_rows, plan_cards, record_view, route_options, CloseFormView, LoadExtra, LoadFormView,
+    LoadView, MergeChoice, NewRunFormView, RouteAssign, RouteFormView, RouteRow, ShareFormRow, ShareView,
+    TotalsView, VoyageExtra, VoyageFormView, VoyageView,
 };
 
 // ---------------------------------------------------------------------------
@@ -236,7 +236,7 @@ fn load_view(l: &Ledger, id: i64) -> Option<LoadView> {
         v.loads
             .iter()
             .find(|x| x.id == id)
-            .map(|x| LoadView { can_detach: v.open_loads().count() > 1, ..LoadView::new(x, v.hull_label().as_deref()) })
+            .map(|x| LoadView { can_detach: v.open_loads().count() > 1, ..LoadView::new(x, v) })
     })
 }
 
@@ -345,7 +345,8 @@ struct LoadParts {
     price_mode: PriceMode,
     buy_price_scu: f64,
     buy_price_lot: f64,
-    stop_no: u32,
+    pickup_stop: u32,
+    drop_stop: Option<u32>,
     destination: Option<String>,
     boxes: model::BoxMix,
     reward: Option<f64>,
@@ -354,7 +355,71 @@ struct LoadParts {
     notes: Option<String>,
 }
 
-async fn parse_load_line(state: &AppState, f: &LoadFormView, boxes_editable: bool, existing_scu: u32) -> Result<LoadParts, String> {
+/// A route as validated: each stop's form key and canonical terminal,
+/// start first. Loads pick their stops by key.
+type Route = Vec<(String, String)>;
+
+/// A route stop's number by its form key.
+fn stop_index(route: &Route, key: &str) -> Option<u32> {
+    route.iter().position(|(k, _)| k == key.trim()).map(|i| i as u32)
+}
+
+/// A voyage's stored route keyed by stop number -- what Add Load and Edit
+/// Load pick from.
+fn route_of(v: &Voyage) -> Route {
+    let mut r: Route = v.route.iter().enumerate().map(|(i, t)| (i.to_string(), t.clone())).collect();
+    if r.is_empty() {
+        r.push(("0".into(), String::new()));
+    }
+    r
+}
+
+/// The route editor's rows as submitted (`stop_key` / `stop_terminal`, start first).
+fn route_rows_from(form: &FormData) -> Vec<RouteRow> {
+    let terminals = form.all("stop_terminal");
+    form.all("stop_key")
+        .iter()
+        .enumerate()
+        .map(|(i, k)| RouteRow { key: k.to_string(), terminal: terminals.get(i).copied().unwrap_or("").to_string() })
+        .collect()
+}
+
+/// Validates the route rows: terminals snap to the pick-list's spelling; a
+/// stop row left blank is dropped (a load still pointing at it is refused
+/// by `parse_load_line`); only the start may be unnamed.
+async fn parse_route(state: &AppState, rows: &[RouteRow]) -> Result<Route, String> {
+    if rows.is_empty() {
+        return Err("A voyage needs a route: where it starts, then its stops.".into());
+    }
+    let mut route = Vec::new();
+    for (i, r) in rows.iter().enumerate() {
+        match opt(&r.terminal) {
+            Some(t) => route.push((r.key.clone(), pick(state, Kind::Terminal, &t).await)),
+            None if i == 0 => route.push((r.key.clone(), String::new())),
+            None => {}
+        }
+    }
+    Ok(route)
+}
+
+/// A load's pickup and drop stops by key: picked up at a stop on the route,
+/// dropped at a later one (or undecided).
+fn pick_stops(route: &Route, pickup: &str, drop: &str) -> Result<(u32, Option<u32>), String> {
+    let p = match opt(pickup) {
+        None => 0,
+        Some(k) => stop_index(route, &k).ok_or("Its pickup isn't a stop on the route (a stop left blank?).")?,
+    };
+    let d = match opt(drop) {
+        None => None,
+        Some(k) => Some(stop_index(route, &k).ok_or("Its drop-off isn't a stop on the route (a stop left blank?).")?),
+    };
+    if d.is_some_and(|d| d <= p) {
+        return Err("It has to come off at a stop after the one it's picked up at.".into());
+    }
+    Ok((p, d))
+}
+
+async fn parse_load_line(state: &AppState, f: &LoadFormView, boxes_editable: bool, existing_scu: u32, route: &Route) -> Result<LoadParts, String> {
     let commodity = opt(&f.commodity).ok_or("Commodity is required.")?;
     let (boxes, scu) = if boxes_editable {
         let boxes = parse_boxes(&f.boxes).map_err(|e| format!("Boxes: {e}"))?;
@@ -383,18 +448,15 @@ async fn parse_load_line(state: &AppState, f: &LoadFormView, boxes_editable: boo
             PriceMode::Lot => (PriceMode::Lot, parse_money(&f.price_lot, "Price paid for the lot")?, None),
         },
     };
-    // Free cargo (price 0, hauls included) may have no buy terminal; it's
-    // stored as "".
-    let buy_terminal = match opt(&f.terminal) {
-        Some(t) => pick(state, Kind::Terminal, &t).await,
-        None if price == 0.0 => String::new(),
-        None => return Err("Buy terminal is required (leave it blank only when the price is 0).".into()),
-    };
+    // Bought where it's picked up. Free cargo (price 0, hauls included) may
+    // board at an unnamed start; its buy terminal is stored as "".
+    let (pickup_stop, drop_stop) = pick_stops(route, &f.pickup, &f.drop)?;
+    let buy_terminal = route[pickup_stop as usize].1.clone();
+    if buy_terminal.is_empty() && price != 0.0 {
+        return Err("Name where it's bought: the route's start has no terminal (leave it blank only when the price is 0).".into());
+    }
+    let destination = drop_stop.map(|d| route[d as usize].1.clone());
     let (buy_price_scu, buy_price_lot) = model::derive_prices(price_mode, price, scu);
-    let stop_no: u32 = match opt(&f.stop_no) {
-        None => 1,
-        Some(s) => s.parse().ok().filter(|n| *n >= 1).ok_or("Stop № must be 1 or more.")?,
-    };
     let whereabouts = parse_whereabouts(&f.status)?;
     let stored_at = pick_opt(state, Kind::Terminal, &f.stored_at).await;
     if whereabouts == Some(Whereabouts::Stored) && stored_at.is_none() {
@@ -407,8 +469,9 @@ async fn parse_load_line(state: &AppState, f: &LoadFormView, boxes_editable: boo
         price_mode,
         buy_price_scu,
         buy_price_lot,
-        stop_no,
-        destination: pick_opt(state, Kind::Terminal, &f.destination).await,
+        pickup_stop,
+        drop_stop,
+        destination,
         boxes,
         reward,
         whereabouts,
@@ -429,9 +492,9 @@ fn load_form_from(form: &FormData, i: usize) -> LoadFormView {
         price_lot: form.nth("price_lot", i).into(),
         balance_before: form.nth("balance_before", i).into(),
         balance_after: form.nth("balance_after", i).into(),
-        terminal: form.nth("terminal", i).into(),
-        stop_no: form.nth("stop_no", i).into(),
-        destination: form.nth("destination", i).into(),
+        pickup: form.nth("pickup", i).into(),
+        drop: form.nth("drop", i).into(),
+        stops: Vec::new(),
         status: form.nth("status", i).into(),
         stored_at: form.nth("stored_at", i).into(),
         notes: form.nth("notes", i).into(),
@@ -485,15 +548,31 @@ async fn render_index(state: &AppState, user: &CurrentUser, mode: SplashMode, ne
     } else {
         StatusCode::OK
     };
-    let mut new_run = new_run.unwrap_or_else(|| NewRunFormView {
-        bought_at: today().to_string(),
-        logged_by: user.id.to_string(),
-        ship: default_ship,
-        status: "aboard".into(),
-        loads: vec![LoadFormView::blank(&default_terminal)],
-        ..Default::default()
+    let mut new_run = new_run.unwrap_or_else(|| {
+        // start where the crew last sold, with one stop to name; the first
+        // load boards at the start and comes off at the last stop
+        let route = RouteFormView {
+            stops: vec![
+                RouteRow { key: "n0".into(), terminal: default_terminal.clone() },
+                RouteRow { key: "n1".into(), terminal: String::new() },
+            ],
+            ..Default::default()
+        };
+        NewRunFormView {
+            bought_at: today().to_string(),
+            logged_by: user.id.to_string(),
+            ship: default_ship,
+            status: "aboard".into(),
+            loads: vec![LoadFormView::blank(route.options())],
+            route,
+            ..Default::default()
+        }
     });
     new_run.users = l.users.clone();
+    let options = new_run.route.options();
+    for f in &mut new_run.loads {
+        f.stops = options.clone();
+    }
     html(
         status,
         render_str(&IndexTemplate {
@@ -525,6 +604,7 @@ pub async fn create_voyage(Db(state): Db, user: CurrentUser, body: String) -> Re
         status: form.get("voyage_status").into(),
         stored_at: form.get("voyage_stored_at").into(),
         notes: form.get("voyage_notes").into(),
+        route: RouteFormView { stops: route_rows_from(&form), ..Default::default() },
         loads: (0..n).map(|i| load_form_from(&form, i)).collect(),
         error: None,
         open: true,
@@ -564,11 +644,18 @@ async fn parse_new_run(state: &AppState, v: &NewRunFormView) -> Result<(NewVoyag
     if v.loads.is_empty() {
         return Err("A run needs at least one cargo load.".into());
     }
+    let route = parse_route(state, &v.route.stops).await?;
     let mut loads = Vec::new();
     for (i, f) in v.loads.iter().enumerate() {
-        let p = parse_load_line(state, f, true, 0)
+        let p = parse_load_line(state, f, true, 0, &route)
             .await
             .map_err(|e| format!("Load {}: {e}", i + 1))?;
+        // the status is for what boards at the start; later pickups wait
+        let (whereabouts, stored_at) = if p.pickup_stop > 0 {
+            (Whereabouts::AwaitingPickup, None)
+        } else {
+            (whereabouts, stored_at.clone())
+        };
         loads.push(NewLoad {
             kind: p.kind,
             reward: p.reward,
@@ -577,15 +664,17 @@ async fn parse_new_run(state: &AppState, v: &NewRunFormView) -> Result<(NewVoyag
             price_mode: p.price_mode,
             buy_price_scu: p.buy_price_scu,
             buy_price_lot: p.buy_price_lot,
-            stop_no: p.stop_no,
+            pickup_stop: p.pickup_stop,
+            drop_stop: p.drop_stop,
             destination: p.destination,
             boxes: p.boxes,
             whereabouts,
-            stored_at: stored_at.clone(),
+            stored_at,
             notes: p.notes,
         });
     }
-    Ok((NewVoyage { ship_id, bought_at, notes: opt(&v.notes) }, loads))
+    let route = route.into_iter().map(|(_, t)| t).collect();
+    Ok((NewVoyage { ship_id, bought_at, notes: opt(&v.notes), route }, loads))
 }
 
 // ---------------------------------------------------------------------------
@@ -608,7 +697,7 @@ fn head_with(v: &Voyage, extra: VoyageExtra, status: StatusCode) -> Response {
 
 pub async fn voyage_edit_form(Db(state): Db, _user: CurrentUser, Path(id): Path<i64>) -> Response {
     match find_voyage(&state, id).await {
-        Ok(v) => head_with(&v, VoyageExtra::Edit(voyage_form(&state, &v).await), StatusCode::OK),
+        Ok(v) => head_with(&v, VoyageExtra::Edit(voyage_form(&state, &v, true).await), StatusCode::OK),
         Err(r) => r,
     }
 }
@@ -629,8 +718,29 @@ pub async fn voyage_update(Db(state): Db, _user: CurrentUser, Path(id): Path<i64
     }
 }
 
-/// The voyage form filled in as the voyage stands, its shares included.
-async fn voyage_form(state: &AppState, v: &Voyage) -> VoyageFormView {
+/// The route editor filled in as the voyage stands: stops keyed `s<n>` by
+/// their current number, and every open load's pickup and drop.
+fn route_form(v: &Voyage) -> RouteFormView {
+    let key = |n: u32| format!("s{n}");
+    RouteFormView {
+        stops: v.route.iter().enumerate().map(|(i, t)| RouteRow { key: key(i as u32), terminal: t.clone() }).collect(),
+        at: key(v.at_stop),
+        show_at: true,
+        loads: v
+            .open_loads()
+            .map(|l| RouteAssign {
+                load_id: l.id,
+                label: format!("{} · {} SCU", l.commodity.to_uppercase(), l.scu()),
+                pickup: key(l.pickup_stop),
+                drop: l.drop_stop.map(key).unwrap_or_default(),
+            })
+            .collect(),
+    }
+}
+
+/// The voyage form filled in as the voyage stands, its shares included;
+/// `with_route` adds the route editor (open voyages, inline).
+async fn voyage_form(state: &AppState, v: &Voyage, with_route: bool) -> VoyageFormView {
     VoyageFormView {
         bought_at: v.bought_at.clone(),
         ship: v.ship.as_ref().map(|s| s.name.clone()).unwrap_or_default(),
@@ -640,8 +750,44 @@ async fn voyage_form(state: &AppState, v: &Voyage) -> VoyageFormView {
         shares: share_rows_of(&repo::voyage_shares(&state.pool, v.id).await.unwrap_or_default()),
         owner: v.logged_by.to_string(),
         move_loads: false,
+        route: with_route.then(|| route_form(v)),
         error: None,
     }
+}
+
+/// The route editor as submitted, checked against the voyage: the new
+/// stops, where each old stop went, the open loads' picks, and where the
+/// voyage now is. A stop a sold load used can't go.
+async fn parse_route_edit(state: &AppState, v: &Voyage, form: &FormData, rf: &RouteFormView) -> Result<RouteEdit, String> {
+    let route = parse_route(state, &rf.stops).await?;
+    let remap: Vec<(u32, u32)> = (0..v.route.len() as u32)
+        .filter_map(|old| stop_index(&route, &format!("s{old}")).map(|n| (old, n)))
+        .collect();
+    let map = |old: u32| remap.iter().find(|(o, _)| *o == old).map(|(_, n)| *n);
+    for l in v.loads.iter().filter(|l| l.is_sold()) {
+        let p = map(l.pickup_stop);
+        let d = l.drop_stop.map(map);
+        let kept = p.is_some() && d.map_or(true, |d| d.is_some_and(|d| Some(d) > p));
+        if !kept {
+            return Err(format!(
+                "{} was already sold on this route, at {} -- keep that stop, and keep it after where it was picked up.",
+                l.commodity.to_uppercase(),
+                l.drop_stop.map(|d| v.stop_name(d)).unwrap_or_else(|| v.stop_name(l.pickup_stop))
+            ));
+        }
+    }
+    let ids = form.all("assign_load");
+    let mut assign = Vec::new();
+    for (i, id) in ids.iter().enumerate() {
+        let Ok(id) = id.parse::<i64>() else { continue };
+        let Some(l) = v.loads.iter().find(|l| l.id == id && l.is_open()) else { continue };
+        let (p, d) = pick_stops(&route, form.nth("assign_pickup", i), form.nth("assign_drop", i))
+            .map_err(|e| format!("{}: {e}", l.commodity.to_uppercase()))?;
+        assign.push((id, p, d));
+    }
+    let last = route.len().saturating_sub(1) as u32;
+    let at_stop = stop_index(&route, &rf.at).unwrap_or(map(v.at_stop).unwrap_or(0)).min(last);
+    Ok(RouteEdit { stops: route.into_iter().map(|(_, t)| t).collect(), remap, assign, at_stop })
 }
 
 /// Validates and saves the voyage form (ship, date, notes, owner, who logged it,
@@ -658,6 +804,30 @@ async fn save_voyage_form(state: &AppState, v: &Voyage, body: &str) -> Result<()
         shares: share_rows_from(&form),
         owner: form.get("logged_by").into(),
         move_loads: form.get("move_loads") == "1",
+        route: (form.count("stop_key") > 0).then(|| RouteFormView {
+            stops: route_rows_from(&form),
+            at: form.get("at_stop").into(),
+            show_at: true,
+            loads: form
+                .all("assign_load")
+                .iter()
+                .enumerate()
+                .map(|(i, id)| {
+                    let load_id = id.parse().unwrap_or(0);
+                    RouteAssign {
+                        load_id,
+                        label: v
+                            .loads
+                            .iter()
+                            .find(|l| l.id == load_id)
+                            .map(|l| format!("{} · {} SCU", l.commodity.to_uppercase(), l.scu()))
+                            .unwrap_or_default(),
+                        pickup: form.nth("assign_pickup", i).into(),
+                        drop: form.nth("assign_drop", i).into(),
+                    }
+                })
+                .collect(),
+        }),
         error: None,
     };
     let parsed = async {
@@ -667,7 +837,11 @@ async fn save_voyage_form(state: &AppState, v: &Voyage, body: &str) -> Result<()
         let entered_by = pick_member(&view.entered_by, v.entered_by, &view.users, "Logged by")?;
         // the run's owner sells by default and keeps the remainder
         let shares = parse_shares(&view.shares, &view.users, logged_by, "run's owner")?;
-        Ok::<_, String>(EditVoyage { ship_id, bought_at, notes: opt(&view.notes), logged_by, move_loads: view.move_loads, entered_by, shares })
+        let route = match &view.route {
+            Some(rf) => Some(parse_route_edit(state, v, &form, rf).await?),
+            None => None,
+        };
+        Ok::<_, String>(EditVoyage { ship_id, bought_at, notes: opt(&view.notes), logged_by, move_loads: view.move_loads, entered_by, shares, route })
     }
     .await;
     let edit = match parsed {
@@ -699,7 +873,7 @@ fn voyage_overlay(v: &Voyage, f: VoyageFormView, status: StatusCode) -> Response
 /// voyage: the ledger's way in to one that's already closed.
 pub async fn voyage_details_form(Db(state): Db, _user: CurrentUser, Path(id): Path<i64>) -> Response {
     match find_voyage(&state, id).await {
-        Ok(v) => voyage_overlay(&v, voyage_form(&state, &v).await, StatusCode::OK),
+        Ok(v) => voyage_overlay(&v, voyage_form(&state, &v, false).await, StatusCode::OK),
         Err(r) => r,
     }
 }
@@ -770,16 +944,32 @@ pub async fn voyage_move(Db(state): Db, user: CurrentUser, Path(id): Path<i64>, 
     }
 }
 
+/// `POST /voyages/:id/advance` -- `[NEXT STOP]`: the voyage reaches the next
+/// stop on its route; whatever is picked up there goes aboard.
+pub async fn voyage_advance(Db(state): Db, _user: CurrentUser, Path(id): Path<i64>) -> Response {
+    if let Err(r) = find_voyage(&state, id).await {
+        return r;
+    }
+    if let Err(e) = repo::advance_voyage(&state.pool, id).await {
+        tracing::error!(error = %e, "failed to advance voyage");
+        return (StatusCode::INTERNAL_SERVER_ERROR, "could not move the voyage on").into_response();
+    }
+    match ledger(&state).await {
+        Ok(l) => open_cargo_response(&l),
+        Err(r) => r,
+    }
+}
+
 /// `GET /voyages/:id/loads/new` -- single-load form under the header.
 pub async fn add_load_form(Db(state): Db, _user: CurrentUser, Path(id): Path<i64>) -> Response {
     match find_voyage(&state, id).await {
         Ok(v) => {
-            let terminal = v
-                .loads
-                .last()
-                .map(|l| l.buy_terminal.clone())
-                .unwrap_or_default();
-            let mut form = LoadFormView::blank(&terminal);
+            // picked up where the voyage is now, bound for the last stop
+            let mut form = LoadFormView::blank(route_options(&v));
+            form.pickup = v.at_stop.to_string();
+            if form.drop.parse::<u32>().is_ok_and(|d| d <= v.at_stop) {
+                form.drop = String::new();
+            }
             form.show_status = true;
             form.bought_by = v.logged_by.to_string();
             form.users = repo::list_users(&state.pool).await.unwrap_or_default();
@@ -798,6 +988,7 @@ pub async fn add_load(Db(state): Db, _user: CurrentUser, Path(id): Path<i64>, bo
     let form = FormData::parse(&body);
     let mut f = load_form_from(&form, 0);
     f.show_status = true;
+    f.stops = route_options(&v);
     f.users = repo::list_users(&state.pool).await.unwrap_or_default();
     let buyer = match pick_member(&f.bought_by, v.logged_by, &f.users, "Bought by") {
         Ok(id) => id,
@@ -806,12 +997,18 @@ pub async fn add_load(Db(state): Db, _user: CurrentUser, Path(id): Path<i64>, bo
             return head_with(&v, VoyageExtra::AddLoad(f), StatusCode::UNPROCESSABLE_ENTITY);
         }
     };
-    match parse_load_line(&state, &f, true, 0).await {
+    match parse_load_line(&state, &f, true, 0, &route_of(&v)).await {
         Err(e) => {
             f.error = Some(e);
             head_with(&v, VoyageExtra::AddLoad(f), StatusCode::UNPROCESSABLE_ENTITY)
         }
         Ok(p) => {
+            // a pickup the voyage hasn't reached yet waits for it
+            let (whereabouts, stored_at) = match p.whereabouts {
+                Some(Whereabouts::Stored) => (Whereabouts::Stored, p.stored_at),
+                _ if p.pickup_stop > v.at_stop => (Whereabouts::AwaitingPickup, None),
+                w => (w.unwrap_or(Whereabouts::Aboard), p.stored_at),
+            };
             let new = NewLoad {
                 kind: p.kind,
                 reward: p.reward,
@@ -820,11 +1017,12 @@ pub async fn add_load(Db(state): Db, _user: CurrentUser, Path(id): Path<i64>, bo
                 price_mode: p.price_mode,
                 buy_price_scu: p.buy_price_scu,
                 buy_price_lot: p.buy_price_lot,
-                stop_no: p.stop_no,
+                pickup_stop: p.pickup_stop,
+                drop_stop: p.drop_stop,
                 destination: p.destination,
                 boxes: p.boxes,
-                whereabouts: p.whereabouts.unwrap_or(Whereabouts::Aboard),
-                stored_at: p.stored_at,
+                whereabouts,
+                stored_at,
                 notes: p.notes,
             };
             if let Err(e) = repo::add_load(&state.pool, id, buyer, &new).await {
@@ -1008,7 +1206,11 @@ pub async fn load_edit_form(Db(state): Db, _user: CurrentUser, Path(id): Path<i6
         Ok(l) => l,
         Err(r) => return r,
     };
-    let mut form = LoadFormView::from_load(&load);
+    let v = match find_voyage(&state, load.voyage_id).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let mut form = LoadFormView::from_load(&load, &v);
     form.show_status = true;
     form.users = repo::list_users(&state.pool).await.unwrap_or_default();
     load_response(&state, id, LoadExtra::Edit(form), StatusCode::OK).await
@@ -1020,13 +1222,18 @@ pub async fn load_update(Db(state): Db, _user: CurrentUser, Path(id): Path<i64>,
         Ok(l) => l,
         Err(r) => return r,
     };
+    let v = match find_voyage(&state, load.voyage_id).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
     let form = FormData::parse(&body);
     let mut f = load_form_from(&form, 0);
-    f.boxes = views::LoadFormView::from_load(&load).boxes;
+    f.boxes = views::LoadFormView::from_load(&load, &v).boxes;
+    f.stops = route_options(&v);
     f.show_status = true;
     f.users = repo::list_users(&state.pool).await.unwrap_or_default();
     let parsed = match pick_member(&f.bought_by, load.bought_by, &f.users, if load.is_haul() { "Hauled by" } else { "Bought by" }) {
-        Ok(buyer) => parse_load_line(&state, &f, false, load.scu()).await.map(|p| (buyer, p)),
+        Ok(buyer) => parse_load_line(&state, &f, false, load.scu(), &route_of(&v)).await.map(|p| (buyer, p)),
         Err(e) => Err(e),
     };
     match parsed {
@@ -1043,7 +1250,8 @@ pub async fn load_update(Db(state): Db, _user: CurrentUser, Path(id): Path<i64>,
                 price_mode: p.price_mode,
                 buy_price_scu: p.buy_price_scu,
                 buy_price_lot: p.buy_price_lot,
-                stop_no: p.stop_no,
+                pickup_stop: p.pickup_stop,
+                drop_stop: p.drop_stop,
                 destination: p.destination,
                 whereabouts: p.whereabouts,
                 stored_at: p.stored_at,
