@@ -5,6 +5,19 @@ version badge in the corner of the site shows.
 
 ## 0.3.5
 
+### Added
+- **[FULL SCREEN] gives the terminal the whole display.** It's in the rail
+  next to *Close* and hides the browser's tabs and toolbars; *Exit full
+  screen*, Esc or F11 brings them back. Switching between the Ledger and the
+  Leaderboard drops you out for a moment, and your first click or key on
+  the next screen puts you back. In Chrome and Edge a quick Esc still
+  closes an open form; hold Esc to leave full screen.
+- **Ripae installs as a desktop app.** In Chrome or Edge, *[INSTALL]* in
+  the rail (or the install icon in the address bar) puts Ripae in its own
+  window with its own icon in your taskbar and app launcher. On a Mac or
+  iPhone in Safari, use *Share → Add to Dock / Add to Home Screen*. The tab
+  icon is new too: a green *R_* on the terminal glass.
+
 ### Changed
 - **aUEC fields put the commas in for you.** Buy and sell prices, lot
   totals, wallet balances, contract rewards and crew flat fees now group

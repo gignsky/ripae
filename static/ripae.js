@@ -733,6 +733,76 @@
     else splash.hidden = true;
   }
 
+  /* ---- [FULL SCREEN]: the terminal takes the whole display. A page load (Ledger <-> Leaderboard,
+          test mode) drops fullscreen and browsers only re-enter it on a gesture, so a session flag
+          puts it back on the first click or key of the next page. ---- */
+  (function () {
+    var btn = document.getElementById("fullscreen"), root = document.documentElement;
+    var FS_KEY = "ripae.fullscreen";
+    if (!btn || !(document.fullscreenEnabled || document.webkitFullscreenEnabled)) return; // iPhone Safari: no button
+    btn.hidden = false;
+    function current() { return document.fullscreenElement || document.webkitFullscreenElement; }
+    function enter() {
+      var p = root.requestFullscreen ? root.requestFullscreen({ navigationUI: "hide" }) : root.webkitRequestFullscreen();
+      // keep Esc for the page's overlays (holding Esc still leaves fullscreen); Chromium only
+      if (p && p.then) p.then(function () {
+        if (navigator.keyboard && navigator.keyboard.lock) navigator.keyboard.lock(["Escape"]).catch(function () {});
+      }, function () {});
+    }
+    function leave() {
+      if (document.exitFullscreen) document.exitFullscreen().catch(function () {});
+      else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+    }
+    function want(on) { try { if (on) sessionStorage.setItem(FS_KEY, "1"); else sessionStorage.removeItem(FS_KEY); } catch (e) {} }
+    function wanted() { try { return sessionStorage.getItem(FS_KEY) === "1"; } catch (e) { return false; } }
+    var leaving = false; // a navigation drops fullscreen too; that isn't the member turning it off
+    window.addEventListener("beforeunload", function () { leaving = true; });
+    window.addEventListener("pagehide", function () { leaving = true; });
+    window.addEventListener("pageshow", function () { leaving = false; });
+    function label() {
+      var on = !!current();
+      btn.textContent = on ? "Exit full screen" : "Full screen";
+      btn.classList.toggle("on", on);
+      btn.setAttribute("aria-pressed", on ? "true" : "false");
+      return on;
+    }
+    function changed() {
+      if (label()) want(true); else if (!leaving) want(false); // left on purpose: the button, Esc, F11
+    }
+    document.addEventListener("fullscreenchange", changed);
+    document.addEventListener("webkitfullscreenchange", changed);
+    // blur first: a Space/Enter keyup on the still-focused button would otherwise toggle it straight back
+    btn.addEventListener("click", function (e) { e.stopPropagation(); btn.blur(); if (current()) leave(); else enter(); });
+    label();
+    if (wanted() && !current()) {
+      var again = function (e) {
+        if (e.type === "keydown" && (e.key === "Escape" || e.key === "F11" || e.key === "Tab")) return; // not gestures browsers honour
+        off();
+        if (e.target !== btn && wanted() && !current()) enter(); // the button handles its own click
+      };
+      var off = function () { document.removeEventListener("pointerdown", again, true); document.removeEventListener("keydown", again, true); };
+      document.addEventListener("pointerdown", again, true);
+      document.addEventListener("keydown", again, true);
+    }
+  })();
+
+  /* ---- [INSTALL]: Chromium offers the app install (manifest.webmanifest) through
+          beforeinstallprompt; the button only shows while that offer stands, so it's
+          gone in Firefox/Safari, once installed, and inside the installed app. ---- */
+  (function () {
+    var btn = document.getElementById("install-app"), offer = null;
+    if (!btn) return;
+    window.addEventListener("beforeinstallprompt", function (e) { e.preventDefault(); offer = e; btn.hidden = false; });
+    window.addEventListener("appinstalled", function () { offer = null; btn.hidden = true; });
+    btn.addEventListener("click", function (e) {
+      e.stopPropagation(); btn.blur();
+      if (!offer) return;
+      offer.prompt();
+      // a prompt can only be shown once; if it's declined, the browser offers again later and the button comes back
+      offer = null; btn.hidden = true;
+    });
+  })();
+
   /* ---- leaderboard meters ---- */
   document.querySelectorAll(".meter[data-pct]").forEach(function (m) { m.style.setProperty("--p", m.dataset.pct); });
 })();
