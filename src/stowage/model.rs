@@ -349,6 +349,11 @@ pub struct Voyage {
     pub route: Vec<String>,
     /// The route stop the voyage last reached (0 = still at its start).
     pub at_stop: u32,
+    /// The actual hull flying it (`fleet`), when one was picked; `ship` is
+    /// that hull's model. `None` on every voyage from before the fleet.
+    pub hull_id: Option<i64>,
+    /// That hull as the crew calls it: `"Nickname" (Model)`, or the model.
+    pub hull_label: Option<String>,
     pub loads: Vec<Load>,
     /// Who flew it and on what terms the profit splits (`voyage_crew`):
     /// the run's owner first, then in the order they joined.
@@ -2257,6 +2262,8 @@ pub(crate) mod fixtures {
             notes: None,
             route: vec!["ArcCorp Mining Area 141".into(), "Area18 TDD".into()],
             at_stop: 0,
+            hull_id: None,
+            hull_label: None,
             loads: loads
                 .into_iter()
                 .map(|mut l| {

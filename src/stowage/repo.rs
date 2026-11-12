@@ -23,6 +23,8 @@ use super::model::{
 #[derive(Debug, Clone)]
 pub struct NewVoyage {
     pub ship_id: Option<i64>,
+    /// The hull flying it (its model is `ship_id`); pulled out at the start.
+    pub hull_id: Option<i64>,
     pub bought_at: String,
     pub notes: Option<String>,
     /// Start, then the stops in order (at least the start).
@@ -52,6 +54,7 @@ pub struct NewLoad {
 #[derive(Debug, Clone)]
 pub struct EditVoyage {
     pub ship_id: Option<i64>,
+    pub hull_id: Option<i64>,
     pub bought_at: String,
     pub notes: Option<String>,
     /// Whose run it is.
@@ -136,6 +139,11 @@ fn row_to_voyage(row: &SqliteRow) -> Result<Voyage> {
         notes: row.try_get("notes")?,
         route: Vec::new(),
         at_stop: row.try_get::<i64, _>("at_stop")?.max(0) as u32,
+        hull_id: row.try_get("hull_id")?,
+        hull_label: match row.try_get::<Option<String>, _>("hull_model")? {
+            Some(m) => Some(crate::fleet::model::hull_label(&m, row.try_get::<Option<String>, _>("hull_nickname")?.as_deref())),
+            None => None,
+        },
         loads: Vec::new(),
         crew: Vec::new(),
     })
@@ -206,11 +214,12 @@ fn row_to_share(row: &SqliteRow) -> Result<Share> {
 
 const SELECT_VOYAGE: &str = "SELECT v.id, v.logged_by, u.display_name AS logged_by_name,
     COALESCE(v.entered_by, v.logged_by) AS entered_by, e.display_name AS entered_by_name,
-    v.bought_at, v.notes, v.at_stop,
+    v.bought_at, v.notes, v.at_stop, v.hull_id, COALESCE(hs.name, h.model) AS hull_model, h.nickname AS hull_nickname,
     s.id AS ship_id, s.manufacturer AS ship_manufacturer, s.name AS ship_name, s.short AS ship_short,
     s.sc_cargo_slug AS ship_sc_cargo_slug, s.capacity_scu AS ship_capacity_scu, s.concept AS ship_concept
     FROM voyages v JOIN users u ON u.id = v.logged_by
-    JOIN users e ON e.id = COALESCE(v.entered_by, v.logged_by) LEFT JOIN ships s ON s.id = v.ship_id";
+    JOIN users e ON e.id = COALESCE(v.entered_by, v.logged_by) LEFT JOIN ships s ON s.id = v.ship_id
+    LEFT JOIN hulls h ON h.id = v.hull_id LEFT JOIN ships hs ON hs.id = h.ship_id";
 
 const SELECT_LOAD: &str = "SELECT l.id, l.voyage_id, l.submitted_by, u.display_name AS submitted_by_name,
     COALESCE(l.bought_by, l.submitted_by) AS bought_by, b.display_name AS bought_by_name,
@@ -389,6 +398,7 @@ pub async fn advance_voyage(pool: &SqlitePool, voyage_id: i64) -> Result<u32> {
     let stops = route_of(&mut tx, voyage_id).await?.len() as i64;
     let next = (at + 1).min((stops - 1).max(0)) as u32;
     set_at_stop_in(&mut tx, voyage_id, next).await?;
+    crate::fleet::repo::follow_voyage_in(&mut tx, voyage_id).await?;
     tx.commit().await?;
     Ok(next)
 }
@@ -684,11 +694,12 @@ pub async fn create_voyage(
 ) -> Result<i64> {
     let mut tx = pool.begin().await?;
     let row = sqlx::query(
-        "INSERT INTO voyages (logged_by, entered_by, ship_id, bought_at, notes) VALUES (?, ?, ?, ?, ?) RETURNING id",
+        "INSERT INTO voyages (logged_by, entered_by, ship_id, hull_id, bought_at, notes) VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
     )
     .bind(logged_by)
     .bind(entered_by)
     .bind(voyage.ship_id)
+    .bind(voyage.hull_id)
     .bind(&voyage.bought_at)
     .bind(voyage.notes.as_deref())
     .fetch_one(&mut *tx)
@@ -699,6 +710,8 @@ pub async fn create_voyage(
         insert_load(&mut tx, voyage_id, logged_by, load).await?;
     }
     sync_crew(&mut tx, voyage_id).await?;
+    // its hull is pulled out where the route starts
+    crate::fleet::repo::follow_voyage_in(&mut tx, voyage_id).await?;
     tx.commit().await?;
     Ok(voyage_id)
 }
@@ -728,6 +741,10 @@ async fn touch_voyage(conn: &mut SqliteConnection, voyage_id: i64) -> Result<()>
 
 pub async fn update_voyage(pool: &SqlitePool, id: i64, edit: &EditVoyage) -> Result<()> {
     let mut tx = pool.begin().await?;
+    let (hull_before, at_before): (Option<i64>, i64) = sqlx::query_as("SELECT hull_id, at_stop FROM voyages WHERE id = ?")
+        .bind(id)
+        .fetch_one(&mut *tx)
+        .await?;
     if edit.move_loads {
         // a sold row's submitted_by is its seller, so only open loads follow the owner
         sqlx::query(
@@ -740,9 +757,10 @@ pub async fn update_voyage(pool: &SqlitePool, id: i64, edit: &EditVoyage) -> Res
         .await?;
     }
     sqlx::query(
-        "UPDATE voyages SET ship_id = ?, bought_at = ?, notes = ?, logged_by = ?, entered_by = ?, updated_at = datetime('now') WHERE id = ?",
+        "UPDATE voyages SET ship_id = ?, hull_id = ?, bought_at = ?, notes = ?, logged_by = ?, entered_by = ?, updated_at = datetime('now') WHERE id = ?",
     )
     .bind(edit.ship_id)
+    .bind(edit.hull_id)
     .bind(&edit.bought_at)
     .bind(edit.notes.as_deref())
     .bind(edit.logged_by)
@@ -792,6 +810,17 @@ pub async fn update_voyage(pool: &SqlitePool, id: i64, edit: &EditVoyage) -> Res
         }
     }
     sync_crew(&mut tx, id).await?;
+    // a new hull on a voyage still under way, or the voyage moved along its
+    // route: the hull goes where the voyage is. Edits that touch neither
+    // leave a hull that's since been stored alone.
+    let at_now: i64 = sqlx::query_scalar("SELECT at_stop FROM voyages WHERE id = ?").bind(id).fetch_one(&mut *tx).await?;
+    let open: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM loads WHERE voyage_id = ? AND sold_at IS NULL")
+        .bind(id)
+        .fetch_one(&mut *tx)
+        .await?;
+    if open > 0 && (edit.hull_id != hull_before || at_now != at_before) {
+        crate::fleet::repo::follow_voyage_in(&mut tx, id).await?;
+    }
     tx.commit().await?;
     Ok(())
 }
@@ -875,8 +904,8 @@ pub async fn move_load(
         }
         MoveTarget::New => {
             let row = sqlx::query(
-                "INSERT INTO voyages (logged_by, entered_by, ship_id, bought_at, notes, at_stop)
-                 SELECT ?, ?, ship_id, bought_at, NULL, at_stop FROM voyages WHERE id = ? RETURNING id",
+                "INSERT INTO voyages (logged_by, entered_by, ship_id, hull_id, bought_at, notes, at_stop)
+                 SELECT ?, ?, ship_id, hull_id, bought_at, NULL, at_stop FROM voyages WHERE id = ? RETURNING id",
             )
             .bind(actor)
             .bind(actor)
@@ -1227,6 +1256,7 @@ mod tests {
     fn new_voyage(ship_id: Option<i64>) -> NewVoyage {
         NewVoyage {
             ship_id,
+            hull_id: None,
             bought_at: "2026-11-08".into(),
             notes: None,
             route: vec!["ArcCorp Mining Area 141".into(), "Area18 TDD".into()],
@@ -1524,7 +1554,7 @@ mod tests {
         let v = create_voyage(&pool, jt, jt, &new_voyage(None), &[new_load("Laranite", vec![(1, 8)], None)])
             .await
             .unwrap();
-        let edit = EditVoyage { ship_id: None, bought_at: "2026-11-08".into(), notes: None, logged_by: jt, move_loads: false, entered_by: gig, crew: None, route: None };
+        let edit = EditVoyage { ship_id: None, hull_id: None, bought_at: "2026-11-08".into(), notes: None, logged_by: jt, move_loads: false, entered_by: gig, crew: None, route: None };
         update_voyage(&pool, v, &edit).await.unwrap();
         let voyage = find_voyage(&pool, v).await.unwrap().unwrap();
         assert_eq!((voyage.logged_by, voyage.entered_by), (jt, gig));
@@ -1552,7 +1582,7 @@ mod tests {
         close_load(&pool, sold.id, gig, &sale, "2026-11-09", "Area18 TDD").await.unwrap();
 
         // by default only the run changes hands
-        let edit = EditVoyage { ship_id: None, bought_at: "2026-11-08".into(), notes: None, logged_by: jt, move_loads: false, entered_by: gig, crew: None, route: None };
+        let edit = EditVoyage { ship_id: None, hull_id: None, bought_at: "2026-11-08".into(), notes: None, logged_by: jt, move_loads: false, entered_by: gig, crew: None, route: None };
         update_voyage(&pool, v, &edit).await.unwrap();
         let voyage = find_voyage(&pool, v).await.unwrap().unwrap();
         assert_eq!((voyage.logged_by, voyage.logged_by_name.as_str(), voyage.entered_by), (jt, "JT", gig));
@@ -1716,7 +1746,7 @@ mod tests {
         assert_eq!(crew_of(&find_voyage(&pool, v).await.unwrap().unwrap()), vec![CrewTerms::member(gig)]);
 
         let split = vec![terms(gig, 0.0, 0.0, None, None), terms(jt, 50.0, 1000.0, Some(gig), Some("crew"))];
-        let edit = EditVoyage { ship_id: None, bought_at: "2026-11-08".into(), notes: None, logged_by: gig, move_loads: false, entered_by: gig, crew: Some(split.clone()), route: None };
+        let edit = EditVoyage { ship_id: None, hull_id: None, bought_at: "2026-11-08".into(), notes: None, logged_by: gig, move_loads: false, entered_by: gig, crew: Some(split.clone()), route: None };
         update_voyage(&pool, v, &edit).await.unwrap();
         let saved = find_voyage(&pool, v).await.unwrap().unwrap();
         assert_eq!(crew_of(&saved), split);
@@ -1770,7 +1800,9 @@ mod tests {
     async fn migration_0012_keeps_every_figure_and_moves_shares_to_the_crew() {
         let pool = db::connect(":memory:").await.unwrap();
         let migrations = sqlx::migrate!("./migrations");
-        for m in migrations.iter().filter(|m| m.version < 12) {
+        // every other migration first (0014's hulls are joined by the voyage
+        // reads), so only 0012 runs on the seeded rows
+        for m in migrations.iter().filter(|m| m.version != 12) {
             sqlx::raw_sql(&m.sql).execute(&pool).await.unwrap();
         }
         sqlx::raw_sql(
@@ -1828,7 +1860,7 @@ mod tests {
             ShareInput { to_user: 3, paid_to: None, kind: ShareKind::Flat, amount: 1000.0, reason: Some("fuel".into()) },
         ];
 
-        for m in migrations.iter().filter(|m| m.version >= 12) {
+        for m in migrations.iter().filter(|m| m.version == 12) {
             sqlx::raw_sql(&m.sql).execute(&pool).await.unwrap();
         }
         let after = list_voyages(&pool).await.unwrap();
@@ -1985,6 +2017,7 @@ mod tests {
         };
         let edit = EditVoyage {
             ship_id: None,
+            hull_id: None,
             bought_at: "2026-11-08".into(),
             notes: None,
             logged_by: gig,

@@ -408,3 +408,35 @@ body.test-mode .screen{outline:1px dashed var(--amber);outline-offset:.6rem}
 .tm-group li,.tm-conflicts li{overflow-wrap:anywhere}
 .tm-conflicts{border:1px solid var(--red);padding:.6rem .8rem;color:var(--red)}
 .tm-acts{display:flex;flex-wrap:wrap;gap:.6rem 1.2rem;align-items:center}
+
+/* ================= roll 8: the fleet ================= */
+.fleet-body{display:grid;gap:1.1rem;min-width:0}
+#fleet-glance{grid-template-columns:repeat(auto-fit,minmax(9rem,1fr))}
+.places{list-style:none;margin:0;padding:.6rem .9rem;display:flex;flex-wrap:wrap;gap:.3rem 1.4rem}
+.places b{font-weight:400}
+.fleet-filter{padding:.6rem .9rem}
+.fleet-filter .fields{grid-template-columns:repeat(auto-fit,minmax(10rem,1fr));align-items:end}
+table.fleet td.hull-name small{display:block;font-size:.75rem}
+table.fleet td.hull-name .status{margin-top:.2rem}
+table.fleet tr.carried td.hull-name{padding-left:calc(var(--d,0) * 1.4rem + .6rem)}
+table.fleet .nest{color:var(--fg-faint)}
+table.fleet .cmd.hull-edit{white-space:normal;text-align:left}
+table.fleet td small{display:block}
+.status.out{color:var(--fg)}
+.status.planned{color:var(--cyan);border-style:dashed}
+.status.destroyed{color:var(--red)}
+.status.loaner{color:var(--amber);border-style:dotted}
+.flying{color:var(--fg)}
+form.hull-act{display:grid;gap:.3rem;margin:0 0 .3rem;min-width:0}
+form.hull-act input{min-width:0;padding:.2rem .4rem}
+form.hull-act .actions{flex-wrap:wrap}
+td.cmds{width:15rem}
+.store-prompt{display:flex;flex-wrap:wrap;gap:.4rem;align-items:baseline;justify-content:center}
+@media (max-width:980px){
+  table.fleet tr.carried{border-left:3px solid var(--fg-faint)}
+  table.fleet tr.carried td.hull-name{padding-left:0}
+  .cards td.cmds{grid-column:1/-1;width:auto}
+}
+[data-overlay=hull]{width:min(52rem,100%);justify-items:stretch}
+[data-overlay=hull] .tag{text-align:center}
+table.fleet td.owner{white-space:nowrap}

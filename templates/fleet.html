@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel rs" id="fleet-panel">
+  <header><h2>Fleet</h2><span class="hint">Every hull the crew owns, ships and ground vehicles. One status at a time; only a hull's owner can pull it out. A hull carried in another goes wherever its carrier goes.</span>
+    <span class="actions"><button class="cmd boxed" type="button" id="add-hull" hx-get="/hulls/new" hx-target="#overlay" hx-swap="innerHTML">+ Add hull</button></span></header>
+  <form class="run fleet-filter" method="get" action="/fleet" id="fleet-filter">
+    <div class="fields">
+      <label>Owner<select name="owner"><option value="">Whole crew</option>{% for u in owners %}<option value="{{ u.id }}"{% if fv_q.owner == u.id.to_string() %} selected{% endif %}>{{ u.display_name|upper }}</option>{% endfor %}</select></label>
+      <label>Status<select name="status">
+        <option value=""{% if fv_q.status == "" %} selected{% endif %}>Any</option>
+        <option value="out"{% if fv_q.status == "out" %} selected{% endif %}>Pulled out</option>
+        <option value="stored"{% if fv_q.status == "stored" %} selected{% endif %}>Stored</option>
+        <option value="destroyed"{% if fv_q.status == "destroyed" %} selected{% endif %}>Claim pending</option>
+        <option value="planned"{% if fv_q.status == "planned" %} selected{% endif %}>On order</option>
+        <option value="loaner"{% if fv_q.status == "loaner" %} selected{% endif %}>Loaners</option>
+      </select></label>
+      <label>Sort<select name="sort">
+        <option value="owner"{% if fv_q.sort == "owner" %} selected{% endif %}>By owner</option>
+        <option value="model"{% if fv_q.sort == "model" %} selected{% endif %}>By model</option>
+        <option value="status"{% if fv_q.sort == "status" %} selected{% endif %}>By status</option>
+        <option value="location"{% if fv_q.sort == "location" %} selected{% endif %}>By location</option>
+      </select></label>
+      <span class="line-cmd"><button class="cmd" type="submit">Show</button></span>
+    </div>
+  </form>
+</section>
+
+{{ fleet_html|safe }}
+
+{# Pick-lists: models are the ships list plus anything typed before;
+   locations the terminals plus every place a hull has been left. Suggestions,
+   not gates. #}
+<datalist id="pick-models">
+  {% for name in models %}<option value="{{ name }}"></option>{% endfor %}
+</datalist>
+<datalist id="pick-locations">
+  {% for name in locations %}<option value="{{ name }}"></option>{% endfor %}
+</datalist>
+{% endblock %}

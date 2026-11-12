@@ -343,7 +343,11 @@ impl VoyageView {
             next_stop: v.next_stop().map(|n| short_terminal(&v.stop_name(n))),
             label: format!("Voyage {}", v.id),
             date_short: short_date(&v.bought_at),
-            ship_name: v.ship.as_ref().map(|s| s.name.clone()).unwrap_or_else(|| "—".into()),
+            ship_name: v
+                .hull_label
+                .clone()
+                .or_else(|| v.ship.as_ref().map(|s| s.name.clone()))
+                .unwrap_or_else(|| "—".into()),
             logged_by_upper: v.entered_by_name.to_uppercase(),
             load_count: open.len(),
             stop_count: v.stop_count(),
@@ -526,6 +530,9 @@ impl RouteFormView {
 pub struct VoyageFormView {
     pub bought_at: String,
     pub ship: String,
+    /// The hull flying it (hull id, `""` = none) and the crew's hulls to pick from.
+    pub hull: String,
+    pub hulls: Vec<crate::fleet::views::HullChoice>,
     pub notes: String,
     /// Who typed the voyage in (user id), correctable here; the crew list.
     pub entered_by: String,
@@ -550,6 +557,9 @@ pub struct NewRunFormView {
     pub logged_by: String,
     pub users: Vec<User>,
     pub ship: String,
+    /// The hull flying it (hull id, `""` = none) and the crew's hulls to pick from.
+    pub hull: String,
+    pub hulls: Vec<crate::fleet::views::HullChoice>,
     pub status: String,
     pub stored_at: String,
     pub notes: String,
