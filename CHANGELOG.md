@@ -3,6 +3,13 @@
 Every notable change to Ripae. Newest first. This file is also what the
 version badge in the corner of the site shows.
 
+## 0.3.4
+
+### Removed
+- **Discord is the only sign-in.** Every member has linked their account
+  to Discord, so the gate's *Crew from before Discord? Claim your account*
+  password form is gone, and the site no longer takes a password at all.
+
 ## 0.3.3
 
 ### Added

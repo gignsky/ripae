@@ -142,51 +142,19 @@ fn profile(guild_id: &str, user: DiscordUser, member: GuildMember) -> Profile {
     Profile { discord_id: user.id, username: user.username, display_name, avatar_url }
 }
 
-/// Why a sign-in that Discord vouched for still doesn't get in.
-#[derive(Debug, PartialEq, Eq)]
-pub enum Refusal {
-    /// Claiming an old account with a Discord account that already signs
-    /// in as someone else.
-    DiscordTaken,
-    /// Claiming an old account that is already linked to another Discord.
-    AccountTaken,
-}
-
-/// The `users.id` this Discord member signs in as: the account they're
-/// claiming (`claim`, after a password sign-in), the one already linked to
-/// them, or a new one. Their handle, name and avatar are refreshed from
-/// `p` either way.
-pub async fn sign_in(
-    pool: &SqlitePool,
-    p: &Profile,
-    claim: Option<i64>,
-) -> Result<std::result::Result<i64, Refusal>> {
+/// The `users.id` this Discord member signs in as: the account already
+/// linked to them, or a new one. Their handle, name and avatar are
+/// refreshed from `p` either way. (Until 0.3.4 an account from before
+/// Discord could be claimed with its password; every member has claimed
+/// theirs, so that path is gone.)
+pub async fn sign_in(pool: &SqlitePool, p: &Profile) -> Result<i64> {
     let owner: Option<i64> = sqlx::query_scalar("SELECT id FROM users WHERE discord_id = ?")
         .bind(&p.discord_id)
         .fetch_optional(pool)
         .await?;
-    let id = match (claim, owner) {
-        (Some(c), Some(o)) if o != c => return Ok(Err(Refusal::DiscordTaken)),
-        (Some(c), _) => {
-            let linked: Option<String> =
-                sqlx::query_scalar::<_, Option<String>>("SELECT discord_id FROM users WHERE id = ?")
-                    .bind(c)
-                    .fetch_optional(pool)
-                    .await?
-                    .with_context(|| format!("claimed account {c} no longer exists"))?;
-            if linked.is_some_and(|d| d != p.discord_id) {
-                return Ok(Err(Refusal::AccountTaken));
-            }
-            sqlx::query("UPDATE users SET discord_id = ? WHERE id = ?")
-                .bind(&p.discord_id)
-                .bind(c)
-                .execute(pool)
-                .await?;
-            tracing::info!(user_id = c, discord_id = %p.discord_id, "linked Discord account");
-            c
-        }
-        (None, Some(o)) => o,
-        (None, None) => {
+    let id = match owner {
+        Some(o) => o,
+        None => {
             let handle = free_handle(pool, p, None).await?;
             let id: i64 = sqlx::query_scalar(
                 "INSERT INTO users (handle, display_name, password_hash, discord_id, avatar_url) \
@@ -199,7 +167,7 @@ pub async fn sign_in(
             .fetch_one(pool)
             .await?;
             tracing::info!(user_id = id, %handle, "new crew member from Discord");
-            return Ok(Ok(id));
+            return Ok(id);
         }
     };
 
@@ -211,7 +179,7 @@ pub async fn sign_in(
         .bind(id)
         .execute(pool)
         .await?;
-    Ok(Ok(id))
+    Ok(id)
 }
 
 /// Their Discord username, unless another account already has it as a
@@ -304,11 +272,11 @@ mod tests {
     #[tokio::test]
     async fn first_sign_in_creates_a_member_and_the_next_finds_them() {
         let pool = pool().await;
-        let id = sign_in(&pool, &member("100", "jt", "JT"), None).await.unwrap().unwrap();
+        let id = sign_in(&pool, &member("100", "jt", "JT")).await.unwrap();
         assert_eq!(row(&pool, id).await, ("jt".into(), "JT".into(), Some("100".into()), Some("https://cdn.example/100.png".into())));
 
         // renamed in the server since: same account, new name
-        let again = sign_in(&pool, &member("100", "jt", "First Officer JT"), None).await.unwrap().unwrap();
+        let again = sign_in(&pool, &member("100", "jt", "First Officer JT")).await.unwrap();
         assert_eq!(again, id);
         assert_eq!(row(&pool, id).await.1, "First Officer JT");
         let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users").fetch_one(&pool).await.unwrap();
@@ -316,29 +284,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn claiming_links_the_old_account_and_takes_the_discord_profile() {
+    async fn sign_in_never_takes_over_an_unlinked_account() {
         let pool = pool().await;
-        let gig = seeded(&pool, "lordgig", "Lord Gig").await;
-        let id = sign_in(&pool, &member("200", "lord.gig", "Gig"), Some(gig)).await.unwrap().unwrap();
-        assert_eq!(id, gig);
-        assert_eq!(row(&pool, gig).await, ("lord.gig".into(), "Gig".into(), Some("200".into()), Some("https://cdn.example/200.png".into())));
-        // from now on Discord alone gets them in
-        assert_eq!(sign_in(&pool, &member("200", "lord.gig", "Gig"), None).await.unwrap(), Ok(gig));
-    }
-
-    #[tokio::test]
-    async fn claims_cannot_steal_or_double_link() {
-        let pool = pool().await;
-        let gig = seeded(&pool, "lordgig", "Lord Gig").await;
-        let jt = seeded(&pool, "firstofficer", "JT").await;
-        sign_in(&pool, &member("200", "lordgig", "Gig"), Some(gig)).await.unwrap().unwrap();
-
-        // gig's Discord can't also claim JT's account
-        assert_eq!(sign_in(&pool, &member("200", "lordgig", "Gig"), Some(jt)).await.unwrap(), Err(Refusal::DiscordTaken));
-        // and gig's account can't be re-claimed by another Discord
-        assert_eq!(sign_in(&pool, &member("300", "intruder", "X"), Some(gig)).await.unwrap(), Err(Refusal::AccountTaken));
-        assert_eq!(row(&pool, jt).await.2, None);
-        assert_eq!(row(&pool, gig).await.2, Some("200".into()));
+        let old = seeded(&pool, "firstofficer", "JT").await;
+        // same handle and name as the old account, still a new member
+        let id = sign_in(&pool, &member("300", "firstofficer", "JT")).await.unwrap();
+        assert_ne!(id, old);
+        assert_eq!(row(&pool, old).await.2, None);
+        assert_eq!(row(&pool, id).await.2, Some("300".into()));
     }
 
     #[tokio::test]
@@ -346,14 +299,14 @@ mod tests {
         let pool = pool().await;
         let seeded_gig = seeded(&pool, "lordgig", "Lord Gig").await;
         // someone else whose Discord username is the unclaimed seeded handle
-        let other = sign_in(&pool, &member("1234567", "lordgig", "Not Gig"), None).await.unwrap().unwrap();
+        let other = sign_in(&pool, &member("1234567", "lordgig", "Not Gig")).await.unwrap();
         assert_ne!(other, seeded_gig);
         assert_eq!(row(&pool, other).await.0, "lordgig-4567");
         assert_eq!(row(&pool, seeded_gig).await.0, "lordgig");
 
         // an existing account whose new username is taken keeps its handle
-        let jt = sign_in(&pool, &member("9", "jt", "JT"), None).await.unwrap().unwrap();
-        sign_in(&pool, &member("9", "lordgig", "JT"), None).await.unwrap().unwrap();
+        let jt = sign_in(&pool, &member("9", "jt", "JT")).await.unwrap();
+        sign_in(&pool, &member("9", "lordgig", "JT")).await.unwrap();
         assert_eq!(row(&pool, jt).await.0, "jt");
     }
 }

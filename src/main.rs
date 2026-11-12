@@ -68,6 +68,16 @@ async fn main() -> anyhow::Result<()> {
     let discord = match config.discord.clone() {
         Some(d) => {
             tracing::info!(guild_id = %d.guild_id, redirect_uri = %d.redirect_uri, "Discord sign-in on");
+            // Discord is the only way in (0.3.4): an account never linked to
+            // Discord can't be signed into any more, and its owner signing in
+            // gets a new, empty account. Link it by hand if that happens.
+            let unlinked: Vec<String> =
+                sqlx::query_scalar("SELECT handle FROM users WHERE discord_id IS NULL ORDER BY id")
+                    .fetch_all(&pool)
+                    .await?;
+            if !unlinked.is_empty() {
+                tracing::warn!(?unlinked, "accounts not linked to Discord can no longer sign in");
+            }
             Some(Arc::new(discord::Discord::new(d)?))
         }
         None => None,

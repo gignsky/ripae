@@ -131,12 +131,16 @@ Discord display name) the name on the ledger and leaderboard, and their
 avatar goes on the service record. If the username is already some other
 account's handle, the account keeps the handle it has.
 
-**Claiming the old accounts.** Accounts from before Discord (the seeded
-`lordgig` and `firstofficer`, with their voyages) are claimed once: on the
-gate, open *Crew from before Discord? Claim your account*, enter the old
-handle and password, and Discord links that account to you. From then on
-only Discord signs into it; its password no longer works. An account that
-is never claimed keeps its password but can only use it to claim.
+**Discord is the only way in.** Until 0.3.4 the gate also let an account
+from before Discord (the seeded `lordgig` and `firstofficer`) be claimed
+with its old password. Every member has claimed theirs, so that form and
+`POST /login` are gone whenever Discord is configured; the handle +
+password gate only exists on a copy without Discord (local dev). At boot
+the server logs a warning naming any account still not linked to Discord:
+nobody can sign into it, and its owner signing in with Discord gets a new
+account. To fix that, link it by hand:
+`UPDATE users SET discord_id = '<their Discord user id>' WHERE handle = '<old handle>'`
+(after deleting the empty account Discord created, if there is one).
 
 ## Building the image
 
