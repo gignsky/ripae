@@ -193,6 +193,33 @@
   /* ---- crate mix + price mode: live derivation on any load line (new run, add load, edit) ---- */
   function fmt(n) { return n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
   function fmt0(n) { return Math.round(n).toLocaleString("en-US"); }
+  // an aUEC field as typed ("1,250.50") -> 1250.5
+  function num(v) { return parseFloat(String(v == null ? "" : v).replace(/,/g, "")) || 0; }
+
+  /* ---- aUEC fields ([data-auec]): commas go in as you type, so 1250000 reads 1,250,000. The caret
+          keeps its place among the digits; the server strips the commas again (parse_money). ---- */
+  function groupAuec(raw) {
+    var s = String(raw || "").replace(/[^\d.]/g, ""), dot = s.indexOf(".");
+    var int = dot < 0 ? s : s.slice(0, dot), frac = dot < 0 ? "" : s.slice(dot + 1).replace(/\./g, "");
+    int = int.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+    return dot < 0 ? int : (int || "0") + "." + frac;
+  }
+  function maskAuec(el) {
+    var v = el.value, out = groupAuec(v); if (out === v) return;
+    var focused = document.activeElement === el, at = focused ? el.selectionStart : v.length;
+    var keep = v.slice(0, at).replace(/[^\d.]/g, "").length, pos = 0; // digits and dot left of the caret
+    if (keep && v.slice(0, at).replace(/[^\d.]/g, "").charAt(0) === "." && out.charAt(0) === "0") keep++; // ".5" became "0.5"
+    for (var seen = 0; pos < out.length && seen < keep; pos++) if (/[\d.]/.test(out.charAt(pos))) seen++;
+    el.value = out; if (focused) el.setSelectionRange(pos, pos);
+  }
+  document.addEventListener("input", function (e) {
+    var el = e.target; if (el.matches && el.matches("input[data-auec]") && !e.isComposing) maskAuec(el);
+  }, true); // capture: format before the live calcs read it
+  document.addEventListener("htmx:load", function (e) {
+    var root = e.detail && e.detail.elt; if (!root || !root.querySelectorAll) return;
+    if (root.matches && root.matches("input[data-auec]")) maskAuec(root);
+    root.querySelectorAll("input[data-auec]").forEach(maskAuec);
+  });
   // "2×32, 4×8" or "2x32 4x8" -> [{n:2,size:32},{n:4,size:8}]
   function parseBoxes(str) {
     var out = [];
@@ -223,15 +250,15 @@
       var q = scuVal;
       if (scuL) scuL.hidden = mode.value !== "scu"; if (lotL) lotL.hidden = mode.value !== "lot";
       balL.forEach(function (b) { b.hidden = mode.value !== "balance"; });
-      if (mode.value === "scu" && scuL) { var per = parseFloat(p.value) || 0; scuL.querySelector(".calc").innerHTML = q && per ? "lot = <b>" + fmt(per * q) + "</b> · " + q + " SCU" : "lot = —"; }
+      if (mode.value === "scu" && scuL) { var per = num(p.value); scuL.querySelector(".calc").innerHTML = q && per ? "lot = <b>" + fmt(per * q) + "</b> · " + q + " SCU" : "lot = —"; }
       else if (mode.value === "balance" && bb && ba) {
         var bc = balL[balL.length - 1].querySelector(".calc");
         if (bb.value === "" || ba.value === "") { bc.textContent = "cost = —"; bc.classList.remove("bad"); return; }
-        var cost = (parseFloat(bb.value) || 0) - (parseFloat(ba.value) || 0);
+        var cost = num(bb.value) - num(ba.value);
         bc.innerHTML = cost < 0 ? "balance went up -- swapped?" : "cost = <b>" + fmt0(cost) + "</b>" + (q ? " · per SCU = <b>" + fmt(cost / q) + "</b>" : "");
         bc.classList.toggle("bad", cost < 0);
       }
-      else if (lotL) { var tot = parseFloat(l.value) || 0; lotL.querySelector(".calc").innerHTML = q && tot ? "per SCU = <b>" + fmt(tot / q) + "</b> · " + q + " SCU" : "per SCU = —"; }
+      else if (lotL) { var tot = num(l.value); lotL.querySelector(".calc").innerHTML = q && tot ? "per SCU = <b>" + fmt(tot / q) + "</b> · " + q + " SCU" : "per SCU = —"; }
     }
     if (boxes) boxes.addEventListener("input", function () { recalcBoxes(); recalcPrice(); });
     [mode, p, l, bb, ba].forEach(function (el) { if (el) { el.addEventListener("input", recalcPrice); el.addEventListener("change", recalcPrice); } });
@@ -495,13 +522,13 @@
     }
     function revenue() {
       var q = syncScu();
-      if (mode.value === "scu") { var per = parseFloat(form.querySelector("[name=sell_scu]").value) || 0; return { q: q, rev: per * q, per: per }; }
+      if (mode.value === "scu") { var per = num(form.querySelector("[name=sell_scu]").value); return { q: q, rev: per * q, per: per }; }
       if (mode.value === "balance") {
         var b = form.querySelector("[name=sell_bal_before]").value, a = form.querySelector("[name=sell_bal_after]").value;
-        var d = b === "" || a === "" ? 0 : (parseFloat(a) || 0) - (parseFloat(b) || 0);
+        var d = b === "" || a === "" ? 0 : num(a) - num(b);
         return { q: q, rev: d, per: q ? d / q : 0 };
       }
-      var tot = parseFloat(form.querySelector("[name=sell_lot]").value) || 0; return { q: q, rev: tot, per: q ? tot / q : 0 };
+      var tot = num(form.querySelector("[name=sell_lot]").value); return { q: q, rev: tot, per: q ? tot / q : 0 };
     }
     // the split shown read-only: the crew's terms less the seller's own (or, on the
     // sale editor, the shares as recorded unless re-split by the crew)

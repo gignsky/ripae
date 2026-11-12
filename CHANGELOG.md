@@ -3,6 +3,14 @@
 Every notable change to Ripae. Newest first. This file is also what the
 version badge in the corner of the site shows.
 
+## 0.3.5
+
+### Changed
+- **aUEC fields put the commas in for you.** Buy and sell prices, lot
+  totals, wallet balances, contract rewards and crew flat fees now group
+  digits as you type, so `1250000` reads `1,250,000`, and pasting a figure
+  that already has commas works. Decimals still go in after the point.
+
 ## 0.3.4
 
 ### Removed
