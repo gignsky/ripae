@@ -40,6 +40,8 @@ pub struct CurrentUser {
     #[allow(dead_code)]
     pub handle: String,
     pub display_name: String,
+    /// Every font a quarter larger for this member (`users.big_type`).
+    pub big_type: bool,
 }
 
 /// How the splash plays: the gate (no session), the welcome line (first
@@ -131,16 +133,17 @@ pub async fn take_splash_mode(session: &Session, user: &CurrentUser, landing: bo
 }
 
 async fn find_user_by_id(pool: &SqlitePool, id: i64) -> anyhow::Result<Option<CurrentUser>> {
-    let row = sqlx::query_as::<_, (i64, String, String)>(
-        "SELECT id, handle, display_name FROM users WHERE id = ?",
+    let row = sqlx::query_as::<_, (i64, String, String, bool)>(
+        "SELECT id, handle, display_name, big_type FROM users WHERE id = ?",
     )
     .bind(id)
     .fetch_optional(pool)
     .await?;
-    Ok(row.map(|(id, handle, display_name)| CurrentUser {
+    Ok(row.map(|(id, handle, display_name, big_type)| CurrentUser {
         id,
         handle,
         display_name,
+        big_type,
     }))
 }
 
@@ -328,7 +331,7 @@ mod tests {
 
     #[test]
     fn splash_mode_is_gate_without_session_and_welcome_with_one() {
-        let gig = CurrentUser { id: 1, handle: "lordgig".into(), display_name: "Lord Gig".into() };
+        let gig = CurrentUser { id: 1, handle: "lordgig".into(), display_name: "Lord Gig".into(), big_type: false };
         assert_eq!(splash_mode(None, false, false), SplashMode::Gate);
         assert_eq!(splash_mode(None, true, true), SplashMode::Gate);
         assert_eq!(splash_mode(Some(&gig), false, false), SplashMode::Welcome);

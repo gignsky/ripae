@@ -1719,7 +1719,7 @@ dependencies = [
 
 [[package]]
 name = "ripae"
-version = "0.3.6-dev"
+version = "0.3.7"
 dependencies = [
  "anyhow",
  "argon2",
