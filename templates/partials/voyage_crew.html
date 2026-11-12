@@ -8,7 +8,7 @@
   <div class="ras share crew-row fields">
     <label>Crew<select name="crew_user">{% for u in f.users %}{% if !c.fixed || c.user_id == u.id.to_string() %}<option value="{{ u.id }}"{% if c.user_id == u.id.to_string() %} selected{% endif %}>{{ u.display_name|upper }}</option>{% endif %}{% endfor %}</select></label>
     <label>% of profit<input name="crew_pct" type="number" step="any" min="0" max="100" value="{{ c.pct }}" placeholder="none" /></label>
-    <label>Flat fee<input name="crew_flat" type="number" step="any" min="0" value="{{ c.flat }}" placeholder="none" /></label>
+    <label>Flat fee<input name="crew_flat" type="text" inputmode="decimal" autocomplete="off" data-auec value="{{ c.flat }}" placeholder="none" /></label>
     <label>For<input name="crew_reason" type="text" placeholder="escort, loan, half the hull" value="{{ c.reason }}" /></label>
     <label>Forfeit to<select name="crew_paid_to"><option value="">— keeps it</option>{% for u in f.users %}<option value="{{ u.id }}"{% if c.paid_to == u.id.to_string() %} selected{% endif %}>{{ u.display_name|upper }}</option>{% endfor %}</select></label>
     <span class="line-cmd">{% if c.fixed %}<span class="hint" title="The voyage names them -- its owner, a buyer or seller -- so they stay aboard">aboard</span>{% else %}<button class="cmd danger rm-crew" type="button">Remove</button>{% endif %}</span>
@@ -19,7 +19,7 @@
   <div class="ras share crew-row fields" data-auto="1">
     <label>Crew<select name="crew_user">{% for u in f.users %}<option value="{{ u.id }}">{{ u.display_name|upper }}</option>{% endfor %}</select></label>
     <label>% of profit<input name="crew_pct" type="number" step="any" min="0" max="100" placeholder="none" title="An even cut for everyone splitting it until you type your own" /></label>
-    <label>Flat fee<input name="crew_flat" type="number" step="any" min="0" placeholder="none" /></label>
+    <label>Flat fee<input name="crew_flat" type="text" inputmode="decimal" autocomplete="off" data-auec placeholder="none" /></label>
     <label>For<input name="crew_reason" type="text" placeholder="escort, loan, half the hull" /></label>
     <label>Forfeit to<select name="crew_paid_to"><option value="">— keeps it</option>{% for u in f.users %}<option value="{{ u.id }}">{{ u.display_name|upper }}</option>{% endfor %}</select></label>
     <span class="line-cmd"><button class="cmd danger rm-crew" type="button">Remove</button></span>
