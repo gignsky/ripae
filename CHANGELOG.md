@@ -3,6 +3,13 @@
 Every notable change to Ripae. Newest first. This file is also what the
 version badge in the corner of the site shows.
 
+## 0.3.7
+
+### Changed
+- **Bigger type for JT, for the benefit of Gramps.** When JT signs in, every
+  font on the site is a quarter larger: the ledger, the forms, the tiles,
+  Route Ops, all of it. Nobody else's screen changes.
+
 ## 0.3.6
 
 ### Added

@@ -588,3 +588,9 @@ table.fleet td.owner{white-space:nowrap}
 .stop-detail .row{display:flex;gap:.5rem;flex-wrap:wrap;margin:.15rem 0}
 .stop-detail .tag{font-size:.68rem;letter-spacing:.1em;text-transform:uppercase;color:var(--fg-dim);flex:0 0 4.5rem}
 .stop-detail .up{color:var(--cyan)}.stop-detail .down{color:var(--amber)}
+
+/* ===== addition: larger type for members who need it (users.big_type) =====
+   Type is in rem, so raising the root a quarter scales every size; the body's
+   15px is restated in rem so it rides along (15px -> 18.75px). */
+html.big-type{font-size:125%}
+html.big-type body{font-size:.9375rem}

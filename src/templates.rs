@@ -70,6 +70,8 @@ pub struct Shell {
     /// `(id, handle, display name)` of every account, for the gate's
     /// one-click sign-in; empty unless `RIPAE_DEV_QUICK_LOGIN=1`.
     pub dev_logins: Vec<(i64, String, String)>,
+    /// The member reads in larger type: `<html class="big-type">`.
+    pub big_type: bool,
 }
 
 // ---------------------------------------------------------------------------

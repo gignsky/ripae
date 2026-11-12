@@ -142,6 +142,7 @@ pub async fn shell(
         discord: state.discord.is_some(),
         test_mode: state.sandbox.is_some(),
         dev_logins,
+        big_type: user.is_some_and(|u| u.big_type),
     }
 }
 
