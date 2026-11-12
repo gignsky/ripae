@@ -2,7 +2,7 @@ use argon2::password_hash::PasswordVerifier;
 use argon2::Argon2;
 use axum::extract::{FromRequestParts, Query, State};
 use axum::http::request::Parts;
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::Form;
 use base64::Engine;
@@ -11,7 +11,7 @@ use serde::Deserialize;
 use sqlx::SqlitePool;
 use tower_sessions::Session;
 
-use crate::discord::{self, Refusal};
+use crate::discord;
 use crate::templates::{render, LoginTemplate};
 use crate::AppState;
 
@@ -19,12 +19,13 @@ const SESSION_USER_ID: &str = "user_id";
 /// Set once the welcome splash has played for this session, so it doesn't
 /// replay on every page load (RIPAE-ROLL7.md §3, 7.5).
 const SESSION_SPLASH_SEEN: &str = "splash_seen";
+/// Set by a sign-in for the redirect that follows it: the gate was the
+/// splash, so the ledger it lands on doesn't play it again, even when the
+/// redirect chain came back from Discord (a cross-site landing).
+const SESSION_JUST_SIGNED_IN: &str = "just_signed_in";
 /// The OAuth `state` of a Discord sign-in in flight; the callback must
 /// echo it back (the CSRF guard on the round trip).
 const SESSION_OAUTH_STATE: &str = "oauth_state";
-/// An old account whose password checked out, waiting for Discord to claim
-/// it. It isn't signed in until Discord vouches for the claimant.
-const SESSION_CLAIM: &str = "claim_user_id";
 
 const DOOR_SHUT: &str = "The door does not open. Check the handle and password.";
 const NOT_VOUCHED: &str = "Discord did not vouch for you. Try again.";
@@ -61,13 +62,34 @@ impl SplashMode {
     }
 }
 
-/// Without a session the splash is the login; with one it welcomes the
-/// member back once, then stays out of the way.
-pub fn splash_mode(user: Option<&CurrentUser>, already_welcomed: bool) -> SplashMode {
+/// Without a session the splash is the login. With one, opening the site
+/// (`landing`) always lands on the welcome splash, whose `[ENTER]` lets the
+/// member in; moving around inside the site welcomes them once per
+/// session, then stays out of the way.
+pub fn splash_mode(user: Option<&CurrentUser>, already_welcomed: bool, landing: bool) -> SplashMode {
     match user {
         None => SplashMode::Gate,
+        Some(_) if landing => SplashMode::Welcome,
         Some(_) if already_welcomed => SplashMode::Hidden,
         Some(_) => SplashMode::Welcome,
+    }
+}
+
+/// Whether a page request is someone opening the site -- typed, bookmarked,
+/// a link from Discord -- rather than a move inside it (the rail's nav, the
+/// redirect after a form post). Browsers say so in `Sec-Fetch-Site`; one
+/// that doesn't send it is judged by its `Referer`.
+pub fn is_landing(headers: &HeaderMap) -> bool {
+    let get = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
+    match get("sec-fetch-site") {
+        Some(site) => site != "same-origin",
+        None => {
+            let host = get("host");
+            let from = get("referer")
+                .and_then(|r| r.split_once("://"))
+                .map(|(_, rest)| rest.split('/').next().unwrap_or(""));
+            !matches!((from, host), (Some(f), Some(h)) if f.eq_ignore_ascii_case(h))
+        }
     }
 }
 
@@ -96,10 +118,12 @@ pub async fn current_user(state: &AppState, session: &Session) -> Option<Current
 }
 
 /// Reads the welcome flag and sets it, so the first `/` of a session plays
-/// the welcome splash and later ones don't.
-pub async fn take_splash_mode(session: &Session, user: &CurrentUser) -> SplashMode {
+/// the welcome splash and later in-site ones don't; a `landing` plays it
+/// every time, except straight after signing in at the gate.
+pub async fn take_splash_mode(session: &Session, user: &CurrentUser, landing: bool) -> SplashMode {
     let seen: bool = session.get(SESSION_SPLASH_SEEN).await.ok().flatten().unwrap_or(false);
-    let mode = splash_mode(Some(user), seen);
+    let just_in: bool = session.remove(SESSION_JUST_SIGNED_IN).await.ok().flatten().unwrap_or(false);
+    let mode = splash_mode(Some(user), seen, landing && !just_in);
     if mode == SplashMode::Welcome {
         let _ = session.insert(SESSION_SPLASH_SEEN, true).await;
     }
@@ -140,23 +164,40 @@ pub struct LoginForm {
     pub password: String,
 }
 
-/// `POST /login`. Without Discord this signs you in. With Discord it only
-/// takes the password of an account nobody has claimed yet, and sends you
-/// on to Discord to claim it: once linked, Discord is the only way in.
+/// `POST /login` -- handle + password, only on a copy without Discord
+/// (local dev). With Discord configured, Discord is the only way in: the
+/// old accounts have all been claimed (0.3.4), so no password is taken.
 pub async fn login(
     State(state): State<AppState>,
     session: Session,
     Form(form): Form<LoginForm>,
 ) -> Response {
-    let claiming = state.discord.is_some();
-    match authenticate(&state.pool, form.handle.trim(), &form.password, claiming).await {
-        Ok(Some(user_id)) if claiming => {
-            if session.insert(SESSION_CLAIM, user_id).await.is_err() {
-                return gate(&state, Some(NO_SESSION), StatusCode::INTERNAL_SERVER_ERROR).await;
-            }
-            Redirect::to("/auth/discord").into_response()
-        }
+    if state.discord.is_some() {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    match authenticate(&state.pool, form.handle.trim(), &form.password).await {
         Ok(Some(user_id)) => start_session(&state, &session, user_id).await,
+        _ => gate(&state, Some(DOOR_SHUT), StatusCode::UNAUTHORIZED).await,
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DevLoginForm {
+    pub user_id: i64,
+}
+
+/// `POST /login/dev` -- a one-click sign-in from the gate's account list.
+/// Only answers with `RIPAE_DEV_QUICK_LOGIN=1` (local dev).
+pub async fn dev_login(
+    State(state): State<AppState>,
+    session: Session,
+    Form(form): Form<DevLoginForm>,
+) -> Response {
+    if !state.dev_quick_login {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    match find_user_by_id(&state.pool, form.user_id).await {
+        Ok(Some(user)) => start_session(&state, &session, user.id).await,
         _ => gate(&state, Some(DOOR_SHUT), StatusCode::UNAUTHORIZED).await,
     }
 }
@@ -169,6 +210,7 @@ async fn start_session(state: &AppState, session: &Session, user_id: i64) -> Res
     }
     // the gate itself was the splash: don't play the welcome as well
     let _ = session.insert(SESSION_SPLASH_SEEN, true).await;
+    let _ = session.insert(SESSION_JUST_SIGNED_IN, true).await;
     Redirect::to("/").into_response()
 }
 
@@ -199,8 +241,7 @@ pub struct DiscordCallback {
 }
 
 /// `GET /auth/discord/callback` -- Discord sends the member back here. In
-/// the NISC server: signed in (claiming an old account, if a password
-/// sign-in just checked out). Not in it, or the round trip doesn't add
+/// the NISC server: signed in. Not in it, or the round trip doesn't add
 /// up: the gate again.
 pub async fn discord_callback(
     State(state): State<AppState>,
@@ -210,9 +251,8 @@ pub async fn discord_callback(
     let Some(discord) = state.discord.as_deref() else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    // both are single-use, whatever happens next
+    // single-use, whatever happens next
     let expected: Option<String> = session.remove(SESSION_OAUTH_STATE).await.ok().flatten();
-    let claim: Option<i64> = session.remove(SESSION_CLAIM).await.ok().flatten();
     let code = match (q.code, q.state, expected) {
         (Some(code), Some(got), Some(want)) if got == want => code,
         _ => {
@@ -228,31 +268,19 @@ pub async fn discord_callback(
             return gate(&state, Some(NOT_VOUCHED), StatusCode::BAD_GATEWAY).await;
         }
     };
-    let refused = match discord::sign_in(&state.pool, &profile, claim).await {
-        Ok(Ok(user_id)) => return start_session(&state, &session, user_id).await,
-        Ok(Err(Refusal::DiscordTaken)) => "That Discord account already signs in as someone else.",
-        Ok(Err(Refusal::AccountTaken)) => "That account is already claimed by another Discord account.",
+    match discord::sign_in(&state.pool, &profile).await {
+        Ok(user_id) => start_session(&state, &session, user_id).await,
         Err(e) => {
             tracing::error!(error = ?e, "could not record a Discord sign-in");
-            return gate(&state, Some(NO_SESSION), StatusCode::INTERNAL_SERVER_ERROR).await;
+            gate(&state, Some(NO_SESSION), StatusCode::INTERNAL_SERVER_ERROR).await
         }
-    };
-    gate(&state, Some(refused), StatusCode::CONFLICT).await
+    }
 }
 
-/// The account behind a handle and password. `unclaimed_only` (Discord
-/// sign-in is on) ignores accounts already linked to Discord.
-async fn authenticate(
-    pool: &SqlitePool,
-    handle: &str,
-    password: &str,
-    unclaimed_only: bool,
-) -> anyhow::Result<Option<i64>> {
-    let row = sqlx::query_as::<_, (i64, String)>(
-        "SELECT id, password_hash FROM users WHERE handle = ? AND (NOT ? OR discord_id IS NULL)",
-    )
+/// The account behind a handle and password.
+async fn authenticate(pool: &SqlitePool, handle: &str, password: &str) -> anyhow::Result<Option<i64>> {
+    let row = sqlx::query_as::<_, (i64, String)>("SELECT id, password_hash FROM users WHERE handle = ?")
     .bind(handle)
-    .bind(unclaimed_only)
     .fetch_optional(pool)
     .await?;
     let Some((id, hash)) = row else {
@@ -264,7 +292,9 @@ async fn authenticate(
     }
 }
 
-pub async fn logout(session: Session) -> Redirect {
+pub async fn logout(State(state): State<AppState>, session: Session) -> Redirect {
+    // a sandbox nobody can get back to any more
+    crate::sandbox::leave(&state, &session).await;
     let _ = session.flush().await;
     Redirect::to("/login")
 }
@@ -285,59 +315,45 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(
-            authenticate(&pool, "lordgig", "wrong-password", false)
-                .await
-                .unwrap(),
-            None
-        );
-        assert!(authenticate(&pool, "lordgig", "correct-password", false)
-            .await
-            .unwrap()
-            .is_some());
-        assert_eq!(
-            authenticate(&pool, "nobody", "correct-password", false)
-                .await
-                .unwrap(),
-            None
-        );
-    }
-
-    #[tokio::test]
-    async fn with_discord_a_claimed_account_no_longer_takes_its_password() {
-        let pool = db::connect(":memory:").await.unwrap();
-        db::migrate(&pool).await.unwrap();
-        let hash = db::hash_password("pw").unwrap();
-        for (handle, discord_id) in [("lordgig", None), ("firstofficer", Some("200"))] {
-            sqlx::query("INSERT INTO users (handle, display_name, password_hash, discord_id) VALUES (?, ?, ?, ?)")
-                .bind(handle)
-                .bind(handle)
-                .bind(&hash)
-                .bind(discord_id)
-                .execute(&pool)
-                .await
-                .unwrap();
-        }
-        assert!(authenticate(&pool, "lordgig", "pw", true).await.unwrap().is_some());
-        assert_eq!(authenticate(&pool, "firstofficer", "pw", true).await.unwrap(), None);
-        // without Discord configured, passwords still work for everyone
-        assert!(authenticate(&pool, "firstofficer", "pw", false).await.unwrap().is_some());
+        assert_eq!(authenticate(&pool, "lordgig", "wrong-password").await.unwrap(), None);
+        assert!(authenticate(&pool, "lordgig", "correct-password").await.unwrap().is_some());
+        assert_eq!(authenticate(&pool, "nobody", "correct-password").await.unwrap(), None);
         // accounts made through Discord have no password at all
         sqlx::query("INSERT INTO users (handle, display_name, password_hash) VALUES ('jt', 'JT', '')")
             .execute(&pool)
             .await
             .unwrap();
-        assert_eq!(authenticate(&pool, "jt", "", true).await.unwrap(), None);
-        assert_eq!(authenticate(&pool, "jt", "", false).await.unwrap(), None);
+        assert_eq!(authenticate(&pool, "jt", "").await.unwrap(), None);
     }
 
     #[test]
     fn splash_mode_is_gate_without_session_and_welcome_with_one() {
         let gig = CurrentUser { id: 1, handle: "lordgig".into(), display_name: "Lord Gig".into() };
-        assert_eq!(splash_mode(None, false), SplashMode::Gate);
-        assert_eq!(splash_mode(None, true), SplashMode::Gate);
-        assert_eq!(splash_mode(Some(&gig), false), SplashMode::Welcome);
-        // once welcomed, the splash stays hidden until [CLOSE] replays it
-        assert_eq!(splash_mode(Some(&gig), true), SplashMode::Hidden);
+        assert_eq!(splash_mode(None, false, false), SplashMode::Gate);
+        assert_eq!(splash_mode(None, true, true), SplashMode::Gate);
+        assert_eq!(splash_mode(Some(&gig), false, false), SplashMode::Welcome);
+        // once welcomed, moving around the site keeps the splash hidden
+        assert_eq!(splash_mode(Some(&gig), true, false), SplashMode::Hidden);
+        // but opening the site always lands on it
+        assert_eq!(splash_mode(Some(&gig), true, true), SplashMode::Welcome);
+    }
+
+    fn headers(pairs: &[(&'static str, &'static str)]) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        for (k, v) in pairs {
+            h.insert(*k, v.parse().unwrap());
+        }
+        h
+    }
+
+    #[test]
+    fn landing_is_anything_but_a_move_inside_the_site() {
+        assert!(is_landing(&headers(&[("sec-fetch-site", "none")])));
+        assert!(is_landing(&headers(&[("sec-fetch-site", "cross-site")])));
+        assert!(!is_landing(&headers(&[("sec-fetch-site", "same-origin")])));
+        // no Sec-Fetch-Site: the Referer decides
+        assert!(is_landing(&headers(&[("host", "ripae.example")])));
+        assert!(!is_landing(&headers(&[("host", "ripae.example"), ("referer", "https://ripae.example/board")])));
+        assert!(is_landing(&headers(&[("host", "ripae.example"), ("referer", "https://discord.com/channels/1")])));
     }
 }

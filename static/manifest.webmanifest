@@ -1,0 +1,18 @@
+{
+  "id": "/",
+  "name": "Ripae · Ledger Terminal",
+  "short_name": "Ripae",
+  "description": "NISC Cargo's ledger terminal.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["fullscreen", "standalone"],
+  "background_color": "#050806",
+  "theme_color": "#050806",
+  "icons": [
+    { "src": "/static/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "/static/icon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}

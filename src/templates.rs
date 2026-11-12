@@ -61,9 +61,15 @@ pub struct Shell {
     /// JSON array of boot-log lines the splash types out.
     pub boot_json: String,
     pub gate_error: Option<&'static str>,
-    /// The gate is `[SIGN IN WITH DISCORD]`, with the password form kept
-    /// only for claiming an old account.
+    /// The gate is `[SIGN IN WITH DISCORD]` and nothing else. Without
+    /// Discord (local dev) it is the handle + password form.
     pub discord: bool,
+    /// This session is in test mode: the TEST banner shows, and the rail
+    /// offers no `[ENTER TEST MODE]`.
+    pub test_mode: bool,
+    /// `(id, handle, display name)` of every account, for the gate's
+    /// one-click sign-in; empty unless `RIPAE_DEV_QUICK_LOGIN=1`.
+    pub dev_logins: Vec<(i64, String, String)>,
 }
 
 // ---------------------------------------------------------------------------
@@ -98,6 +104,25 @@ pub struct IndexTemplate {
     pub commodities: Vec<String>,
     pub terminals: Vec<String>,
     pub ships: Vec<String>,
+}
+
+/// `/crew/:id/ledger` -- one member's voyages, newest first.
+#[derive(Template)]
+#[template(path = "crew_ledger.html")]
+pub struct CrewLedgerTemplate {
+    pub shell: Shell,
+    pub m: crate::stowage::views::MemberLedgerView,
+}
+
+/// `/test-mode/keep` -- what pushing the sandbox live would change.
+#[derive(Template)]
+#[template(path = "test_mode.html")]
+pub struct TestModeTemplate {
+    pub shell: Shell,
+    pub groups: Vec<crate::sandbox::describe::Group>,
+    /// Why the push was refused; empty before one is tried.
+    pub conflicts: Vec<String>,
+    pub empty: bool,
 }
 
 #[derive(Template)]

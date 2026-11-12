@@ -10,21 +10,23 @@
 </select></label>
 <label>Commodity<input name="commodity" type="text" list="pick-commodities" data-pick autocomplete="off" placeholder="LARANITE" value="{{ f.commodity }}" required /></label>
 {% if f.show_status && f.boxes != "" && f.status != "" || f.show_status && f.boxes != "" && f.status == "" %}
-<label>Boxes<input name="boxes" type="text" value="{{ f.boxes }}" readonly title="Change crates from the manifest" /><span class="calc boxes-calc">crates set from the manifest</span></label>
+<label>Boxes<input name="boxes" type="text" value="{{ f.boxes }}" readonly tabindex="-1" title="Change crates from the manifest" /><span class="calc boxes-calc">crates set from the manifest</span></label>
 {% else %}
 <label>Boxes<input name="boxes" type="text" placeholder="2×32, 4×8" value="{{ f.boxes }}" data-boxes required /><span class="calc boxes-calc">= —</span></label>
 {% endif %}
-<label>SCU<input name="scu" type="number" placeholder="0" value="{{ f.scu }}" data-scu /></label>
+{# Crates define the SCU: a generated, read-only figure with no name, so
+   it is never posted (the server derives it from the boxes) and no tab stop. #}
+<label>SCU · from boxes<output class="derived" data-scu aria-live="polite">{% if f.scu != "" %}{{ f.scu }}{% else %}—{% endif %}</output></label>
 <label class="trade-only">Price as<select name="price_mode" class="mode" data-mode>
   <option value="scu"{% if f.price_mode != "lot" && f.price_mode != "balance" %} selected{% endif %}>Per SCU</option>
   <option value="lot"{% if f.price_mode == "lot" %} selected{% endif %}>Per lot</option>
   <option value="balance"{% if f.price_mode == "balance" %} selected{% endif %}>From balance</option>
 </select></label>
-<label class="price-scu trade-only"{% if f.price_mode == "lot" || f.price_mode == "balance" %} hidden{% endif %}>Buy price / SCU<input name="price_scu" type="number" step="any" min="0" placeholder="0.00" value="{{ f.price_scu }}" /><span class="calc">lot = —</span></label>
-<label class="price-lot trade-only"{% if f.price_mode != "lot" %} hidden{% endif %}>Paid for the lot<input name="price_lot" type="number" step="any" min="0" placeholder="0" value="{{ f.price_lot }}" /><span class="calc">per SCU = —</span></label>
-<label class="price-bal trade-only"{% if f.price_mode != "balance" %} hidden{% endif %}>Balance before<input name="balance_before" type="number" step="any" min="0" placeholder="aUEC before buying" value="{{ f.balance_before }}" title="Your wallet before the purchase, when the terminal's price can't be trusted" /></label>
-<label class="price-bal trade-only"{% if f.price_mode != "balance" %} hidden{% endif %}>Balance after<input name="balance_after" type="number" step="any" min="0" placeholder="aUEC after buying" value="{{ f.balance_after }}" /><span class="calc">cost = —</span></label>
-<label class="haul-only">Contract reward<input name="reward" type="number" step="any" min="0" placeholder="aUEC on delivery" value="{{ f.reward }}" title="What the contract pays on delivery; it counts once the delivery is recorded" /></label>
+<label class="price-scu trade-only"{% if f.price_mode == "lot" || f.price_mode == "balance" %} hidden{% endif %}>Buy price / SCU<input name="price_scu" type="text" inputmode="decimal" autocomplete="off" data-auec placeholder="0.00" value="{{ f.price_scu }}" /><span class="calc">lot = —</span></label>
+<label class="price-lot trade-only"{% if f.price_mode != "lot" %} hidden{% endif %}>Paid for the lot<input name="price_lot" type="text" inputmode="decimal" autocomplete="off" data-auec placeholder="0" value="{{ f.price_lot }}" /><span class="calc">per SCU = —</span></label>
+<label class="price-bal trade-only"{% if f.price_mode != "balance" %} hidden{% endif %}>Balance before<input name="balance_before" type="text" inputmode="decimal" autocomplete="off" data-auec placeholder="aUEC before buying" value="{{ f.balance_before }}" title="Your wallet before the purchase, when the terminal's price can't be trusted" /></label>
+<label class="price-bal trade-only"{% if f.price_mode != "balance" %} hidden{% endif %}>Balance after<input name="balance_after" type="text" inputmode="decimal" autocomplete="off" data-auec placeholder="aUEC after buying" value="{{ f.balance_after }}" /><span class="calc">cost = —</span></label>
+<label class="haul-only">Contract reward<input name="reward" type="text" inputmode="decimal" autocomplete="off" data-auec placeholder="aUEC on delivery" value="{{ f.reward }}" title="What the contract pays on delivery; it counts once the delivery is recorded" /></label>
 <label><span class="trade-only">Bought at</span><span class="haul-only">Pick up at</span><select name="pickup" data-stop-pick="pickup" data-sel="{{ f.pickup }}" title="The stop on the route where it comes aboard">{% for s in f.stops %}<option value="{{ s.0 }}"{% if f.pickup == s.0 %} selected{% endif %}>{{ s.1 }}</option>{% endfor %}</select></label>
 <label><span class="trade-only">Sell at</span><span class="haul-only">Deliver to</span><select name="drop" data-stop-pick="drop" data-sel="{{ f.drop }}" title="A later stop on the route, where it comes off"><option value=""{% if f.drop == "" %} selected{% endif %}>undecided</option>{% for s in f.stops %}{% if !loop.first %}<option value="{{ s.0 }}"{% if f.drop == s.0 %} selected{% endif %}>{{ s.1 }}</option>{% endif %}{% endfor %}</select></label>
 {% if !f.users.is_empty() %}

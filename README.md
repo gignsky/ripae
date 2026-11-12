@@ -32,15 +32,32 @@ cargo build --release
 
 `scripts/smoke.mjs` spawns `target/debug/ripae` on `127.0.0.1:18080` with a
 throwaway database, walks the whole 0.2 story (gate → new run → crate
-manifest → partial close with a forfeited share → SALE banner → leaderboard
-→ service record → delete through the confirmation) and asserts there is no
-horizontal scroll at 1280 / 760 / 400 px; then the fleet (hulls, a carried
-one and a loaner, pull out / store / destroy / claim, a run flown by a hull
-that follows `[NEXT STOP]`, the same widths on `/fleet`). Set `RIPAE_URL` to run it against
+manifest → a crewmate on the voyage's crew on 25 %, forfeited back → partial
+close split by the crew → SALE banner → leaderboard → a member's ledger,
+totals equal to their board row → service record → delete through the
+confirmation) and asserts there is no horizontal scroll at 1280 / 760 /
+400 px; then the fleet (hulls, a carried one and a loaner, pull out /
+store / destroy / claim, a run flown by a hull that follows `[NEXT STOP]`,
+the same widths on `/fleet`), then test mode (enter, log a run, discard,
+live untouched; enter, log a run, keep, confirm, it's live). Set
+`RIPAE_URL` to run it against
 an already-running build instead. It needs `playwright` resolvable from
 Node (`npm i -g playwright && npx playwright install chromium`, or a
 preinstalled copy on `NODE_PATH`). The raster reveal is not something a
 script can judge; eyeball it.
+
+## Test mode
+
+`[ENTER TEST MODE]` on the rail (any signed-in member, deployed or local)
+gives that browser session a private copy of the books: the server
+`VACUUM INTO`s the live database into a *baseline* and a *sandbox* file in
+`sandboxes/` next to `RIPAE_DB_PATH` (or `RIPAE_SANDBOX_DIR`), and every
+ledger request from that session reads and writes the sandbox. An amber
+TEST banner stays on screen with `[DISCARD]` (delete the copy, back to
+live) and `[KEEP / PUSH LIVE]` (a readable diff of the sandbox against its
+baseline, grouped by voyage; confirming applies it to live in one
+transaction and deletes the copy). Everyone else stays on live throughout.
+Sandboxes are deleted after 24 h (boot sweep, then hourly) and on log out.
 
 ## Running a test copy locally
 
@@ -62,6 +79,10 @@ On a copy, `RIPAE_DEV_RESET_LOGINS=<password>` (which `dev.sh live` sets)
 gives every account that password, drops its Discord link and clears stored
 sessions at boot, so you needn't set Discord up. The app refuses to start
 with it set alongside Discord sign-in.
+
+`RIPAE_DEV_QUICK_LOGIN=1` (which `dev.sh` always sets) adds a row of
+one-click sign-ins under the gate, one per account, no password. It too is
+refused alongside Discord sign-in.
 
 **One-time spacedock setup.** `/var/lib/ripae` is root-only, so the pull goes
 through a single sudo command that takes a consistent `sqlite3 .backup` into
@@ -113,12 +134,16 @@ Discord display name) the name on the ledger and leaderboard, and their
 avatar goes on the service record. If the username is already some other
 account's handle, the account keeps the handle it has.
 
-**Claiming the old accounts.** Accounts from before Discord (the seeded
-`lordgig` and `firstofficer`, with their voyages) are claimed once: on the
-gate, open *Crew from before Discord? Claim your account*, enter the old
-handle and password, and Discord links that account to you. From then on
-only Discord signs into it; its password no longer works. An account that
-is never claimed keeps its password but can only use it to claim.
+**Discord is the only way in.** Until 0.3.4 the gate also let an account
+from before Discord (the seeded `lordgig` and `firstofficer`) be claimed
+with its old password. Every member has claimed theirs, so that form and
+`POST /login` are gone whenever Discord is configured; the handle +
+password gate only exists on a copy without Discord (local dev). At boot
+the server logs a warning naming any account still not linked to Discord:
+nobody can sign into it, and its owner signing in with Discord gets a new
+account. To fix that, link it by hand:
+`UPDATE users SET discord_id = '<their Discord user id>' WHERE handle = '<old handle>'`
+(after deleting the empty account Discord created, if there is one).
 
 ## Building the image
 
@@ -224,8 +249,8 @@ still a reasonable addition; not built here, kept to scope.
 - [x] Glitched and lost crates; lost SCU written off and shown.
 - [x] Close per crate, price per SCU or per lot, shares by % or flat, forfeits, kept crates stay open.
 - [x] SALE banner with blackout; DELETE confirmation; HOORAY / WOMP WOMP + service record.
-- [x] Leaderboard sortable by profit / runs / SCU, org totals, recent shares.
-- [x] Splash is the login; welcome once per session; `[CLOSE]` replays; `[LOG OUT]` on rail and splash.
+- [x] Leaderboard sortable by profit / collected / runs / SCU, org totals, recent shares.
+- [x] Splash is the login; opening the site lands on it (`[CONTINUE AS ...]`); `[CLOSE]` replays; `[LOG OUT]` on rail and splash.
 - [x] No horizontal scrollbar at 1280 / 760 / 400 px; cards under ~980 px.
 - [x] `cargo test` (65 tests incl. the proptest invariants of RIPAE-ROLL7.md §6); `scripts/smoke.mjs` passes.
 - [x] `CHANGELOG.md` 0.2.0; `Cargo.toml` 0.2.0; badge reads `v0.2.0`.
@@ -304,10 +329,40 @@ still hold come first.
   rest, lost crates included, and its lot price is recomputed for what's
   left. Selling every sellable crate closes the row in place; lost crates
   ride along on it as the ledger's write-off record.
-- **Crates define the SCU.** The New Run / Add Load forms derive SCU from
-  the boxes and let you type over it, but a figure that disagrees with the
-  boxes is refused (422) rather than silently kept -- there is nowhere to
-  store an SCU that isn't crates.
+- **Crates define the SCU.** The New Run / Add Load / Edit Load forms show
+  SCU as a generated, read-only figure that follows the boxes as they are
+  typed; it has no form name and no tab stop, and the server derives it from
+  the boxes again (a posted `scu` is ignored) -- there is nowhere to store
+  an SCU that isn't crates. (It used to be typed over, and a
+  mismatch was refused.)
+- **Open Cargo: one block per voyage.** There is no table-wide header; each
+  voyage's `tbody#vhead-{id}` ends in its own column-header row
+  (`tr.colhead`), so the banner, any open voyage form and the headers swap
+  together and the load tbodies stay where they are. One table (not one per
+  voyage) keeps the columns aligned across voyages and leaves every htmx
+  target (`#vhead-{id}`, `#load-{id}`, `#open-cargo`, the oob swaps) as it
+  was. Under ~980 px the header rows are hidden and cells label themselves
+  from the first `tr.colhead`, as cards.
+- **"Bought at / pickup" and "Cost / reward".** A haul's pickup terminal
+  lives in the buy-terminal column; its cost cell (Open Cargo and the
+  ledger) shows the contract reward, `+`-signed with a `reward` sub-line,
+  falling back to what the delivery paid when no reward was noted.
+- **New loads default to awaiting pickup**, trade and haul alike (a run is
+  logged at the terminal, before it is loaded; a contract's cargo waits at
+  its pickup too). Where-now reads "awaiting pickup at <buy / pickup
+  terminal>" derived from the load's terminal, so it follows an edit of that
+  field until the crates go aboard. `[LOADED]` on the row (shown while any
+  live crate isn't aboard) is the manifest's `[ALL ABOARD]` in one click
+  (`POST /loads/:id/where`, `view=row` answers with the plain row).
+  On a route this covers the start too: a load picked up at a later stop
+  waits regardless, and `[NEXT STOP]` boards whatever is still waiting at
+  or before the stop it arrives at, so `[LOADED]` is only needed for cargo
+  loaded before the voyage leaves (or out of turn).
+- **Keyboard flow in load forms**: DOM order is visual order; generated and
+  read-only bits take no tab stop; an opened form focuses its first field;
+  after a save or cancel focus returns to the button that opened it (else
+  the row's first command); pick-lists are ARIA comboboxes (arrows to move,
+  Enter picks, Tab keeps what was typed); Enter in a text field submits.
 - **Crate mixes are normalised**: `1×32, 2×32` is stored as three 32 SCU
   crates and reads back as `3×32`; sizes are listed largest first.
 - **A ship name must be one of the 80 known hulls, or blank.** A hull needs
@@ -330,14 +385,80 @@ still hold come first.
 - **Shares:** a member can't share with themself (the remainder is already
   theirs); percentage shares may not total more than 100; a flat fee may
   exceed the profit (the seller agreed to it). On a loss every share pays 0
-  (ruled). "Runs closed" on the board counts voyages with every load sold in
+  (ruled).
+- **The voyage's crew is the one place a split is set** (0.3.1-roll7,
+  migration 0012, replacing `voyage_shares` and the per-sale share rows).
+  `voyage_crew` has one row per member: a cut of each sale's profit
+  (`pct`), a flat fee per sale (`flat`), both, or neither (crew without a
+  share), and an optional forfeit-to (`paid_to`: they get the aUEC, the
+  earner keeps the credit). Every sale on the voyage settles the crew's
+  terms for everyone **but its seller** -- their own cut doesn't apply to
+  the sale they make, so the run's owner may hold a cut of a crewmate's
+  sale. Cuts across the crew may not total more than 100 %. What a sale
+  paid is still frozen in `shares`; editing the crew changes later sales
+  only. The sale editor re-pays a sale's own shares on a corrected price,
+  or re-splits it by the crew as it stands when asked (a seller who holds
+  a share of that sale is refused, as before). No per-sale override: the
+  close form shows the split read-only with `[EDIT CREW]`.
+- **A member's ledger** (`GET /crew/:id/ledger`; the leaderboard's names,
+  the service record's name and `[LEDGER]`, and the Ledger's *By* column
+  link to it). Every voyage the member was on -- crew, owner, a load's
+  buyer/holder/seller, or named on a share -- newest first (by bought-on
+  date, then id), open ones included. Per voyage: role (logged / bought /
+  sold / crew), their terms, loads they sold, *kept as seller* (their
+  profit credit), *shares earned* (credit, forfeited or not), *collected*
+  (aUEC that reached them: sale takings as seller less shares paid out,
+  plus shares paid to them -- the board's Collected), *losses* (lost cargo
+  they held, once the voyage has closed, as on the board), and *credit* =
+  `board_credit` over that voyage alone,
+  with running credit and collected. The maths is `model::member_ledger` /
+  `ledger_voyage`, which call `board_credit`, `cash` and `losses` on a
+  one-voyage slice -- so the rows always sum to the leaderboard, whatever
+  those functions come to count. `[LOADS n]` opens a voyage's loads.
+- **Who's on the crew.** The run's owner, every load's buyer and holder (a
+  sold row's seller), and anyone a share or a crew forfeit pays are always
+  aboard (`repo::sync_crew` after every write; the voyage form shows them
+  without `[REMOVE]`). Others are added on the voyage form. A detached
+  load's new voyage copies the crew and terms; a load merged into another
+  voyage brings its holder along, on no terms (the target's split applies,
+  as before).
+- **Migration 0012 mapping.** Voyage-level shares become the member's crew
+  terms (rows for one member summed by kind -- 25 % and a 1,000 flat stay
+  both; reasons joined with ` · `; the first forfeit kept). A member who only
+  held shares on individual sales gets the terms of their **latest** sale
+  on that voyage. Owners, buyers, sellers and forfeit recipients join
+  without terms. `shares` is untouched, so every settled amount -- and every
+  member's credit and cash -- is identical before and after (tested on a
+  fixture DB). One corner can't be expressed in the new shape: a member
+  whose % and flat parts were forfeited to different people keeps the
+  first forfeit for both on future sales. "Runs closed" on the board counts voyages with every load sold in
   which the member sold at least one load.
 - **Lost cargo is a loss.** What a lost or written-off crate cost
   (`written_off`) comes off realised (Open Cargo's totals and the board's
   *Org realised*) and off the lifetime profit and cash of whoever holds
   the load (`submitted_by`), whether the load is open, sold or written off
   whole. A sale's own profit, and the shares settled on it, still count
-  only the crates that sold.
+  only the crates that sold. **Deferred until the voyage closes:** a
+  write-off in a voyage that still has an open load comes off *Committed ·
+  afloat* (if its load is open) but stays out of realised, board credit and
+  cash until every load in that voyage is sold or lost
+  (`Voyage::is_fully_sold`); then it lands in full. `Totals::losses` and
+  `losses(u)` are the closed-voyage write-offs; the service record's
+  *Crates lost* still shows every write-off.
+- **The board shows Profit and Collected side by side.** Profit is
+  `board_credit` (a forfeited share still counts for whoever earned it);
+  Collected is `cash` (what they actually received), with the forfeited
+  amount, and any forfeits received, under it. The money maths is
+  unchanged. The share bar follows the sort: profit and collected are a
+  share of the org's positive total (negatives count as 0, they add up to
+  100 %); runs and SCU are the fraction of the org's closed runs / SCU sold
+  the member took part in -- a shared run counts for everyone aboard, so
+  those don't add up to 100 %. Ties fall back to profit, collected, runs,
+  SCU, then name (A→Z, ignoring case). The service record's rank stays
+  "by profit".
+- **A net loss on *Realised · net of losses* is red.** The Open Cargo
+  tile's value takes `.neg` (`--red`) when it rounds below zero -- an
+  explicit exception to green-on-black; zero and gains stay green.
 - **`users.created_at` is the service record's "aboard since."** Keep it
   across the 0.2 wipe with the steps under Deploying.
 - **Bookkeeping for a crewmate.** Whose run it is (`voyages.logged_by`,
@@ -357,6 +478,25 @@ still hold come first.
   with a queued marker so a line is painted once whichever fires first; the
   `.ras` / `.rs` hiding rules are scoped to `html.js` so a page without the
   script still shows everything.
+- **Opening the site always lands on the splash** (0.3.1 roll 6). A `GET /`
+  that is a *landing* -- `Sec-Fetch-Site` other than `same-origin` (typed,
+  bookmarked, a link from Discord), or, without that header, no same-host
+  `Referer` -- plays the welcome splash with `[CONTINUE AS <NAME>]` (or any
+  key). Moves inside the site (the rail's nav, the redirect after a form
+  post) keep the old once-per-session rule, and the redirect straight after
+  signing in at the gate (Discord's included, via a one-shot session flag)
+  doesn't play it again. Deep links (`/board`) and htmx partials never show it.
+- **The ledger's four panels start folded** to their title bar on entering.
+  The bar is a `<button aria-expanded aria-controls>`; resting on it (mouse or
+  pen) for 200 ms, focusing it or tapping it unfolds the panel with a quick stepped wipe
+  (instant under reduced motion). Open Cargo, Stowage Plan and Ledger then
+  stay open until `[HIDE]`; New Run folds again 600 ms after the pointer leaves
+  unless it was clicked, focused into or typed into, and never while one of
+  its fields has focus. The bar never folds a panel (a hover-then-click
+  would otherwise shut it); `[HIDE]` does. State is a class on the
+  `<section>`, outside every htmx target, so swaps keep it; open panels are
+  remembered for the tab in `sessionStorage` (so the full reload after
+  logging a run keeps them) and forgotten whenever the splash is entered.
 - **Fonts are vendored** (`static/fonts/`, OFL 1.1) from Google's woff2
   builds; no Google Fonts request leaves the container.
 - **`nix flake check` in a sandbox that blocks GitHub tarballs**: override
@@ -421,6 +561,45 @@ Routes (roll 4, migration 0011):
   where it's parked) is its own roll; `voyages.at_stop` and the route are
   the groundwork for "where is this ship now".
 
+0.3.1 roll 3, test mode:
+
+- **One sandbox per session, a file pair per sandbox.** `<id>.db` is what
+  the session writes, `<id>.base.db` the untouched copy it started as (the
+  diff's left side). The id is `<unix seconds>-<32 hex>`, so expiry (24 h
+  from creation) needs no metadata and a session value can't name a path.
+  Sandboxes survive a restart (reopened, and migrated, on first use); at
+  most 32 exist at once. The copies' `tower_sessions` rows are deleted.
+- **Per-request database: the `sandbox::Db` extractor.** Ledger handlers
+  take `Db(state)` instead of `State(state)`; it hands back the app state
+  with `pool` swapped for the session's sandbox. Sign-in, `CurrentUser`
+  and the session store keep using the router's state, i.e. live. A write
+  from a session whose sandbox has expired is refused (409 + `HX-Refresh`)
+  instead of quietly landing on live; a read just falls back to live.
+- **Only ledger tables merge**: `voyages`, `voyage_stops`, `loads`,
+  `crates`, `shares`, `voyage_crew` (`sandbox::merge::LEDGER_TABLES`,
+  parents first). Users,
+  sessions, Discord links and the pick-lists are never diffed or written
+  back. A new ledger table takes part once it's added to that list; new
+  *columns* need nothing (rows are read with `SELECT *`, foreign keys come
+  from `pragma_foreign_key_list`).
+- **The merge is row-level by primary key.** Inserted rows get fresh ids in
+  live (live may have used the sandbox's ids meanwhile) and their foreign
+  keys are remapped; updates write only the columns test mode changed.
+  Deletes from tables nothing points at (stops, crates, shares) run first,
+  so a rewritten route's new stops don't collide with the old ones on
+  `(voyage_id, seq)`; deletes of parents run last, child-first, after any
+  child was re-pointed. All in one transaction, finished with
+  `PRAGMA foreign_key_check`. A route change reads as one line on the
+  review page (`Route: A → B becomes A → C → B`).
+- **Conflicts refuse the whole push, nothing is clobbered.** A row test
+  mode changed or deleted must still be as the baseline had it in live (or
+  already be what test mode wants). Also refused: writing a row whose
+  parent live has deleted, and deleting a row live has since hung a new
+  child on. The review page lists each conflict in words; the way out is
+  Discard.
+- **Sandbox writes aren't announced on `/live`**; a successful push is,
+  once, so everyone else's screens refresh.
+
 Fleet (roll 8):
 
 - **Hulls, not models.** `hulls` (migration 0014) is the crew's actual
@@ -467,8 +646,14 @@ Fleet (roll 8):
 - **The fleet page** (`/fleet`) filters by member and status (and
   loaners), sorts by owner / model / status / location, nests carried hulls
   under their carrier, and shows which open voyage a hull is flying. A
-  member's name filters the fleet to their hulls (no member ledger route
-  on this branch). Quick actions re-render with the page's filters, read
-  from htmx's `HX-Current-URL`. Locations suggest the terminals plus every
-  place a hull has been left. The fleet page does not live-refresh from
-  other members' changes yet (the ledger does).
+  member's name filters the fleet to their hulls (their ledger stays on
+  the board's `/crew/{id}/ledger`). Quick actions re-render with the page's
+  filters, read from htmx's `HX-Current-URL`. Locations suggest the
+  terminals plus every place a hull has been left. The fleet page does not
+  live-refresh from other members' changes yet (the ledger does).
+- **Test mode covers the fleet, but hulls don't push.** The fleet handlers
+  take `sandbox::Db`, so in test mode `/fleet` reads and writes the
+  sandbox's copy and live is untouched. `hulls` is not in
+  `LEDGER_TABLES`, though: Keep pushes a test run (its `hull_id` points at
+  the live hull, which isn't remapped) but not the hull edits or the moves
+  a test run made; those go with the sandbox.

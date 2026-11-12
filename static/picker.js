@@ -7,6 +7,7 @@
   "use strict";
 
   var MAX_RESULTS = 50;
+  var menus = 0;
 
   // Higher is better; null means no match. Substring hits beat scattered
   // subsequence hits; word starts and consecutive letters score extra.
@@ -84,8 +85,14 @@
     var menu = document.createElement("ul");
     menu.className = "pick-menu";
     menu.setAttribute("role", "listbox");
+    menu.id = "pick-menu-" + (++menus);
     menu.hidden = true;
     wrap.appendChild(menu);
+    // keyboard / screen-reader contract: a combobox whose highlighted option is announced
+    input.setAttribute("role", "combobox");
+    input.setAttribute("aria-autocomplete", "list");
+    input.setAttribute("aria-controls", menu.id);
+    input.setAttribute("aria-expanded", "false");
 
     var shown = [];
     var active = -1;
@@ -110,6 +117,8 @@
         li.setAttribute("aria-selected", j === i ? "true" : "false");
         if (j === i) li.scrollIntoView({ block: "nearest" });
       });
+      if (i >= 0 && menu.children[i]) input.setAttribute("aria-activedescendant", menu.children[i].id);
+      else input.removeAttribute("aria-activedescendant");
     }
 
     // `query` defaults to what is typed; focus passes "" to show the whole list.
@@ -125,6 +134,7 @@
       shown.forEach(function (name) {
         var li = document.createElement("li");
         li.setAttribute("role", "option");
+        li.id = menu.id + "-" + menu.children.length;
         highlight(li, q, name);
         li.addEventListener("mousedown", function (e) {
           e.preventDefault(); // keep focus in the input
@@ -134,6 +144,7 @@
       });
       menu.style.top = input.offsetTop + input.offsetHeight + "px";
       menu.hidden = shown.length === 0;
+      input.setAttribute("aria-expanded", menu.hidden ? "false" : "true");
       // Pre-highlight only a real substring hit: a scattered fuzzy hit is a
       // guess, and Enter must not swap a custom name for it.
       var hit = q.trim() && shown.length && score(q, shown[0]) >= 1000;
@@ -143,6 +154,8 @@
     function close() {
       menu.hidden = true;
       active = -1;
+      input.setAttribute("aria-expanded", "false");
+      input.removeAttribute("aria-activedescendant");
     }
 
     function choose(name) {

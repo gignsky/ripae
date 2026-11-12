@@ -2,12 +2,12 @@
    empty overlay (static/ripae.js then closes it) plus the panels oob. #}
 <div class="splash-in" data-overlay="voyage" role="dialog" aria-label="Edit voyage">
   <p class="ras tag">Edit <b>Voyage {{ id }}</b> · {{ summary }}</p>
-  <form class="run shares-form" hx-put="/voyages/{{ id }}/details" hx-target="#overlay" hx-swap="innerHTML" data-owner="{{ f.owner }}">
+  <form class="run crew-form" hx-put="/voyages/{{ id }}/details" hx-target="#overlay" hx-swap="innerHTML">
     {% if let Some(error) = f.error %}<p class="ras neg form-error">{{ error }}</p>{% endif %}
     <div class="ras fields">
       {% include "partials/voyage_fields.html" %}
     </div>
-    {% include "partials/voyage_shares.html" %}
+    {% include "partials/voyage_crew.html" %}
     <p class="ras any"><span class="actions">
       <button class="cmd boxed" type="submit">Save</button>
       <button class="cmd boxed" type="button" data-dismiss>Cancel</button>

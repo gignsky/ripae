@@ -3,6 +3,111 @@
 Every notable change to Ripae. Newest first. This file is also what the
 version badge in the corner of the site shows.
 
+## 0.3.5
+
+### Added
+- **[FULL SCREEN] gives the terminal the whole display.** It's in the rail
+  next to *Close* and hides the browser's tabs and toolbars; *Exit full
+  screen*, Esc or F11 brings them back. Switching between the Ledger and the
+  Leaderboard drops you out for a moment, and your first click or key on
+  the next screen puts you back. In Chrome and Edge a quick Esc still
+  closes an open form; hold Esc to leave full screen.
+- **Ripae installs as a desktop app.** In Chrome or Edge, *[INSTALL]* in
+  the rail (or the install icon in the address bar) puts Ripae in its own
+  window with its own icon in your taskbar and app launcher. On a Mac or
+  iPhone in Safari, use *Share → Add to Dock / Add to Home Screen*. The tab
+  icon is new too: a green *R_* on the terminal glass.
+
+### Changed
+- **aUEC fields put the commas in for you.** Buy and sell prices, lot
+  totals, wallet balances, contract rewards and crew flat fees now group
+  digits as you type, so `1250000` reads `1,250,000`, and pasting a figure
+  that already has commas works. Decimals still go in after the point.
+
+## 0.3.4
+
+### Removed
+- **Discord is the only sign-in.** Every member has linked their account
+  to Discord, so the gate's *Crew from before Discord? Claim your account*
+  password form is gone, and the site no longer takes a password at all.
+
+## 0.3.3
+
+### Added
+- **Voyages fly a route.** *New Run* now builds a route: a start (the last
+  place you delivered to, unless you change it) and the stops after it.
+  Each load picks where it's picked up and where it's dropped off from
+  that route, and *Edit voyage* can change the route, where the voyage is
+  now and every open load's stops. *[NEXT STOP]* moves a voyage along and
+  brings aboard whatever is picked up there. Voyages logged before routes
+  get one worked out from their loads; nothing about them changes.
+- **The Stowage Plan goes leg by leg.** Each leg shows what comes off,
+  what goes on and a sc-cargo.space link for that leg. Cargo bought at a
+  later stop is no longer stowed at the bottom of the hold, and when a
+  load has to sit on top of cargo that leaves before it, the plan warns
+  you about the restow.
+- **A voyage's crew sets the split.** Every voyage has a *Crew* section:
+  everyone who flew it and their terms, a cut of each sale's profit, a
+  flat fee per sale, both or neither, with an optional *forfeit to*. Every
+  sale on the voyage pays the crew on those terms (the seller doesn't pay
+  themselves), so the split is set once, not on every sale. The close
+  form shows the split with *[EDIT CREW]*. Correcting a sale's price
+  re-pays its recorded shares; you can also ask it to re-split by the crew
+  as it stands now. Shares set up before this version were moved onto
+  the crew with nobody's totals changing.
+- **A member's ledger.** Click a name on the leaderboard, their service
+  record or a seller on the Ledger to see every voyage they were on,
+  newest first: their role and terms, loads they sold, what they kept,
+  shares earned, aUEC collected, losses, and their running totals, which
+  match their leaderboard row. *[LOADS n]* opens a voyage's loads with
+  their side of each.
+- **Collected on the leaderboard.** Crew Standings has a *Collected*
+  column next to *Profit*, with forfeits shown under it. The share bar
+  follows whichever column you sort by and says which, and *100%* no
+  longer spills out of its cell.
+- **Test mode.** *[ENTER TEST MODE]* on the rail gives you a private copy
+  of the books to try things on. An amber *TEST* banner stays up with
+  *[DISCARD]* (throw the copy away) and *[KEEP / PUSH LIVE]* (see what you
+  changed, voyage by voyage, then apply it to the real books in one go;
+  refused if someone changed the same records meanwhile). Nobody else
+  sees your copy, and it's deleted after 24 hours or when you log out.
+- **[LOADED]** on a load puts all of its crates aboard in one click.
+- **Haul rewards in Open Cargo.** A haul shows its contract reward under
+  *Cost / reward*, in Open Cargo and on the ledger.
+- **One-click sign-in on a local test copy.** `scripts/dev.sh` lists every
+  account under the gate as a button. It only works locally; the real
+  site won't start with it switched on.
+
+### Changed
+- **Open Cargo reads voyage by voyage.** Each voyage has its own column
+  headers instead of one header for the whole table; the columns now read
+  *Bought at / pickup* and *Cost / reward*.
+- **SCU follows the boxes.** A load's SCU is worked out from its crate mix
+  and can't be typed over.
+- **New loads start awaiting pickup**, at the terminal they're bought or
+  picked up at.
+- **Collected is what you actually received**: sale revenue as the seller,
+  less shares paid out, plus shares paid to you. Cargo costs and lost
+  cargo count against *Profit* only. It used to move with profit, so a
+  sale that only broke even against its losses didn't show up in it.
+- **Losses count once the voyage closes.** Crates written off on a voyage
+  that's still open stay out of *Realised*, Profit and Collected until
+  the voyage is fully sold; *Committed · afloat* still counts them, and
+  *Crates lost* on the service record shows them all. A *Realised · net
+  of losses* below zero now shows in red.
+- **Ledger panels start folded.** Open Cargo, Stowage Plan, New Run and
+  Ledger start as their title bar and open when you rest the pointer on
+  one (after a moment, so passing over doesn't unfold it), focus it or
+  tap it. They stay open until *[HIDE]*, except New Run, which folds
+  shortly after the pointer leaves unless you've clicked or typed in it.
+- **Opening the site lands on the splash**, with *[CONTINUE AS <name>]* if
+  you're already signed in. Moving around inside the site doesn't replay
+  it.
+- **The screen fills the browser window** at any size.
+- **The keyboard does it all.** Opened forms put you in their first field,
+  focus goes back where you were after saving or cancelling, and the
+  pick-lists work as proper dropdowns for screen readers.
+
 ## 0.3.2
 
 ### Added

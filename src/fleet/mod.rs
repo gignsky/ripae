@@ -13,12 +13,13 @@ pub mod repo;
 pub mod views;
 
 use askama::Template;
-use axum::extract::{Path, RawQuery, State};
+use axum::extract::{Path, RawQuery};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 
 use crate::auth::{CurrentUser, SplashMode};
 use crate::lookups::{self, Kind};
+use crate::sandbox::Db;
 use crate::stowage::model::User;
 use crate::stowage::{self, FormData};
 use crate::templates::{render_str, Shell};
@@ -85,7 +86,7 @@ async fn body_response(state: &AppState, headers: &HeaderMap) -> Response {
 }
 
 /// `GET /fleet?owner=&status=&sort=`.
-pub async fn page(State(state): State<AppState>, user: CurrentUser, RawQuery(q): RawQuery) -> Response {
+pub async fn page(Db(state): Db, user: CurrentUser, RawQuery(q): RawQuery) -> Response {
     let q = FleetQuery::from_query(q.as_deref().unwrap_or(""));
     let fleet_html = match body(&state, q.clone(), false).await {
         Ok(b) => b,
@@ -124,12 +125,12 @@ async fn form_response(state: &AppState, mut f: HullFormView, status: StatusCode
 }
 
 /// `GET /hulls/new` -- the add form, in the overlay. Owner defaults to you.
-pub async fn new_form(State(state): State<AppState>, user: CurrentUser) -> Response {
+pub async fn new_form(Db(state): Db, user: CurrentUser) -> Response {
     let f = HullFormView { owner: user.id.to_string(), kind: "ship".into(), status: "stored".into(), ..Default::default() };
     form_response(&state, f, StatusCode::OK).await
 }
 
-pub async fn edit_form(State(state): State<AppState>, _user: CurrentUser, Path(id): Path<i64>) -> Response {
+pub async fn edit_form(Db(state): Db, _user: CurrentUser, Path(id): Path<i64>) -> Response {
     match repo::find_hull(&state.pool, id).await {
         Ok(Some(h)) => form_response(&state, HullFormView::of(&h), StatusCode::OK).await,
         Ok(None) => (StatusCode::NOT_FOUND, "No such hull.").into_response(),
@@ -241,7 +242,7 @@ async fn closed_overlay(state: &AppState, headers: &HeaderMap) -> Response {
 }
 
 /// `POST /hulls`.
-pub async fn create(State(state): State<AppState>, _user: CurrentUser, headers: HeaderMap, body: String) -> Response {
+pub async fn create(Db(state): Db, _user: CurrentUser, headers: HeaderMap, body: String) -> Response {
     let mut f = form_from(&FormData::parse(&body), None);
     let hulls = repo::list_hulls(&state.pool).await.unwrap_or_default();
     match parse_form(&state, &f, &hulls).await {
@@ -257,7 +258,7 @@ pub async fn create(State(state): State<AppState>, _user: CurrentUser, headers: 
 }
 
 /// `PUT /hulls/:id`.
-pub async fn update(State(state): State<AppState>, _user: CurrentUser, Path(id): Path<i64>, headers: HeaderMap, body: String) -> Response {
+pub async fn update(Db(state): Db, _user: CurrentUser, Path(id): Path<i64>, headers: HeaderMap, body: String) -> Response {
     let mut f = form_from(&FormData::parse(&body), Some(id));
     let hulls = repo::list_hulls(&state.pool).await.unwrap_or_default();
     if !hulls.iter().any(|h| h.id == id) {
@@ -276,7 +277,7 @@ pub async fn update(State(state): State<AppState>, _user: CurrentUser, Path(id):
 }
 
 /// `DELETE /hulls/:id` (the edit form's Remove).
-pub async fn delete(State(state): State<AppState>, _user: CurrentUser, Path(id): Path<i64>, headers: HeaderMap) -> Response {
+pub async fn delete(Db(state): Db, _user: CurrentUser, Path(id): Path<i64>, headers: HeaderMap) -> Response {
     match repo::delete_hull(&state.pool, id).await {
         Ok(()) => closed_overlay(&state, &headers).await,
         Err(e) => fail(e, "remove that hull"),
@@ -290,7 +291,7 @@ pub async fn delete(State(state): State<AppState>, _user: CurrentUser, Path(id):
 /// `POST /hulls/:id/status` with `action` (delivered / out / store /
 /// destroyed / claim) and `location`. Answers `#fleet-body`; with
 /// `reply=line` (the SALE banner's store prompt) a one-line confirmation.
-pub async fn status(State(state): State<AppState>, _user: CurrentUser, Path(id): Path<i64>, headers: HeaderMap, body: String) -> Response {
+pub async fn status(Db(state): Db, _user: CurrentUser, Path(id): Path<i64>, headers: HeaderMap, body: String) -> Response {
     let form = FormData::parse(&body);
     let Some(action) = Action::parse(form.get("action")) else {
         return (StatusCode::UNPROCESSABLE_ENTITY, "Pick an action.").into_response();
@@ -323,7 +324,7 @@ fn askama_escape(s: &str) -> String {
 
 /// `POST /hulls/:id/loaners` with `do=remove|keep` -- once the pledge is
 /// delivered, its loaners go back (removed) or stay as ordinary hulls.
-pub async fn loaners(State(state): State<AppState>, _user: CurrentUser, Path(id): Path<i64>, headers: HeaderMap, body: String) -> Response {
+pub async fn loaners(Db(state): Db, _user: CurrentUser, Path(id): Path<i64>, headers: HeaderMap, body: String) -> Response {
     let form = FormData::parse(&body);
     let done = match form.get("do") {
         "remove" => repo::remove_loaners(&state.pool, id).await.map(|_| ()),

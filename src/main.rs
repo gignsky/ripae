@@ -6,6 +6,7 @@ mod discord;
 mod fleet;
 mod live;
 mod lookups;
+mod sandbox;
 mod stowage;
 mod templates;
 
@@ -28,6 +29,13 @@ pub struct AppState {
     pub live: tokio::sync::broadcast::Sender<String>,
     /// Discord sign-in, when configured (see `config::DiscordConfig`).
     pub discord: Option<Arc<discord::Discord>>,
+    /// Test mode sandboxes (see `sandbox`).
+    pub sandboxes: Arc<sandbox::Sandboxes>,
+    /// The sandbox this request reads and writes, when `pool` is one
+    /// (set by the `sandbox::Db` extractor; `None` on the router's state).
+    pub sandbox: Option<String>,
+    /// One-click sign-in on the gate (see `Config::dev_quick_login`).
+    pub dev_quick_login: bool,
 }
 
 #[tokio::main]
@@ -61,24 +69,51 @@ async fn main() -> anyhow::Result<()> {
     let discord = match config.discord.clone() {
         Some(d) => {
             tracing::info!(guild_id = %d.guild_id, redirect_uri = %d.redirect_uri, "Discord sign-in on");
+            // Discord is the only way in (0.3.4): an account never linked to
+            // Discord can't be signed into any more, and its owner signing in
+            // gets a new, empty account. Link it by hand if that happens.
+            let unlinked: Vec<String> =
+                sqlx::query_scalar("SELECT handle FROM users WHERE discord_id IS NULL ORDER BY id")
+                    .fetch_all(&pool)
+                    .await?;
+            if !unlinked.is_empty() {
+                tracing::warn!(?unlinked, "accounts not linked to Discord can no longer sign in");
+            }
             Some(Arc::new(discord::Discord::new(d)?))
         }
         None => None,
     };
-    let state = AppState { pool, live: live::channel(), discord };
+    let sandboxes = Arc::new(sandbox::Sandboxes::new(sandbox::Sandboxes::dir_for(&config.db_path))?);
+    sandboxes.spawn_sweeper(); // its first tick is the boot sweep
+    if config.dev_quick_login {
+        tracing::warn!("RIPAE_DEV_QUICK_LOGIN is on: the gate signs anyone in without a password");
+    }
+    let state = AppState {
+        pool,
+        live: live::channel(),
+        discord,
+        sandboxes,
+        sandbox: None,
+        dev_quick_login: config.dev_quick_login,
+    };
 
     let app = Router::new()
         .route("/healthz", get(healthz))
         .route("/changelog", get(changelog::changelog))
         .route("/login", get(auth::login_form).post(auth::login))
+        .route("/login/dev", post(auth::dev_login))
         .route("/logout", post(auth::logout))
         .route("/auth/discord", get(auth::discord_start))
         .route("/auth/discord/callback", get(auth::discord_callback))
         .route("/", get(stowage::index))
         .route("/live", get(live::events))
+        .route("/test-mode", post(sandbox::enter))
+        .route("/test-mode/discard", post(sandbox::discard))
+        .route("/test-mode/keep", get(sandbox::review).post(sandbox::keep))
         .route("/live/panels", get(stowage::live_panels))
         .route("/board", get(stowage::board))
         .route("/crew/{id}", get(stowage::crew))
+        .route("/crew/{id}/ledger", get(stowage::crew_ledger))
         .route("/fleet", get(fleet::page))
         .route("/hulls", post(fleet::create))
         .route("/hulls/new", get(fleet::new_form))

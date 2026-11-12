@@ -23,12 +23,12 @@
   {% endif %}
   <p class="ras tag">{{ r.line }}</p>
   <section class="panel record ras">
-    <header>{% if let Some(a) = r.avatar_url %}<img class="avatar" src="{{ a }}" alt="" width="40" height="40" />{% endif %}<h2>Service record · {{ r.name_upper }}</h2><span class="hint">{{ r.handle_line }}</span></header>
+    <header>{% if let Some(a) = r.avatar_url %}<img class="avatar" src="{{ a }}" alt="" width="40" height="40" />{% endif %}<h2>Service record · <a href="/crew/{{ r.user_id }}/ledger" title="Their ledger: every voyage, newest first">{{ r.name_upper }}</a></h2><span class="hint">{{ r.handle_line }}</span></header>
     <dl class="stats">
       {% for s in r.stats %}
       <div><dt>{{ s.label }}</dt><dd{% if s.txt %} class="txt"{% endif %}>{{ s.value }}{% if s.unit != "" %}<small>{{ s.unit }}</small>{% endif %}</dd></div>
       {% endfor %}
     </dl>
   </section>
-  <p class="ras any"><button class="cmd boxed" type="button" data-dismiss>Continue</button></p>
+  <p class="ras any"><a class="cmd boxed" href="/crew/{{ r.user_id }}/ledger">Ledger</a> <button class="cmd boxed" type="button" data-dismiss>Continue</button></p>
 </div>

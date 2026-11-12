@@ -74,6 +74,8 @@
     return out.filter(function (l) {
       if (l.classList.contains("lit") || l.hasAttribute("data-queued")) return false;
       if (l.closest("#splash, #overlay, template")) return false; // overlays run their own sequence
+      // a folded panel's lines are lit at once; unfolding has its own quick flash
+      if (l.closest(".panel.fold:not(.open) > .body")) { l.classList.add("lit"); return false; }
       // nested lines (e.g. .ras inside a .ras tbody) light with their parent
       var p = l.parentElement && l.parentElement.closest(SEL);
       if (p && out.indexOf(p) >= 0) { l.classList.add("lit"); return false; }
@@ -101,8 +103,10 @@
   /* ---- label every cell with its column header, so narrow screens can stack rows as cards ---- */
   function labelCards(root) {
     (root.matches && root.matches("table.cards") ? [root] : Array.prototype.slice.call(root.querySelectorAll ? root.querySelectorAll("table.cards") : [])).forEach(function (t) {
-      if (!t.tHead) return;
-      var hs = Array.prototype.map.call(t.tHead.rows[0].cells, function (c) { return c.textContent.trim(); });
+      // a table-wide thead, or (Open Cargo) the column-header row each voyage carries
+      var hr = t.tHead ? t.tHead.rows[0] : t.querySelector("tr.colhead");
+      if (!hr) return;
+      var hs = Array.prototype.map.call(hr.cells, function (c) { return c.textContent.trim(); });
       Array.prototype.forEach.call(t.tBodies, function (tb) {
         Array.prototype.forEach.call(tb.rows, function (r) {
           if (r.cells.length < hs.length) return;
@@ -159,10 +163,19 @@
     raster(secs, false, function () { location.href = href; });
   });
 
+  /* ---- [data-expand]: show / hide the element it names (a member ledger's loads under a voyage) ---- */
+  document.addEventListener("click", function (e) {
+    var b = e.target.closest("[data-expand]"); if (!b) return;
+    var t = document.getElementById(b.dataset.expand); if (!t) return;
+    var open = t.hidden; t.hidden = !open; b.setAttribute("aria-expanded", open ? "true" : "false");
+    b.classList.toggle("on", open);
+    if (open) { t.classList.add("ras"); t.classList.remove("lit"); raster([t], true); }
+  });
+
   /* ---- every panel header gets [HIDE]/[SHOW]; the body rasters out and in ---- */
   document.querySelectorAll(".panel > header").forEach(function (h) {
     var panel = h.parentNode;
-    if (panel.id === "newrun" || panel.classList.contains("record")) return;
+    if (panel.classList.contains("fold") || panel.classList.contains("record")) return;
     var b = document.createElement("button"); b.type = "button"; b.className = "cmd minbtn"; b.textContent = "Hide"; b.setAttribute("aria-expanded", "true"); h.appendChild(b);
     b.addEventListener("click", function () {
       var body = Array.prototype.slice.call(panel.children).filter(function (c) { return c !== h; });
@@ -180,6 +193,33 @@
   /* ---- crate mix + price mode: live derivation on any load line (new run, add load, edit) ---- */
   function fmt(n) { return n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
   function fmt0(n) { return Math.round(n).toLocaleString("en-US"); }
+  // an aUEC field as typed ("1,250.50") -> 1250.5
+  function num(v) { return parseFloat(String(v == null ? "" : v).replace(/,/g, "")) || 0; }
+
+  /* ---- aUEC fields ([data-auec]): commas go in as you type, so 1250000 reads 1,250,000. The caret
+          keeps its place among the digits; the server strips the commas again (parse_money). ---- */
+  function groupAuec(raw) {
+    var s = String(raw || "").replace(/[^\d.]/g, ""), dot = s.indexOf(".");
+    var int = dot < 0 ? s : s.slice(0, dot), frac = dot < 0 ? "" : s.slice(dot + 1).replace(/\./g, "");
+    int = int.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+    return dot < 0 ? int : (int || "0") + "." + frac;
+  }
+  function maskAuec(el) {
+    var v = el.value, out = groupAuec(v); if (out === v) return;
+    var focused = document.activeElement === el, at = focused ? el.selectionStart : v.length;
+    var keep = v.slice(0, at).replace(/[^\d.]/g, "").length, pos = 0; // digits and dot left of the caret
+    if (keep && v.slice(0, at).replace(/[^\d.]/g, "").charAt(0) === "." && out.charAt(0) === "0") keep++; // ".5" became "0.5"
+    for (var seen = 0; pos < out.length && seen < keep; pos++) if (/[\d.]/.test(out.charAt(pos))) seen++;
+    el.value = out; if (focused) el.setSelectionRange(pos, pos);
+  }
+  document.addEventListener("input", function (e) {
+    var el = e.target; if (el.matches && el.matches("input[data-auec]") && !e.isComposing) maskAuec(el);
+  }, true); // capture: format before the live calcs read it
+  document.addEventListener("htmx:load", function (e) {
+    var root = e.detail && e.detail.elt; if (!root || !root.querySelectorAll) return;
+    if (root.matches && root.matches("input[data-auec]")) maskAuec(root);
+    root.querySelectorAll("input[data-auec]").forEach(maskAuec);
+  });
   // "2×32, 4×8" or "2x32 4x8" -> [{n:2,size:32},{n:4,size:8}]
   function parseBoxes(str) {
     var out = [];
@@ -196,31 +236,30 @@
     var bb = fields.querySelector("[name=balance_before]"), ba = fields.querySelector("[name=balance_after]");
     var boxes = fields.querySelector("[data-boxes]"), bcalc = fields.querySelector(".boxes-calc");
     if (!mode || !p || !l) return; // the close form has its own wiring
-    var scuTouched = !!(scu && scu.value);
+    // SCU is generated from the boxes (crates define it): a read-only figure
+    // the server derives again, so it is never typed or posted.
+    var scuVal = parseFloat(scu && scu.textContent) || 0;
     function recalcBoxes() {
       if (!boxes) return;
       var bs = parseBoxes(boxes.value); var tot = 0, cnt = 0; bs.forEach(function (b) { tot += b.n * b.size; cnt += b.n; });
-      if (!bs.length) { bcalc.textContent = "= —"; bcalc.classList.remove("bad"); return; }
-      if (!scuTouched || !scu.value) scu.value = tot;
-      var q = parseFloat(scu.value) || 0;
-      bcalc.innerHTML = "= <b>" + tot + "</b> SCU · " + cnt + " box" + (cnt === 1 ? "" : "es") + (q && q !== tot ? " · SCU field says " + q + " -- crates define the SCU" : "");
-      bcalc.classList.toggle("bad", !!q && q !== tot);
+      scuVal = tot;
+      if (scu) scu.textContent = bs.length ? String(tot) : "—";
+      bcalc.innerHTML = bs.length ? "= <b>" + tot + "</b> SCU · " + cnt + " box" + (cnt === 1 ? "" : "es") : "= —";
     }
     function recalcPrice() {
-      var q = parseFloat(scu && scu.value) || 0;
+      var q = scuVal;
       if (scuL) scuL.hidden = mode.value !== "scu"; if (lotL) lotL.hidden = mode.value !== "lot";
       balL.forEach(function (b) { b.hidden = mode.value !== "balance"; });
-      if (mode.value === "scu" && scuL) { var per = parseFloat(p.value) || 0; scuL.querySelector(".calc").innerHTML = q && per ? "lot = <b>" + fmt(per * q) + "</b> · " + q + " SCU" : "lot = —"; }
+      if (mode.value === "scu" && scuL) { var per = num(p.value); scuL.querySelector(".calc").innerHTML = q && per ? "lot = <b>" + fmt(per * q) + "</b> · " + q + " SCU" : "lot = —"; }
       else if (mode.value === "balance" && bb && ba) {
         var bc = balL[balL.length - 1].querySelector(".calc");
         if (bb.value === "" || ba.value === "") { bc.textContent = "cost = —"; bc.classList.remove("bad"); return; }
-        var cost = (parseFloat(bb.value) || 0) - (parseFloat(ba.value) || 0);
+        var cost = num(bb.value) - num(ba.value);
         bc.innerHTML = cost < 0 ? "balance went up -- swapped?" : "cost = <b>" + fmt0(cost) + "</b>" + (q ? " · per SCU = <b>" + fmt(cost / q) + "</b>" : "");
         bc.classList.toggle("bad", cost < 0);
       }
-      else if (lotL) { var tot = parseFloat(l.value) || 0; lotL.querySelector(".calc").innerHTML = q && tot ? "per SCU = <b>" + fmt(tot / q) + "</b> · " + q + " SCU" : "per SCU = —"; }
+      else if (lotL) { var tot = num(l.value); lotL.querySelector(".calc").innerHTML = q && tot ? "per SCU = <b>" + fmt(tot / q) + "</b> · " + q + " SCU" : "per SCU = —"; }
     }
-    if (scu) scu.addEventListener("input", function () { scuTouched = true; recalcBoxes(); recalcPrice(); });
     if (boxes) boxes.addEventListener("input", function () { recalcBoxes(); recalcPrice(); });
     [mode, p, l, bb, ba].forEach(function (el) { if (el) { el.addEventListener("input", recalcPrice); el.addEventListener("change", recalcPrice); } });
     var status = fields.querySelector("[data-status]"), storedAt = fields.querySelector("[name=stored_at]");
@@ -236,6 +275,130 @@
   }
   document.addEventListener("htmx:load", function (e) { wireLines(e.detail && e.detail.elt); });
 
+  /* ---- folding panels (the ledger screen): every panel starts as its title bar. Hover (a mouse), focus or a
+          tap on the bar flashes it open. data-fold="stay" panels stay open until [HIDE]; "peek" (New Run) folds
+          again when the pointer leaves unless it was clicked, focused into or typed into -- and never while one of
+          its fields has focus. State is a class on the <section>, which no htmx swap replaces. Open "stay"
+          panels are remembered for the tab (sessionStorage) and forgotten on entering through the splash. ---- */
+  var FOLD_KEY = "ripae.panels.open";
+  var FOLD_OPEN_MS = 200, FOLD_CLOSE_MS = 600; // hover before opening; how long New Run lingers after the pointer leaves
+  var folds = Array.prototype.slice.call(document.querySelectorAll(".panel.fold"));
+  function foldLoad() { try { return JSON.parse(sessionStorage.getItem(FOLD_KEY) || "[]"); } catch (e) { return []; } }
+  function foldSave() {
+    var ids = folds.filter(function (p) { return p.dataset.fold === "stay" && p.classList.contains("open"); }).map(function (p) { return p.id; });
+    try { sessionStorage.setItem(FOLD_KEY, JSON.stringify(ids)); } catch (e) {}
+  }
+  function setFold(p, on, animate) {
+    if (!on) p.classList.remove("pinned");
+    if (p.classList.contains("open") === on) return;
+    p.classList.toggle("open", on);
+    var bar = p.querySelector(".bar"); if (bar) bar.setAttribute("aria-expanded", on ? "true" : "false");
+    var body = p.querySelector(".body");
+    if (on && body && animate !== false && !reduce) { body.classList.remove("unfold"); void body.offsetWidth; body.classList.add("unfold"); }
+    if (p.dataset.fold === "stay") foldSave();
+  }
+  function foldAll() { folds.forEach(function (p) { setFold(p, false); }); }
+  function fieldFocused(p) { var a = document.activeElement; return !!(a && p.contains(a) && a.matches("input, select, textarea")); }
+  function peekClose(p) {
+    if (p.dataset.fold !== "peek" || p.classList.contains("pinned") || fieldFocused(p)) return;
+    setFold(p, false);
+  }
+  var hushFocus = false; // moving focus to the bar after [HIDE] must not unfold it again
+  var splashMode0 = (document.getElementById("splash") || { dataset: {} }).dataset.mode;
+  var keep = splashMode0 === "hidden" ? foldLoad() : []; // a landing (gate or welcome) starts folded
+  folds.forEach(function (p) {
+    var head = p.querySelector(":scope > header"), bar = p.querySelector(".bar"), hide = p.querySelector(".fold-hide");
+    var peek = p.dataset.fold === "peek";
+    p.classList.remove("open");
+    if (bar) bar.setAttribute("aria-expanded", "false");
+    if (keep.indexOf(p.id) >= 0 || p.classList.contains("pinned")) setFold(p, true, false);
+    // hover intent: a pointer passing over a bar doesn't open it, and New Run lingers a moment after it
+    // leaves, so a slip off the edge doesn't fold it. Focus, clicks and taps stay instant.
+    var openT = 0, closeT = 0;
+    function later(t, fn, ms) { clearTimeout(t); return setTimeout(fn, ms); }
+    head.addEventListener("pointerenter", function (e) {
+      if (e.pointerType === "touch") return;
+      clearTimeout(closeT);
+      openT = later(openT, function () { setFold(p, true); }, FOLD_OPEN_MS);
+    });
+    head.addEventListener("pointerleave", function () { clearTimeout(openT); });
+    p.addEventListener("pointerenter", function () { clearTimeout(closeT); });
+    p.addEventListener("pointerleave", function (e) {
+      if (e.pointerType === "touch") return;
+      clearTimeout(openT);
+      closeT = later(closeT, function () { peekClose(p); }, FOLD_CLOSE_MS);
+    });
+    p.addEventListener("focusin", function (e) {
+      if (hushFocus) return;
+      setFold(p, true);
+      if (peek && e.target !== bar && e.target !== hide) p.classList.add("pinned");
+    });
+    p.addEventListener("focusout", function (e) {
+      if (peek && !(e.relatedTarget && p.contains(e.relatedTarget)) && !p.matches(":hover")) peekClose(p);
+    });
+    // a click (or tap) anywhere in it keeps it; typing in New Run does too
+    p.addEventListener("click", function (e) {
+      if (e.target.closest(".fold-hide, #newrun-cancel")) return;
+      setFold(p, true); p.classList.add("pinned");
+      if (peek && bar && e.target === bar) { var f = p.querySelector(".body input, .body select"); if (f) f.focus({ preventScroll: true }); }
+    });
+    p.addEventListener("input", function () { p.classList.add("pinned"); });
+    function hideIt() { setFold(p, false); if (bar && p.contains(document.activeElement)) { hushFocus = true; bar.focus({ preventScroll: true }); hushFocus = false; } }
+    if (hide) hide.addEventListener("click", hideIt);
+    var cancel = peek && p.querySelector("#newrun-cancel");
+    if (cancel) cancel.addEventListener("click", hideIt);
+  });
+  window.ripaeFoldAll = foldAll;
+
+  /* ---- keyboard flow: focus the first field of a form that opens, and put focus somewhere
+          sensible when an htmx swap takes away the element that had it ---- */
+  var FIELDS = "input:not([type=hidden]):not([readonly]):not([disabled]):not([tabindex='-1']), select:not([disabled]), textarea:not([disabled])";
+  function visible(el) { return !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length); }
+  function firstField(root) { return Array.prototype.filter.call(root.querySelectorAll(FIELDS), visible)[0] || null; }
+  // a swapped-in line is visibility:hidden until the raster lights it, and hidden things refuse focus
+  function focusSoon(el, tries) {
+    if (!el || !el.isConnected) return;
+    var a = document.activeElement;
+    if (tries && a && a !== document.body && a.isConnected) return; // the user has moved on
+    el.focus({ preventScroll: true });
+    if (document.activeElement !== el && (tries || 0) < 20) setTimeout(function () { focusSoon(el, (tries || 0) + 1); }, 60);
+  }
+  function focusFirstField(root) { var f = firstField(root); if (f) focusSoon(f); return !!f; }
+  function buttonsIn(root) { return Array.prototype.filter.call(root.querySelectorAll("button:not([disabled])"), visible); }
+  var lastTrigger = null, openers = {};
+  document.addEventListener("htmx:beforeRequest", function (e) {
+    var elt = e.detail && e.detail.elt, t = e.detail && e.detail.target;
+    if (!elt || !t || !t.id || t.id === "overlay") { lastTrigger = null; return; }
+    if (elt.tagName === "BUTTON" && !elt.closest("form")) {
+      var scope = document.getElementById(t.id);
+      lastTrigger = { scope: t.id, label: elt.textContent.trim(), index: scope ? buttonsIn(scope).indexOf(elt) : -1 };
+    } else lastTrigger = { scope: t.id, fromForm: true };
+  });
+  document.addEventListener("htmx:afterSettle", function (e) {
+    var trig = lastTrigger; lastTrigger = null;
+    if (!trig) return;
+    var a = document.activeElement;
+    var lost = !a || a === document.body || !a.isConnected;
+    var t = e.detail && e.detail.target, el = t && t.id ? document.getElementById(t.id) : null;
+    if (!el) return;
+    var form = el.querySelector("form");
+    if (form) {
+      // a form opened (or came back with an error): remember who opened it, start on its first field
+      if (!trig.fromForm) openers[trig.scope] = trig;
+      if (lost || !trig.fromForm || form.querySelector(".form-error")) focusFirstField(form);
+      return;
+    }
+    if (!lost) return;
+    // the form closed (saved or cancelled) or the trigger was replaced: back to the button that
+    // opened it, else the same button again, else the row's first command
+    var back = trig.fromForm ? openers[trig.scope] : trig;
+    delete openers[trig.scope];
+    var scope = (back && document.getElementById(back.scope)) || el;
+    var bs = buttonsIn(scope);
+    var hit = back && (bs.filter(function (b) { return b.textContent.trim() === back.label; })[0] || (back.index >= 0 && bs[back.index]));
+    var first = hit || scope.querySelector(".cmd:not([disabled])") || bs[0];
+    if (first) focusSoon(first);
+  });
   /* ---- route editor (New Run, Edit voyage): stops, and every stop pick-list in step ---- */
   var stopSeq = 0;
   function shortTerminal(t) { return t.replace("Mining Facility ", "").replace("Mining Area ", ""); }
@@ -308,14 +471,10 @@
   }
   document.addEventListener("htmx:load", function (e) { wireRoutes(e.detail && e.detail.elt); });
 
-  /* ---- New Run panel: [NEW RUN]/[CLOSE], add / remove load lines ---- */
+  /* ---- New Run panel: add / remove load lines ---- */
   var panel = document.getElementById("newrun");
   if (panel) {
-    var toggle = document.getElementById("newrun-toggle"), cancel = document.getElementById("newrun-cancel");
-    var body = document.getElementById("newrun-body"), loads = document.getElementById("loads"), tpl = document.getElementById("load-tpl");
-    var timers = [];
-    function clear() { timers.forEach(clearTimeout); timers = []; }
-    function allLines() { return Array.prototype.slice.call(panel.querySelectorAll(".ras")); }
+    var loads = document.getElementById("loads"), tpl = document.getElementById("load-tpl");
     function renumber() {
       Array.prototype.forEach.call(loads.children, function (c, i) {
         c.querySelector(".ln").textContent = i + 1;
@@ -337,32 +496,19 @@
       // let the picker, the date default and the price wiring see the new line
       document.dispatchEvent(new CustomEvent("htmx:load", { detail: { elt: line } }));
       raster([line], true);
+      focusFirstField(line);
     }
     Array.prototype.forEach.call(loads.children, wireRemove); renumber();
-    function open() {
-      clear(); panel.classList.remove("collapsed"); body.hidden = false;
-      toggle.setAttribute("aria-expanded", "true"); toggle.textContent = "Close";
-      var lines = allLines(); lines.forEach(function (l) { l.classList.remove("lit", "flash"); });
-      timers = raster(lines, true, function () { var f = panel.querySelector("input"); if (f) f.focus({ preventScroll: true }); });
-    }
-    function close() {
-      clear(); toggle.setAttribute("aria-expanded", "false"); toggle.textContent = "New run";
-      timers = raster(allLines(), false, function () { panel.classList.add("collapsed"); body.hidden = true; });
-    }
-    toggle.addEventListener("click", function () { panel.classList.contains("collapsed") ? open() : close(); });
-    if (cancel) cancel.addEventListener("click", close);
     var add = document.getElementById("add-load"); if (add) add.addEventListener("click", addLoad);
-    if (!panel.classList.contains("collapsed")) { allLines().forEach(function (l) { l.classList.add("lit"); }); }
   }
 
-  /* ---- close form: crate picker, live preview, shares ---- */
+  /* ---- close form: crate picker, live preview, the crew's split ---- */
   function wireClose(form) {
     if (form.dataset.wired) return; form.dataset.wired = "1";
     var buyScu = parseFloat(String(form.dataset.buyScu || "0").replace(/,/g, "")) || 0;
     var scuSold = form.querySelector("[data-scu-sold]"), mode = form.querySelector("[data-mode]");
     var scuL = form.querySelector(".price-scu"), lotL = form.querySelector(".price-lot");
     var balL = Array.prototype.slice.call(form.querySelectorAll(".price-bal"));
-    var sharesBox = form.querySelector(".shares");
     function crates() { return Array.prototype.slice.call(form.querySelectorAll("label.crate")); }
     function paintCrate(c) {
       var i = c.querySelector("input"); var sk = c.querySelector(".sold-kept");
@@ -376,19 +522,29 @@
     }
     function revenue() {
       var q = syncScu();
-      if (mode.value === "scu") { var per = parseFloat(form.querySelector("[name=sell_scu]").value) || 0; return { q: q, rev: per * q, per: per }; }
+      if (mode.value === "scu") { var per = num(form.querySelector("[name=sell_scu]").value); return { q: q, rev: per * q, per: per }; }
       if (mode.value === "balance") {
         var b = form.querySelector("[name=sell_bal_before]").value, a = form.querySelector("[name=sell_bal_after]").value;
-        var d = b === "" || a === "" ? 0 : (parseFloat(a) || 0) - (parseFloat(b) || 0);
+        var d = b === "" || a === "" ? 0 : num(a) - num(b);
         return { q: q, rev: d, per: q ? d / q : 0 };
       }
-      var tot = parseFloat(form.querySelector("[name=sell_lot]").value) || 0; return { q: q, rev: tot, per: q ? tot / q : 0 };
+      var tot = num(form.querySelector("[name=sell_lot]").value); return { q: q, rev: tot, per: q ? tot / q : 0 };
     }
+    // the split shown read-only: the crew's terms less the seller's own (or, on the
+    // sale editor, the shares as recorded unless re-split by the crew)
+    var resplit = form.querySelector(".resplit");
     function shares(profit) {
-      var paid = 0;
-      sharesBox.querySelectorAll(".share").forEach(function (sh) {
-        var kind = sh.querySelector("[name=share_kind]").value, amt = parseFloat(sh.querySelector("[name=share_amount]").value) || 0;
-        paid += profit <= 0 ? 0 : (kind === "pct" ? profit * amt / 100 : amt);
+      var paid = 0, seller = (form.querySelector("[name=sold_by]") || {}).value;
+      var crew = form.querySelector(".crew-split"), rec = form.querySelector(".split-lines.recorded");
+      if (rec && resplit) { rec.hidden = resplit.checked; crew.hidden = !resplit.checked; }
+      form.querySelectorAll(".split-lines").forEach(function (box) {
+        box.querySelectorAll(".split-line").forEach(function (ln) {
+          var skip = box.dataset.skipSeller && ln.dataset.user === seller;
+          ln.classList.toggle("dim", !!skip);
+          var tag = ln.querySelector(".seller-tag"); if (tag) tag.hidden = !skip;
+          if (box.hidden || skip || profit <= 0) return;
+          paid += profit * (parseFloat(ln.dataset.pct) || 0) / 100 + (parseFloat(ln.dataset.flat) || 0);
+        });
       });
       return paid;
     }
@@ -411,59 +567,51 @@
     var all = form.querySelector(".sel-all"), none = form.querySelector(".sel-none");
     if (all) all.addEventListener("click", function () { crates().forEach(function (c) { var i = c.querySelector("input"); if (!i.disabled) i.checked = c.dataset.sound === "1"; paintCrate(c); }); recalc(); });
     if (none) none.addEventListener("click", function () { crates().forEach(function (c) { var i = c.querySelector("input"); if (!i.disabled) i.checked = false; paintCrate(c); }); recalc(); });
-    wireShares(form, recalc);
     form.querySelectorAll("input,select").forEach(function (el) { el.addEventListener("input", recalc); el.addEventListener("change", recalc); });
     recalc();
   }
 
-  /* ---- profit shares: [+ ADD SHARE] / [REMOVE], even split. Close form, sale editor, voyage form ---- */
-  function wireShares(form, onChange) {
-    if (form.dataset.sharesWired) return; form.dataset.sharesWired = "1";
-    var box = form.querySelector(".shares"), tpl = form.querySelector(".share-tpl"), add = form.querySelector(".add-share");
+  /* ---- voyage crew: [+ ADD CREW] / [REMOVE]; a new member's % is an even cut until typed into ---- */
+  function wireCrew(form) {
+    if (form.dataset.crewWired) return; form.dataset.crewWired = "1";
+    var box = form.querySelector(".crew-rows"), tpl = form.querySelector(".crew-tpl"), add = form.querySelector(".add-crew");
     if (!box || !tpl || !add) return;
-    onChange = onChange || function () {};
-    function rows() { return Array.prototype.slice.call(box.querySelectorAll(".share")); }
-    // whoever keeps the remainder: the seller picked on a sale, the run's owner on a voyage
-    function owner() { var s = form.querySelector("[name=sold_by], [name=logged_by]"); return s ? s.value : form.dataset.owner || ""; }
-    // a % share nobody has typed into is an even cut: what the typed-in %
-    // shares leave, split equally among them and whoever keeps the remainder
+    function rows() { return Array.prototype.slice.call(box.querySelectorAll(".crew-row")); }
+    // what the typed-in cuts leave, split equally among the untouched new members and whoever sells
     function even() {
       var typed = 0, auto = [];
-      rows().forEach(function (sh) {
-        if (sh.querySelector("[name=share_kind]").value !== "pct") return;
-        var a = sh.querySelector("[name=share_amount]");
-        if (sh.dataset.auto) auto.push(a); else typed += parseFloat(a.value) || 0;
+      rows().forEach(function (r) {
+        var a = r.querySelector("[name=crew_pct]");
+        if (r.dataset.auto) auto.push(a); else typed += parseFloat(a.value) || 0;
       });
       if (!auto.length) return;
       var each = Math.floor(Math.max(0, 100 - typed) / (auto.length + 1) * 100) / 100;
       auto.forEach(function (a) { a.value = each; });
     }
-    // a new share goes to the first crew member without one
-    function pickCrew(sh) {
-      var taken = rows().filter(function (r) { return r !== sh; }).map(function (r) { return r.querySelector("[name=share_to]").value; });
-      taken.push(owner());
-      var sel = sh.querySelector("[name=share_to]");
+    // a new row goes to the first member not aboard yet
+    function pickCrew(r) {
+      var taken = rows().filter(function (x) { return x !== r; }).map(function (x) { return x.querySelector("[name=crew_user]").value; });
+      var sel = r.querySelector("[name=crew_user]");
       var free = Array.prototype.filter.call(sel.options, function (o) { return taken.indexOf(o.value) < 0; })[0];
       if (free) sel.value = free.value;
     }
-    function wire(sh) {
-      sh.querySelectorAll("input,select").forEach(function (el) { el.addEventListener("input", onChange); el.addEventListener("change", onChange); });
-      sh.querySelector("[name=share_amount]").addEventListener("input", function () { delete sh.dataset.auto; even(); onChange(); });
-      sh.querySelector("[name=share_kind]").addEventListener("change", function () { even(); onChange(); });
-      sh.querySelector(".rm-share").addEventListener("click", function () { raster([sh], false, function () { sh.remove(); even(); onChange(); }); });
+    function wire(r) {
+      r.querySelector("[name=crew_pct]").addEventListener("input", function () { delete r.dataset.auto; even(); });
+      var rm = r.querySelector(".rm-crew");
+      if (rm) rm.addEventListener("click", function () { raster([r], false, function () { r.remove(); even(); }); });
     }
     rows().forEach(wire);
     add.addEventListener("click", function () {
-      var sh = tpl.content.firstElementChild.cloneNode(true); box.appendChild(sh);
-      pickCrew(sh); wire(sh); even(); raster([sh], true); onChange();
+      var r = tpl.content.firstElementChild.cloneNode(true); box.appendChild(r);
+      pickCrew(r); wire(r); even(); raster([r], true);
     });
   }
   document.addEventListener("htmx:load", function (e) {
     var root = e.detail && e.detail.elt; if (!root || !root.querySelectorAll) return;
     if (root.matches && root.matches("form.close-form")) wireClose(root);
     root.querySelectorAll("form.close-form").forEach(wireClose);
-    if (root.matches && root.matches("form.shares-form")) wireShares(root);
-    root.querySelectorAll("form.shares-form").forEach(function (f) { wireShares(f); });
+    if (root.matches && root.matches("form.crew-form")) wireCrew(root);
+    root.querySelectorAll("form.crew-form").forEach(wireCrew);
   });
 
   /* ---- live updates: another crew member's change refreshes the ledger panels in place ----
@@ -559,25 +707,101 @@
         var t = 0;
         lines.forEach(function (l, i) { t += (reduce || instant) ? 0 : (i === lines.length - 1 ? 420 : 160); splashTimers.push(setTimeout(function () { boot.textContent += l + "\n"; }, t)); });
         splashTimers.push(setTimeout(function () {
-          raster(ps.slice(3), true, function () { var h = document.getElementById("g-discord") || document.getElementById("g-handle"); if (h && gate) h.focus({ preventScroll: true }); armed = true; });
+          raster(ps.slice(3), true, function () { var h = gate ? document.getElementById("g-discord") || document.getElementById("g-handle") : cont; if (h) h.focus({ preventScroll: true }); armed = true; });
         }, t + 150));
       });
     }
+    // entering (again) through the splash starts the ledger's panels folded
     function dismiss() {
       if (!armed) return; armed = false;
+      foldAll();
       raster(parts(), false, function () { splash.hidden = true; });
     }
+    var cont = document.getElementById("g-continue");
+    if (cont) cont.addEventListener("click", function (e) {
+      e.stopPropagation(); splashTimers.forEach(clearTimeout); splashTimers = []; armed = true; dismiss();
+    });
     // with a session, any key or click lets you through; without one, only the gate does
     ["click", "touchstart"].forEach(function (ev) {
       splash.addEventListener(ev, function (e) { if (mode0 !== "gate" && !e.target.closest(".cmd, button, a, input")) dismiss(); });
     });
-    document.addEventListener("keydown", function (e) { if (!splash.hidden && mode0 !== "gate" && e.key !== "Tab") dismiss(); });
+    document.addEventListener("keydown", function (e) { if (!splash.hidden && mode0 !== "gate" && e.key !== "Tab" && e.target.id !== "g-continue") dismiss(); });
     var replay = document.getElementById("replay-splash");
     // blur first: a Space/Enter on the still-focused button would otherwise re-run the splash on keyup
     if (replay) replay.addEventListener("click", function (e) { e.stopPropagation(); replay.blur(); runSplash(mode0 === "gate"); });
     if (mode0 === "gate" || mode0 === "welcome") runSplash(mode0 === "gate");
     else splash.hidden = true;
   }
+
+  /* ---- [FULL SCREEN]: the terminal takes the whole display. A page load (Ledger <-> Leaderboard,
+          test mode) drops fullscreen and browsers only re-enter it on a gesture, so a session flag
+          puts it back on the first click or key of the next page. ---- */
+  (function () {
+    var btn = document.getElementById("fullscreen"), root = document.documentElement;
+    var FS_KEY = "ripae.fullscreen";
+    if (!btn || !(document.fullscreenEnabled || document.webkitFullscreenEnabled)) return; // iPhone Safari: no button
+    btn.hidden = false;
+    function current() { return document.fullscreenElement || document.webkitFullscreenElement; }
+    function enter() {
+      var p = root.requestFullscreen ? root.requestFullscreen({ navigationUI: "hide" }) : root.webkitRequestFullscreen();
+      // keep Esc for the page's overlays (holding Esc still leaves fullscreen); Chromium only
+      if (p && p.then) p.then(function () {
+        if (navigator.keyboard && navigator.keyboard.lock) navigator.keyboard.lock(["Escape"]).catch(function () {});
+      }, function () {});
+    }
+    function leave() {
+      if (document.exitFullscreen) document.exitFullscreen().catch(function () {});
+      else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+    }
+    function want(on) { try { if (on) sessionStorage.setItem(FS_KEY, "1"); else sessionStorage.removeItem(FS_KEY); } catch (e) {} }
+    function wanted() { try { return sessionStorage.getItem(FS_KEY) === "1"; } catch (e) { return false; } }
+    var leaving = false; // a navigation drops fullscreen too; that isn't the member turning it off
+    window.addEventListener("beforeunload", function () { leaving = true; });
+    window.addEventListener("pagehide", function () { leaving = true; });
+    window.addEventListener("pageshow", function () { leaving = false; });
+    function label() {
+      var on = !!current();
+      btn.textContent = on ? "Exit full screen" : "Full screen";
+      btn.classList.toggle("on", on);
+      btn.setAttribute("aria-pressed", on ? "true" : "false");
+      return on;
+    }
+    function changed() {
+      if (label()) want(true); else if (!leaving) want(false); // left on purpose: the button, Esc, F11
+    }
+    document.addEventListener("fullscreenchange", changed);
+    document.addEventListener("webkitfullscreenchange", changed);
+    // blur first: a Space/Enter keyup on the still-focused button would otherwise toggle it straight back
+    btn.addEventListener("click", function (e) { e.stopPropagation(); btn.blur(); if (current()) leave(); else enter(); });
+    label();
+    if (wanted() && !current()) {
+      var again = function (e) {
+        if (e.type === "keydown" && (e.key === "Escape" || e.key === "F11" || e.key === "Tab")) return; // not gestures browsers honour
+        off();
+        if (e.target !== btn && wanted() && !current()) enter(); // the button handles its own click
+      };
+      var off = function () { document.removeEventListener("pointerdown", again, true); document.removeEventListener("keydown", again, true); };
+      document.addEventListener("pointerdown", again, true);
+      document.addEventListener("keydown", again, true);
+    }
+  })();
+
+  /* ---- [INSTALL]: Chromium offers the app install (manifest.webmanifest) through
+          beforeinstallprompt; the button only shows while that offer stands, so it's
+          gone in Firefox/Safari, once installed, and inside the installed app. ---- */
+  (function () {
+    var btn = document.getElementById("install-app"), offer = null;
+    if (!btn) return;
+    window.addEventListener("beforeinstallprompt", function (e) { e.preventDefault(); offer = e; btn.hidden = false; });
+    window.addEventListener("appinstalled", function () { offer = null; btn.hidden = true; });
+    btn.addEventListener("click", function (e) {
+      e.stopPropagation(); btn.blur();
+      if (!offer) return;
+      offer.prompt();
+      // a prompt can only be shown once; if it's declined, the browser offers again later and the button comes back
+      offer = null; btn.hidden = true;
+    });
+  })();
 
   /* ---- voyage forms: the Hull pick-list offers the run owner's hulls only (nobody can pull out a
           crewmate's ship); picking one puts its model in the Ship field ---- */
