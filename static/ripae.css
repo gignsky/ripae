@@ -210,11 +210,6 @@ tr.dim .meter::before{display:none}
 .gate .gate-line{text-align:center;color:var(--fg);letter-spacing:.25em}
 .gate .fields{grid-template-columns:1fr 1fr}
 .gate .any{text-align:center}
-.claim summary{cursor:pointer;list-style:none;text-align:center;font-size:.7rem}
-.claim summary::-webkit-details-marker{display:none}
-.claim summary:hover,.claim summary:focus-visible{color:var(--fg);outline:none}
-.claim[open] summary{margin-bottom:.8rem}
-.claim form{display:grid;gap:.8rem}
 #g-known b{color:var(--fg);font-weight:400}
 .gate-err{margin:0;font-size:.8rem;letter-spacing:.05em}
 .any{margin:0;font-size:.8rem;letter-spacing:.2em;text-transform:uppercase;color:var(--fg-dim)}

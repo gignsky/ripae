@@ -11,7 +11,7 @@ use serde::Deserialize;
 use sqlx::SqlitePool;
 use tower_sessions::Session;
 
-use crate::discord::{self, Refusal};
+use crate::discord;
 use crate::templates::{render, LoginTemplate};
 use crate::AppState;
 
@@ -26,9 +26,6 @@ const SESSION_JUST_SIGNED_IN: &str = "just_signed_in";
 /// The OAuth `state` of a Discord sign-in in flight; the callback must
 /// echo it back (the CSRF guard on the round trip).
 const SESSION_OAUTH_STATE: &str = "oauth_state";
-/// An old account whose password checked out, waiting for Discord to claim
-/// it. It isn't signed in until Discord vouches for the claimant.
-const SESSION_CLAIM: &str = "claim_user_id";
 
 const DOOR_SHUT: &str = "The door does not open. Check the handle and password.";
 const NOT_VOUCHED: &str = "Discord did not vouch for you. Try again.";
@@ -167,22 +164,18 @@ pub struct LoginForm {
     pub password: String,
 }
 
-/// `POST /login`. Without Discord this signs you in. With Discord it only
-/// takes the password of an account nobody has claimed yet, and sends you
-/// on to Discord to claim it: once linked, Discord is the only way in.
+/// `POST /login` -- handle + password, only on a copy without Discord
+/// (local dev). With Discord configured, Discord is the only way in: the
+/// old accounts have all been claimed (0.3.4), so no password is taken.
 pub async fn login(
     State(state): State<AppState>,
     session: Session,
     Form(form): Form<LoginForm>,
 ) -> Response {
-    let claiming = state.discord.is_some();
-    match authenticate(&state.pool, form.handle.trim(), &form.password, claiming).await {
-        Ok(Some(user_id)) if claiming => {
-            if session.insert(SESSION_CLAIM, user_id).await.is_err() {
-                return gate(&state, Some(NO_SESSION), StatusCode::INTERNAL_SERVER_ERROR).await;
-            }
-            Redirect::to("/auth/discord").into_response()
-        }
+    if state.discord.is_some() {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    match authenticate(&state.pool, form.handle.trim(), &form.password).await {
         Ok(Some(user_id)) => start_session(&state, &session, user_id).await,
         _ => gate(&state, Some(DOOR_SHUT), StatusCode::UNAUTHORIZED).await,
     }
@@ -248,8 +241,7 @@ pub struct DiscordCallback {
 }
 
 /// `GET /auth/discord/callback` -- Discord sends the member back here. In
-/// the NISC server: signed in (claiming an old account, if a password
-/// sign-in just checked out). Not in it, or the round trip doesn't add
+/// the NISC server: signed in. Not in it, or the round trip doesn't add
 /// up: the gate again.
 pub async fn discord_callback(
     State(state): State<AppState>,
@@ -259,9 +251,8 @@ pub async fn discord_callback(
     let Some(discord) = state.discord.as_deref() else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    // both are single-use, whatever happens next
+    // single-use, whatever happens next
     let expected: Option<String> = session.remove(SESSION_OAUTH_STATE).await.ok().flatten();
-    let claim: Option<i64> = session.remove(SESSION_CLAIM).await.ok().flatten();
     let code = match (q.code, q.state, expected) {
         (Some(code), Some(got), Some(want)) if got == want => code,
         _ => {
@@ -277,31 +268,19 @@ pub async fn discord_callback(
             return gate(&state, Some(NOT_VOUCHED), StatusCode::BAD_GATEWAY).await;
         }
     };
-    let refused = match discord::sign_in(&state.pool, &profile, claim).await {
-        Ok(Ok(user_id)) => return start_session(&state, &session, user_id).await,
-        Ok(Err(Refusal::DiscordTaken)) => "That Discord account already signs in as someone else.",
-        Ok(Err(Refusal::AccountTaken)) => "That account is already claimed by another Discord account.",
+    match discord::sign_in(&state.pool, &profile).await {
+        Ok(user_id) => start_session(&state, &session, user_id).await,
         Err(e) => {
             tracing::error!(error = ?e, "could not record a Discord sign-in");
-            return gate(&state, Some(NO_SESSION), StatusCode::INTERNAL_SERVER_ERROR).await;
+            gate(&state, Some(NO_SESSION), StatusCode::INTERNAL_SERVER_ERROR).await
         }
-    };
-    gate(&state, Some(refused), StatusCode::CONFLICT).await
+    }
 }
 
-/// The account behind a handle and password. `unclaimed_only` (Discord
-/// sign-in is on) ignores accounts already linked to Discord.
-async fn authenticate(
-    pool: &SqlitePool,
-    handle: &str,
-    password: &str,
-    unclaimed_only: bool,
-) -> anyhow::Result<Option<i64>> {
-    let row = sqlx::query_as::<_, (i64, String)>(
-        "SELECT id, password_hash FROM users WHERE handle = ? AND (NOT ? OR discord_id IS NULL)",
-    )
+/// The account behind a handle and password.
+async fn authenticate(pool: &SqlitePool, handle: &str, password: &str) -> anyhow::Result<Option<i64>> {
+    let row = sqlx::query_as::<_, (i64, String)>("SELECT id, password_hash FROM users WHERE handle = ?")
     .bind(handle)
-    .bind(unclaimed_only)
     .fetch_optional(pool)
     .await?;
     let Some((id, hash)) = row else {
@@ -336,50 +315,15 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(
-            authenticate(&pool, "lordgig", "wrong-password", false)
-                .await
-                .unwrap(),
-            None
-        );
-        assert!(authenticate(&pool, "lordgig", "correct-password", false)
-            .await
-            .unwrap()
-            .is_some());
-        assert_eq!(
-            authenticate(&pool, "nobody", "correct-password", false)
-                .await
-                .unwrap(),
-            None
-        );
-    }
-
-    #[tokio::test]
-    async fn with_discord_a_claimed_account_no_longer_takes_its_password() {
-        let pool = db::connect(":memory:").await.unwrap();
-        db::migrate(&pool).await.unwrap();
-        let hash = db::hash_password("pw").unwrap();
-        for (handle, discord_id) in [("lordgig", None), ("firstofficer", Some("200"))] {
-            sqlx::query("INSERT INTO users (handle, display_name, password_hash, discord_id) VALUES (?, ?, ?, ?)")
-                .bind(handle)
-                .bind(handle)
-                .bind(&hash)
-                .bind(discord_id)
-                .execute(&pool)
-                .await
-                .unwrap();
-        }
-        assert!(authenticate(&pool, "lordgig", "pw", true).await.unwrap().is_some());
-        assert_eq!(authenticate(&pool, "firstofficer", "pw", true).await.unwrap(), None);
-        // without Discord configured, passwords still work for everyone
-        assert!(authenticate(&pool, "firstofficer", "pw", false).await.unwrap().is_some());
+        assert_eq!(authenticate(&pool, "lordgig", "wrong-password").await.unwrap(), None);
+        assert!(authenticate(&pool, "lordgig", "correct-password").await.unwrap().is_some());
+        assert_eq!(authenticate(&pool, "nobody", "correct-password").await.unwrap(), None);
         // accounts made through Discord have no password at all
         sqlx::query("INSERT INTO users (handle, display_name, password_hash) VALUES ('jt', 'JT', '')")
             .execute(&pool)
             .await
             .unwrap();
-        assert_eq!(authenticate(&pool, "jt", "", true).await.unwrap(), None);
-        assert_eq!(authenticate(&pool, "jt", "", false).await.unwrap(), None);
+        assert_eq!(authenticate(&pool, "jt", "").await.unwrap(), None);
     }
 
     #[test]
