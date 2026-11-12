@@ -1,0 +1,62 @@
+{# The fleet's at-a-glance tiles and hull list. Swapped whole by every quick
+   action (and out of band after the add / edit overlay). Expects
+   `fv: FleetView`, `oob`. #}
+<div class="fleet-body" id="fleet-body"{% if oob %} hx-swap-oob="true"{% endif %}>
+  <section class="totals rs" aria-label="Fleet at a glance" id="fleet-glance">
+    <div class="tile"><div class="lbl">Hulls{% if fv.q.owner != "" %} · this member{% endif %}</div><div class="val">{{ fv.summary.total }}</div></div>
+    {% for t in fv.summary.tiles %}
+    <div class="tile sub" data-status="{{ t.key }}"><div class="lbl">{{ t.label }}</div><div class="val">{{ t.count }}</div></div>
+    {% endfor %}
+    <div class="tile sub"><div class="lbl">Cargo in play</div><div class="val">{{ fv.summary.scu_fmt }}<small>SCU</small></div></div>
+    <div class="tile sub"><div class="lbl">Claims to pay</div><div class="val fleet-claims">{{ fv.summary.claims_fmt }}</div></div>
+  </section>
+  {% if !fv.summary.places.is_empty() %}
+  <section class="panel rs">
+    <header><h2>Where things are</h2><span class="hint">Hulls in play by location; carried hulls count where their carrier is.{% if fv.summary.loaners > 0 %} {{ fv.summary.loaners }} loaner{% if fv.summary.loaners != 1 %}s{% endif %} among them.{% endif %}</span></header>
+    <ul class="places" id="fleet-places">
+      {% for p in fv.summary.places %}<li><b>{{ p.name }}</b> <span class="who">· {{ p.count }} · {{ p.detail }}</span></li>{% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+  <section class="panel rs">
+    <header><h2>Hulls</h2><span class="hint">Pull out, store and claim at a location (a station, a city, a hangar). Sort:
+      <a class="cmd{% if fv.q.sort == "owner" %} on{% endif %}" href="/fleet{{ fv.q.base() }}sort=owner">Owner</a>
+      <a class="cmd{% if fv.q.sort == "model" %} on{% endif %}" href="/fleet{{ fv.q.base() }}sort=model">Model</a>
+      <a class="cmd{% if fv.q.sort == "status" %} on{% endif %}" href="/fleet{{ fv.q.base() }}sort=status">Status</a>
+      <a class="cmd{% if fv.q.sort == "location" %} on{% endif %}" href="/fleet{{ fv.q.base() }}sort=location">Location</a></span></header>
+    <div class="tbl"><table id="fleet" class="cards fleet">
+      <thead><tr><th>Owner</th><th>Hull</th><th>Status</th><th>Where</th><th>Insurance</th><th>Voyage · notes</th><th>Cmd</th></tr></thead>
+      <tbody>
+        {% for h in fv.rows %}
+        <tr id="hull-{{ h.id }}" class="hull st-{{ h.status_key }}{% if h.vehicle %} vehicle{% endif %}{% if h.carried %} carried{% endif %}" style="--d: {{ h.depth }}">
+          <td class="owner"><a class="who" href="/fleet?owner={{ h.owner_id }}" title="Only {{ h.owner_upper }}'s hulls">{{ h.owner_upper }}</a></td>
+          <td class="hull-name">{% if h.depth > 0 %}<span class="nest">└ </span>{% endif %}<button class="cmd hull-edit" type="button" title="Edit or remove {{ h.label }}" hx-get="/hulls/{{ h.id }}/edit" hx-target="#overlay" hx-swap="innerHTML">{% if h.nickname != "" %}{{ h.nickname }}{% else %}{{ h.model }}{% endif %}</button>
+            <small class="who">{% if h.nickname != "" %}{{ h.model }} · {% endif %}{% if h.maker != "" %}{{ h.maker }} · {% endif %}{{ h.kind_label }}{% if h.capacity != "" %} · {{ h.capacity }}{% endif %}</small>
+            {% if h.loaner %}<span class="status loaner" title="A loaner{% if let Some(p) = h.loaner_for %} for {{ p.label }}{% endif %}">Loaner</span>{% if let Some(p) = h.loaner_for %} <a class="who" href="#hull-{{ p.id }}">for {{ p.label }}</a>{% endif %}{% endif %}
+            {% if h.concept %}<span class="status planned">Concept</span>{% endif %}
+            {% if !h.loaners.is_empty() %}<small class="who loaners">Loaners: {% for l in h.loaners %}{% if !loop.first %}, {% endif %}<a href="#hull-{{ l.id }}">{{ l.label }}</a>{% endfor %}</small>{% endif %}
+          </td>
+          <td><span class="status {{ h.status_key }}">{{ h.status_label }}</span>{% if let Some(c) = h.claim_due %} <small class="neg claim-due">{{ c }}</small>{% endif %}</td>
+          <td class="where">{{ h.where_text }}</td>
+          <td class="who">{% if h.insurance != "" %}{{ h.insurance }}{% else %}—{% endif %}</td>
+          <td class="where">{% if let Some(f) = h.flying %}<span class="flying">Flying {{ f }}</span>{% endif %}{% if h.notes != "" %}<small class="who">{{ h.notes }}</small>{% endif %}{% if h.flying.is_none() && h.notes == "" %}<span class="who">—</span>{% endif %}</td>
+          <td class="cmds">
+            <form class="hull-act" hx-post="/hulls/{{ h.id }}/status" hx-target="#fleet-body" hx-swap="outerHTML">
+              <input type="text" name="location" list="pick-locations" data-pick autocomplete="off" value="{{ h.location }}" placeholder="at…" aria-label="Location" title="Where to pull it out, store it or claim it" />
+              <span class="actions">{% for a in h.actions %}<button class="cmd {{ a.class }}" type="submit" name="action" value="{{ a.action }}">{{ a.label }}</button>{% endfor %}</span>
+            </form>
+            {% if let Some(s) = h.store_after %}
+            <form class="hull-act" hx-post="/hulls/{{ h.id }}/status" hx-target="#fleet-body" hx-swap="outerHTML"><input type="hidden" name="action" value="store" /><input type="hidden" name="location" value="{{ s.location }}" /><button class="cmd warn store-after" type="submit" title="Its voyage has closed">Store at {{ s.location }}</button></form>
+            {% endif %}
+            {% if h.loaners_due_back %}
+            <form class="hull-act loaners-back" hx-post="/hulls/{{ h.id }}/loaners" hx-target="#fleet-body" hx-swap="outerHTML"><small class="who">Delivered: its loaners go back?</small><span class="actions"><button class="cmd danger" type="submit" name="do" value="remove">Remove loaners</button><button class="cmd" type="submit" name="do" value="keep">Keep them</button></span></form>
+            {% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="7"><em>{% if fv.any %}No hull matches.{% else %}No hulls yet. [+ Add hull] puts the first one in.{% endif %}</em></td></tr>
+        {% endfor %}
+      </tbody>
+    </table></div>
+  </section>
+</div>

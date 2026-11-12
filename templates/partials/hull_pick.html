@@ -1,0 +1,4 @@
+{# The hull flying a voyage. Expects `hp_sel: String` (hull id or "") and
+   `hp_hulls: Vec<HullChoice>`. static/ripae.js shows only the run owner's
+   hulls and puts the hull's model in the Ship field. #}
+<label>Hull<select name="hull" data-hull-pick title="The actual hull flying this run (the fleet tracks where it goes)"><option value="">— none · ship model only —</option>{% for h in hp_hulls %}<option value="{{ h.id }}" data-owner="{{ h.owner_id }}" data-model="{{ h.model }}"{% if hp_sel == h.id.to_string() %} selected{% endif %}>{{ h.label }}</option>{% endfor %}</select></label>

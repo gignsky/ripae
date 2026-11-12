@@ -15,5 +15,8 @@
     <div><span>{{ who_upper }} keeps</span><span><b>{{ keeps_fmt }} aUEC</b></span></div>
     {% if kept_scu > 0 %}<div><span class="who">Still open on the voyage</span><span>{{ kept_scu }} SCU</span></div>{% endif %}
   </div>
+  {% if let Some(s) = store %}
+  <form class="ras store-prompt" id="store-prompt" hx-post="/hulls/{{ s.hull_id }}/status" hx-target="#store-prompt" hx-swap="outerHTML"><span class="who">Voyage closed · </span><input type="hidden" name="action" value="store" /><input type="hidden" name="location" value="{{ s.location }}" /><input type="hidden" name="reply" value="line" /><button class="cmd warn" type="submit">Store {{ s.label }} at {{ s.location }}</button></form>
+  {% endif %}
   <p class="ras any"><button class="cmd boxed" type="button" data-dismiss>Continue</button></p>
 </div>

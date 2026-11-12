@@ -19,7 +19,10 @@
 // record → close the other load at a loss: the voyage closes, the
 // write-off lands and Realised turns red → delete the
 // second voyage through the confirmation → gone. Then asserts no
-// horizontal scroll at 1280 / 760 / 400 px. Then test mode: enter it, log
+// horizontal scroll at 1280 / 760 / 400 px. Then the fleet: hulls (one
+// carried in another, a pledge and its loaner), pull out / store / destroy /
+// claim, delivered → loaners removed, a run flown by a hull that follows
+// [NEXT STOP] on /fleet, and /fleet at the same widths. Then test mode: enter it, log
 // a run, the TEST banner is up and another member still sees live, discard
 // leaves live untouched; enter again, log a run, Keep shows the diff in
 // words, confirm puts it in live. Motion is reduced so the run is
@@ -128,15 +131,19 @@ async function openPanels(page) {
 const realisedVal = (page) => page.locator("#totals .tile").nth(1).locator(".val");
 const realisedText = async (page) => (await realisedVal(page).innerText()).replace(/aUEC/, "").trim();
 
-// route = [start, stop 1, stop 2, ...], built like a UEX route
-async function newRun(page, ship, route, loads, crew) {
+// route = [start, stop 1, stop 2, ...], built like a UEX route; `hull`
+// picks a fleet hull by (part of) its label instead of typing a ship
+async function newRun(page, ship, route, loads, crew, hull) {
   await page.goto(base + "/");
   await enter(page);
   await openPanel(page, "open-cargo-panel");
   await page.click("#newrun-toggle");
   await page.waitForSelector("#newrun.open #newrun-body", { state: "visible" });
   if (crew) await page.selectOption("#newrun-form [name=logged_by]", { label: crew });
-  await page.fill("#newrun-form [name=ship]", ship);
+  if (hull) {
+    const value = await page.locator("#newrun-form [name=hull] option", { hasText: hull }).getAttribute("value");
+    await page.selectOption("#newrun-form [name=hull]", value);
+  } else await page.fill("#newrun-form [name=ship]", ship);
   const stops = page.locator("#newrun-form .route-stops > .route-stop");
   for (let i = 0; i < route.length; i++) {
     if ((await stops.count()) <= i) await page.click("#newrun-form [data-add-stop]");
@@ -508,6 +515,106 @@ const run = async () => {
   const fill = await page.evaluate(() => [document.querySelector(".screen").getBoundingClientRect().width, document.documentElement.clientWidth]);
   check("the screen fills a 1920px window", fill[0] >= fill[1] - 2 * Math.max(16, fill[1] * 0.015) - 1, `${fill[0]} of ${fill[1]}`);
   await page.setViewportSize({ width: 1280, height: 900 });
+
+  // -- the fleet: hulls, a carried one, a pledge and its loaner --
+  await page.goto(base + "/");
+  check("the splash counts the fleet and puts UEX import in 0.5", await page.evaluate(() => {
+    const b = document.getElementById("splash").dataset.boot;
+    return b.includes("FLEET") && b.includes("0 HULLS") && b.includes("UEX IMPORT 0.5");
+  }));
+  await enter(page);
+  await Promise.all([page.waitForURL(base + "/fleet"), page.click("#rail a[href='/fleet']")]);
+  await page.waitForSelector("#fleet");
+  check("the fleet tab is lit", (await page.getAttribute("#rail a[href='/fleet']", "class")).includes("on"));
+  check("an empty fleet says so", (await page.textContent("#fleet")).includes("No hulls yet"));
+  const row = (text) => page.locator("#fleet tr.hull", { has: page.locator(".hull-edit", { hasText: text }) });
+  async function addHull(f) {
+    await page.click("#add-hull");
+    await page.waitForSelector("#overlay:not([hidden]) #hull-form");
+    if (f.owner) await page.selectOption("#hull-form [name=owner]", { label: f.owner });
+    await page.fill("#hull-form [name=model]", f.model);
+    if (f.nickname) await page.fill("#hull-form [name=nickname]", f.nickname);
+    if (f.kind) await page.selectOption("#hull-form [name=kind]", f.kind);
+    if (f.status) await page.selectOption("#hull-form [name=status]", f.status);
+    if (f.location) await page.fill("#hull-form [name=location]", f.location);
+    if (f.carried) await page.selectOption("#hull-form [name=carried_in]", { label: f.carried });
+    if (f.loanerFor) {
+      await page.check("#hull-form [name=loaner]");
+      await page.selectOption("#hull-form [name=loaner_for]", { label: f.loanerFor });
+    }
+    if (f.claim) await page.fill("#hull-form [name=insurance_claim]", f.claim);
+    if (f.insurance) await page.fill("#hull-form [name=insurance_type]", f.insurance);
+    await page.click("#hull-form button[type=submit]");
+    await page.waitForSelector("#overlay", { state: "hidden" });
+    await row(f.nickname || f.model).first().waitFor();
+  }
+  await addHull({ model: "ironclad", nickname: "Big Iron", location: "Area18 TDD", claim: "120,000", insurance: "LTI" });
+  check("a hull from the list takes its spelling and capacity", (await row("Big Iron").textContent()).includes("Ironclad · Drake · Ship · 2,204 SCU"));
+  await addHull({ model: "C8 Pisces", carried: "LORD GIG · Big Iron (Ironclad)", claim: "5000" });
+  await addHull({ model: "Ursa Rover", kind: "vehicle", location: "Lorville TDD", owner: "JT" });
+  check("an off-list model is kept as typed", (await row("Ursa Rover").textContent()).includes("Ground vehicle"));
+  await addHull({ model: "Hull-D [Concept]", status: "planned" });
+  await addHull({ model: "Hull-C", location: "Lorville TDD", loanerFor: "LORD GIG · Hull-D [Concept]" });
+  check("the loaner is tagged and linked to its pledge", (await row("Hull-C").first().textContent()).includes("Loaner") && (await row("Hull-C").first().textContent()).includes("for Hull-D"));
+  check("the pledge lists its loaner", (await row("Hull-D").textContent()).includes("Loaners: Hull-C"));
+  const pisces = row("C8 Pisces");
+  check("the carried hull nests under its carrier", (await pisces.getAttribute("class")).includes("carried"));
+  check("the carried hull is where its carrier is", (await pisces.locator("td.where").first().textContent()).includes("in Big Iron (Ironclad) · Area18 TDD"));
+  check("at a glance: hulls per status", (await page.textContent("#fleet-glance [data-status=stored]")).includes("4"));
+
+  // pull out, store (the Pisces goes along), destroy, claim
+  const act = async (r, label, location) => {
+    if (location !== undefined) {
+      const box = r.locator("form.hull-act [name=location]").first();
+      await box.fill(location);
+      await box.press("Escape"); // close the pick-list over the buttons
+    }
+    await Promise.all([
+      page.waitForResponse((res) => res.url().includes("/hulls/") && res.request().method() === "POST"),
+      r.locator("form.hull-act .cmd", { hasText: label }).first().click(),
+    ]);
+    await page.waitForTimeout(150); // the swap
+  };
+  await act(row("Big Iron"), "Pull out", "Area18 TDD");
+  check("pulled out", (await row("Big Iron").locator(".status").first().textContent()).trim() === "Pulled out");
+  check("its cargo hull is out with it", (await pisces.locator(".status").first().textContent()).trim() === "Pulled out");
+  await act(row("Big Iron"), "Store", "Everus Harbor");
+  check("stored where it was put", (await row("Big Iron").locator("td.where").first().textContent()).trim() === "Everus Harbor");
+  check("the Pisces moved with it", (await pisces.locator("td.where").first().textContent()).includes("· Everus Harbor"));
+  await act(pisces, "Pull out", "Everus Harbor");
+  check("pulling out a carried hull unloads it", !(await pisces.getAttribute("class")).includes("carried"));
+  await act(pisces, "Destroyed");
+  check("a destroyed hull shows its claim cost", (await pisces.textContent()).includes("claim 5,000 aUEC"));
+  check("at a glance: claims pending", (await page.textContent("#fleet-glance .fleet-claims")).includes("5,000"));
+  await act(pisces, "Claim", "Levski");
+  check("claimed: stored at the claim location", (await pisces.locator(".status").first().textContent()).trim() === "Stored" && (await pisces.locator("td.where").first().textContent()).trim() === "Levski");
+  await act(row("Hull-D"), "Delivered", "Area18 TDD");
+  check("delivering the pledge offers its loaners back", await row("Hull-D").locator(".loaners-back").isVisible());
+  await row("Hull-D").locator(".loaners-back .cmd", { hasText: "Remove loaners" }).click();
+  await page.waitForSelector("#fleet tr.hull:has-text('Loaner')", { state: "detached" });
+  check("the loaner went back", (await row("Hull-C").count()) === 0);
+  // the filter: JT's hulls only
+  await page.goto(base + "/fleet?owner=2&sort=location");
+  check("the owner filter shows one member's hulls", (await page.locator("#fleet tr.hull").count()) === 1 && (await page.textContent("#fleet")).includes("Ursa Rover"));
+
+  // -- a run flown by Big Iron: pulled out at the start, follows Next stop --
+  await newRun(page, "", ["Everus Harbor", "Area18 TDD", "Lorville TDD"], [
+    { commodity: "Quartz", boxes: "2x8", mode: "scu", price: "300", pickup: 0, drop: 2 },
+  ], null, "Big Iron");
+  const ironHead = page.locator("#open-cargo tbody.vhead", { hasText: "Big Iron" });
+  check("the voyage header names the hull", (await ironHead.count()) === 1);
+  check("the run takes the hull's model", (await page.textContent("#plans")).includes("ironclad-official") || (await page.locator("#plans a[href*='ironclad']").count()) > 0);
+  await page.goto(base + "/fleet");
+  check("the hull is pulled out at the route's start", (await row("Big Iron").locator("td.where").first().textContent()).trim() === "Everus Harbor" && (await row("Big Iron").textContent()).includes("Flying Voyage"));
+  await page.goto(base + "/");
+  await enter(page);
+  await openPanel(page, "open-cargo-panel");
+  await ironHead.locator(".cmd", { hasText: "Next stop" }).click();
+  await page.waitForSelector("#open-cargo tbody.vhead:has-text('Big Iron') .vroute .here:has-text('Area18')");
+  await page.goto(base + "/fleet");
+  check("[NEXT STOP] moves the hull on the fleet page", (await row("Big Iron").locator("td.where").first().textContent()).trim() === "Area18 TDD");
+  check("the voyage it flies says where it is", (await row("Big Iron").textContent()).includes("at Area18 TDD · next Lorville TDD"));
+  await noScroll(page, " on /fleet");
 
   // -- test mode: a sandbox for this session only; discard, then keep --
   await page.setViewportSize({ width: 1280, height: 900 });
