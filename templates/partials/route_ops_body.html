@@ -1,0 +1,11 @@
+{# Every open voyage's Route Ops card. Whole-list regeneration, same as
+   `plans.html` -- a mutation anywhere resets any card's [Peek] back to its
+   phase-driven face, which is what you want (the phase itself may just
+   have flipped). #}
+<div id="route-ops-cards"{% if oob %} hx-swap-oob="true"{% endif %}>
+  {% for card in cards %}
+  {% include "partials/route_ops_card.html" %}
+  {% else %}
+  <section class="panel rs"><p>Nothing afloat. Log a run on the Ledger and its card appears here too.</p></section>
+  {% endfor %}
+</div>

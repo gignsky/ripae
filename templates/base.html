@@ -72,6 +72,7 @@
             <a class="cmd{% if shell.screen == "ledger" %} on{% endif %}" href="/" data-go="ledger">Ledger</a>
             <a class="cmd{% if shell.screen == "board" %} on{% endif %}" href="/board" data-go="board">Leaderboard</a>
             <a class="cmd{% if shell.screen == "fleet" %} on{% endif %}" href="/fleet" data-go="fleet">Fleet</a>
+            <a class="cmd{% if shell.screen == "route-ops" %} on{% endif %}" href="/route-ops" data-go="route-ops">Route Ops</a>
           </nav>
           {% if !shell.test_mode %}<form method="post" action="/test-mode" class="inline"><button class="cmd warn" type="submit" id="test-enter" title="Work on a private copy of the books; discard it or push it live after">Enter test mode</button></form>{% endif %}
           <button class="cmd" type="button" id="install-app" title="Install Ripae as a desktop app" hidden>Install</button>

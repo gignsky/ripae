@@ -1,0 +1,188 @@
+{# One voyage's phase-aware card (`RIPAE-0.3-ROUTE-OPS.md` §3). `card` is a
+   `route_ops::views::VoyageCardView`. The two faces' mutating buttons post
+   to the same endpoints the Ledger uses; `hx-swap="none"` discards the
+   primary response (shaped for the Ledger) and lets the out-of-band
+   `#route-ops-cards` fragment every one of those handlers now carries
+   (`stowage::mod::oob_common`) redraw this card in place. [Peek] and the
+   spine's stop-detail popover are pure client state (route-ops.js);
+   nothing here is persisted. #}
+<section class="voyage-card" id="rv-{{ card.id }}" data-auto-face="{{ card.auto_face }}" data-peek="0">
+  <div class="vc-head">
+    <span class="vlabel">{{ card.label }}</span>
+    <span class="vmeta">
+      <span>Ship <b>{{ card.ship_name }}</b></span>
+      {% if card.crew_line != "" %}<span>Crew <b class="who">{{ card.crew_line }}</b></span>{% endif %}
+      <span>Loads <b>{{ card.load_count }}</b></span>
+    </span>
+    <span class="spacer"></span>
+    <span class="phase-pill {{ card.phase_css }}" title="The phase follows the ship: PORT (unload/load) -&gt; UNDERWAY -&gt; ARRIVED">{{ card.phase_label }}</span>
+    <span class="peek-ctl">
+      <span class="peek-off"><button class="cmd" type="button" data-peek-on>Peek {{ card.other_face_label }} ◹</button></span>
+      <span class="peek-on"><span class="peeking">Peeking · {{ card.other_face_label }}</span> <button class="cmd" type="button" data-peek-off>← Back to {{ card.face_label }}</button></span>
+    </span>
+  </div>
+
+  <div class="spine"><div class="spine-rail">
+    {% for n in card.spine %}
+    <button class="node {{ n.css }}" type="button" data-node="{{ n.n }}">
+      <div class="dot-row"><span class="link in"></span><span class="dot">{% if n.css == "past" %}✓{% else %}{{ n.n }}{% endif %}</span><span class="link out"></span></div>
+      <span class="nn">{{ n.nn }}</span><span class="term">{{ n.short }}</span>
+      <span class="flow">{% if n.pickups > 0 %}<span class="up">+{{ n.pickups }}▲</span> {% endif %}{% if n.drops > 0 %}<span class="down">−{{ n.drops }}▼</span>{% endif %}{% if n.pickups == 0 && n.drops == 0 %}&nbsp;{% endif %}</span>
+    </button>
+    {% endfor %}
+  </div></div>
+
+  <div class="vc-body">
+    {# `stored_at` default for [Store] / [Unstow]: the current stop, same
+       `hx-include` pattern as the manifest's own [All stored]. #}
+    <input type="hidden" id="stow-at-{{ card.id }}" name="stored_at" value="{{ card.nav.at_short }}" />
+    <div class="route-nav">
+      {% if card.nav.can_back %}
+      <button class="cmd" type="button" hx-post="/voyages/{{ card.id }}/retreat" hx-swap="none">◂ Back to {{ card.nav.prev_short }}</button>
+      {% else %}
+      <button class="cmd" type="button" disabled>◂ Back</button>
+      {% endif %}
+      <span class="legpos">At <b>{{ card.nav.at_short }}</b> · stop {{ card.nav.at }} / {{ card.nav.last }}</span>
+      {% if card.nav.can_forward %}
+      <button class="cmd boxed warn" type="button" hx-post="/voyages/{{ card.id }}/advance" hx-swap="none">Reached {{ card.nav.next_short }} ▸</button>
+      {% else %}
+      <span class="legpos">— final stop —</span>
+      {% endif %}
+    </div>
+
+    {% for s in card.stops %}
+    <div class="stop-detail" data-n="{{ s.n }}">
+      <h4>{{ s.title }}</h4>
+      <div class="row"><span class="tag up">boards</span><span>{% if s.boards.is_empty() %}—{% else %}{% for b in s.boards %}{% if !loop.first %} · {% endif %}{{ b.0 }} · {{ b.1 }}{% endfor %}{% endif %}</span></div>
+      <div class="row"><span class="tag down">off</span><span>{% if s.offs.is_empty() %}—{% else %}{% for b in s.offs %}{% if !loop.first %} · {% endif %}{{ b.0 }} · {{ b.1 }}{% endfor %}{% endif %}</span></div>
+    </div>
+    {% endfor %}
+
+    <div class="peek-banner">Peeking the {{ card.other_face_label }} face -- the ship is actually <b>{{ card.phase_label }}</b> at <b>{{ card.nav.at_short }}</b>. <button class="cmd" type="button" data-peek-off>Back</button></div>
+
+    {# ---------------- ORDERS FACE ---------------- #}
+    <div class="face{% if card.auto_face == "stow" %} show{% endif %}" data-face="stow">
+      <div class="phase-line">
+        <span>At port <b class="at">{{ card.nav.at_short }}</b></span>
+        <span class="hint-small">Offload what comes off here, then load what boards -- deepest-first.</span>
+      </div>
+      <div class="cap{% if card.cap.high %} high{% endif %}{% if card.cap.over %} over{% endif %}">
+        <span>Hold</span><span class="track" style="--p:{{ card.cap.pct }};--plan:{{ card.cap.plan_pct }}"></span>
+        <span class="pct">{{ card.cap.hold_scu }} / {{ card.cap.ship_scu }} SCU{% if card.cap.show_plan %} · <span class="plan{% if card.cap.over %} over{% endif %}">plan {{ card.cap.plan_scu }}{% if card.cap.over %} ⚠ over{% endif %}</span>{% endif %}</span>
+      </div>
+
+      {% if !card.sell_due.is_empty() %}
+      <div class="ord-sub"><span>① Offload / sell here</span><span class="hint-r">door → inward</span></div>
+      <ol class="orders-list">
+        {% for item in card.sell_due %}
+        <li class="order sell">
+          <span class="n">{{ item.n }}</span>
+          <span class="what"><span class="cargo">{{ item.l.commodity_upper }}</span>{% if item.l.is_haul %}<span class="kind-tag">Haul</span>{% endif %}
+            <small>drops here · boxes <b>{% for b in item.l.boxes %}{{ b.0 }}×{{ b.1 }} {% endfor %}</b>· {{ item.l.scu }} SCU</small>
+            <div class="box-graphic">{% for sq in item.box_squares %}<span class="boxg s{{ sq }}{% if item.dropped %} off{% endif %}">{{ sq }}</span>{% endfor %}</div>
+          </span>
+          <span class="st-meta"><span class="status {{ item.l.status_css }}">{{ item.l.status_label }}</span></span>
+          <span class="st-act">
+            <button class="cmd warn" type="button" hx-get="/loads/{{ item.l.id }}/close/overlay" hx-target="#overlay" hx-swap="innerHTML">{% if item.l.is_haul %}Deliver ▸{% else %}Sell ▸{% endif %}</button>
+            {% if item.dropped %}
+            <button class="cmd" type="button" hx-post="/loads/{{ item.l.id }}/where" hx-vals='{"whereabouts":"aboard"}' hx-swap="none" title="Put it back aboard">Reload</button>
+            {% else %}
+            <button class="cmd" type="button" hx-post="/loads/{{ item.l.id }}/where" hx-vals='{"whereabouts":"stored"}' hx-include="#stow-at-{{ card.id }}" hx-swap="none" title="Set it down without selling yet">Store</button>
+            {% endif %}
+          </span>
+        </li>
+        {% endfor %}
+      </ol>
+      {% endif %}
+
+      {% if !card.load_seq.is_empty() %}
+      <div class="ord-sub"><span>② Load · stow in this order</span><span class="hint-r">deep → door</span></div>
+      <ol class="orders-list">
+        {% for item in card.load_seq %}
+        <li class="{% if item.waiting %}order stow waiting{% else %}order carry{% endif %}">
+          <span class="n">{{ item.n }}</span>
+          <span class="what"><span class="cargo">{{ item.l.commodity_upper }}</span>{% if item.l.is_haul %}<span class="kind-tag">Haul</span>{% endif %}
+            <small>{% if item.waiting %}boards here · {% else %}carried · {% endif %}boxes <b>{% for b in item.l.boxes %}{{ b.0 }}×{{ b.1 }} {% endfor %}</b>· {{ item.route_label }}</small>
+            {% if item.waiting %}<div class="box-graphic">{% for sq in item.box_squares %}<span class="boxg s{{ sq }}">{{ sq }}</span>{% endfor %}</div>{% endif %}
+          </span>
+          <span class="st-meta"><span class="status {{ item.l.status_css }}">{{ item.l.status_label }}</span><span class="depth{% if item.depth_tag == "by the door" %} door{% else if item.depth_tag == "load first · deep" %} deep{% endif %}">{{ item.depth_tag }}</span></span>
+          <span class="st-act">
+            {% if item.waiting %}
+            <button class="cmd warn" type="button" hx-post="/loads/{{ item.l.id }}/where" hx-vals='{"whereabouts":"aboard"}' hx-swap="none">Stow ▸</button>
+            {% else %}
+            <button class="cmd" type="button" hx-get="/loads/{{ item.l.id }}/close/overlay" hx-target="#overlay" hx-swap="innerHTML" title="Sell it early, right here">Sell here</button>
+            {% if item.picked_up_here %}<button class="cmd" type="button" hx-post="/loads/{{ item.l.id }}/where" hx-vals='{"whereabouts":"stored"}' hx-include="#stow-at-{{ card.id }}" hx-swap="none" title="Put it back ashore">Unstow</button>{% endif %}
+            {% endif %}
+          </span>
+        </li>
+        {% endfor %}
+      </ol>
+      {% endif %}
+
+      {% if card.sell_due.is_empty() && card.load_seq.is_empty() %}
+      <p class="empty">No orders at this stop -- nothing to drop or load.</p>
+      {% endif %}
+
+      <div class="stow-foot">
+        <span class="seal{% if card.seal.kind == "ready" %} ready{% endif %}">
+          {% if card.seal.kind == "none" %}Nothing to handle at this stop.
+          {% else if card.seal.kind == "ready" %}Orders cleared -- <b>underway</b> as soon as you move.
+          {% else %}<b>{{ card.seal.open_count }}</b> order{% if card.seal.open_count != 1 %}s{% endif %} still open here.
+          {% endif %}
+        </span>
+      </div>
+    </div>
+
+    {# ---------------- TRACKER FACE ---------------- #}
+    <div class="face{% if card.auto_face == "track" %} show{% endif %}" data-face="track">
+      <div class="phase-line">
+        <span>Phase <b>{{ card.phase_label }}</b></span>
+        <span>At <b class="at">{{ card.nav.at_short }}</b></span>
+      </div>
+      <div class="cap{% if card.cap.high %} high{% endif %}{% if card.cap.over %} over{% endif %}">
+        <span>Hold</span><span class="track" style="--p:{{ card.cap.pct }};--plan:{{ card.cap.plan_pct }}"></span>
+        <span class="pct">{{ card.cap.hold_scu }} / {{ card.cap.ship_scu }} SCU</span>
+      </div>
+      <div class="leg-grid">
+        <div class="block">
+          <h4>Aboard now <span class="n">{{ card.aboard.len() }}</span></h4>
+          <ul class="aboard-list">
+            {% for item in card.aboard %}
+            <li><span><span class="cargo">{{ item.l.commodity_upper }}</span><small>{% for b in item.l.boxes %}{{ b.0 }}×{{ b.1 }} {% endfor %}SCU · {{ item.route_label }}</small></span><span class="off">{% if item.depth_tag == "by the door" %}by the <b>door</b>{% else if item.depth_tag == "deep" %}<b>deep</b>{% else %}mid{% endif %}</span></li>
+            {% else %}
+            <li class="empty">Flying empty.</li>
+            {% endfor %}
+          </ul>
+        </div>
+        <div class="block">
+          <h4>This stop <span class="n at">{{ card.nav.at_short }}</span></h4>
+          {% if card.here_rows.is_empty() %}
+          <p class="empty">Passing through -- no cargo change here.</p>
+          {% else %}
+          <ul class="here-list">
+            {% for r in card.here_rows %}
+            <li><span class="tag {{ r.dir }}">{% if r.dir == "down" %}off ▼{% else %}on ▲{% endif %}</span><span>{{ r.commodity_upper }} <small>{{ r.boxes }}</small></span><span class="state">{{ r.state }}</span></li>
+            {% endfor %}
+          </ul>
+          {% if card.here_pending %}<p class="here-note">⚠ Handle these in <button class="cmd" type="button" data-peek-on>Orders</button></p>{% endif %}
+          {% endif %}
+        </div>
+      </div>
+      <div class="block next">
+        <h4>Next stop</h4>
+        {% if card.next.is_final %}
+        <p class="empty">Final stop reached. Drop &amp; sell what's left.</p>
+        {% else %}
+        <p>▸ <b>{{ card.next.short }}</b></p>
+        <ul>
+          {% if card.next.drops.is_empty() && card.next.pickups.is_empty() %}
+          <li>pass through -- no cargo change</li>
+          {% endif %}
+          {% if !card.next.drops.is_empty() %}<li><span class="drop">drop</span> {% for d in card.next.drops %}{% if !loop.first %} · {% endif %}{{ d.0 }} · <b>{{ d.1 }}</b>{% endfor %}</li>{% endif %}
+          {% if !card.next.pickups.is_empty() %}<li><span class="pick">pick up</span> {% for p in card.next.pickups %}{% if !loop.first %} · {% endif %}{{ p.0 }} · <b>{{ p.1 }}</b>{% endfor %}</li>{% endif %}
+        </ul>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</section>

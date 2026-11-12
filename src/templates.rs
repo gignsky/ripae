@@ -233,6 +233,15 @@ pub struct VoyageOverlayFrag {
     pub f: crate::stowage::views::VoyageFormView,
 }
 
+/// The close/sale form for an open load, in `#overlay`'s shape -- Route Ops
+/// opens it here since it has no Open Cargo row to swap inline.
+#[derive(Template)]
+#[template(path = "partials/close_overlay.html")]
+pub struct CloseOverlayFrag {
+    pub l: LoadView,
+    pub f: crate::stowage::views::CloseFormView,
+}
+
 #[derive(Template)]
 #[template(path = "partials/sale_overlay.html")]
 pub struct SaleOverlayFrag {
