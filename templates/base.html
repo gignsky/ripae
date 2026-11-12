@@ -4,6 +4,16 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Ripae</title>
+    {# Installable as a desktop app (Chrome/Edge: [INSTALL] in the rail or the address bar). #}
+    <link rel="manifest" href="/static/manifest.webmanifest?v={{ crate::changelog::VERSION }}" />
+    <link rel="icon" href="/static/icon.svg?v={{ crate::changelog::VERSION }}" type="image/svg+xml" />
+    <link rel="icon" href="/static/icon-192.png?v={{ crate::changelog::VERSION }}" sizes="192x192" type="image/png" />
+    <link rel="apple-touch-icon" href="/static/apple-touch-icon.png?v={{ crate::changelog::VERSION }}" />
+    <meta name="theme-color" content="#050806" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Ripae" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black" />
     <link rel="stylesheet" href="/static/ripae.css?v={{ crate::changelog::VERSION }}" />
     {# Fragments mix <tbody> rows with out-of-band <section>s; template
        parsing is the only way the HTML parser keeps both. #}
@@ -63,6 +73,8 @@
             <a class="cmd{% if shell.screen == "board" %} on{% endif %}" href="/board" data-go="board">Leaderboard</a>
           </nav>
           {% if !shell.test_mode %}<form method="post" action="/test-mode" class="inline"><button class="cmd warn" type="submit" id="test-enter" title="Work on a private copy of the books; discard it or push it live after">Enter test mode</button></form>{% endif %}
+          <button class="cmd" type="button" id="install-app" title="Install Ripae as a desktop app" hidden>Install</button>
+          <button class="cmd" type="button" id="fullscreen" title="Fill the whole display with the terminal" aria-pressed="false" hidden>Full screen</button>
           <button class="cmd" type="button" id="replay-splash">Close</button>
           {% else %}
           <span>STARDATE <b>{{ shell.stardate }}</b></span>
