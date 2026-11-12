@@ -3,6 +3,50 @@
 Every notable change to Ripae. Newest first. This file is also what the
 version badge in the corner of the site shows.
 
+## 0.3.6
+
+### Added
+- **A Fleet tab tracks the crew's ships.** *Fleet* in the rail lists every
+  hull the crew owns, ships and ground vehicles, with its owner, model,
+  nickname and where it is: on order, stored at a hangar, pulled out
+  somewhere, or destroyed with a claim pending. One-click actions move it
+  along: *Delivered*, *Pull out*, *Store* (also a hangar transfer),
+  *Destroyed* and *Claim*. Models on the ship list pick up their spelling
+  and capacity, and anything else (an Ursa, a Cyclone variant) is kept as
+  you type it. Filter by member or status, sort by owner, model, status or
+  location, and the tiles at the top add up what's stored, what's out and
+  what claims are pending.
+- **Ships carry ships.** A hull can ride inside another, like a Pisces in an
+  Ironclad. It goes wherever its carrier goes and shows nested under it.
+  Destroying a carrier destroys what it carries (each needs its own claim),
+  and pulling out or storing a carried hull unloads it.
+- **Loaners stay linked to their pledge.** Mark a hull as a loaner for one
+  you have on order. Once the pledge is delivered, its row offers *Remove
+  loaners* or *Keep them*.
+- **Voyages fly a hull.** *New Run* and *Edit voyage* have a *Hull* pick-list
+  of the run owner's ships, which fills in the ship model for you, so the
+  stowage plan works as before. The hull is pulled out where the route
+  starts and moves with every *[NEXT STOP]*. When a sale closes the voyage,
+  the SALE banner offers *[STORE <hull> AT <where>]*, and the Fleet tab
+  keeps offering it while the hull is still out. Voyages logged before
+  this aren't affected.
+- **Route Ops, a new way to work a voyage.** *Route Ops* in the rail shows
+  one card per open voyage. Along the top runs the route, stop by stop, with
+  *Back* and *Next stop* under it. At port the card shows your orders:
+  what to unstow and sell here, then what to load and stow, deepest first.
+  Underway it tracks what's aboard now, this stop and the next. A hold
+  gauge compares what's aboard with what the leg plans for. You can sell
+  straight from the card. Open Cargo and the Stowage Plan are unchanged;
+  this is another view of the same voyages.
+
+### Changed
+- **The splash counts the fleet** (hulls, and how many are out), and the
+  roadmap line now reads permissions and hangar import for 0.4, UEX price
+  import for 0.5.
+- **Test mode covers the Fleet tab.** In test mode, hull changes stay in
+  your copy and never touch the real fleet. Keeping your changes pushes
+  your test runs but not the hull changes.
+
 ## 0.3.5
 
 ### Added
