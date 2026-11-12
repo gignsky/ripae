@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Ripae's app icon: a phosphor R and cursor on the glass. Everything sits
+       inside the middle 80%, so a maskable crop never clips it. -->
+  <rect width="512" height="512" fill="#050806"/>
+  <rect x="64" y="64" width="384" height="384" fill="none" stroke="#1d4a26" stroke-width="8"/>
+  <g fill="#7dff8a" transform="translate(112 144)">
+    <!-- R on a 5x7 grid of 32px cells -->
+    <rect x="0" y="0" width="32" height="224"/>
+    <rect x="32" y="0" width="96" height="32"/>
+    <rect x="128" y="32" width="32" height="64"/>
+    <rect x="32" y="96" width="96" height="32"/>
+    <rect x="64" y="128" width="32" height="32"/>
+    <rect x="96" y="160" width="32" height="32"/>
+    <rect x="128" y="192" width="32" height="32"/>
+    <!-- cursor -->
+    <rect x="192" y="192" width="96" height="32" fill="#3f9a4c"/>
+  </g>
+</svg>
