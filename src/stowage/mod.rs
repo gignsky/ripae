@@ -224,8 +224,11 @@ fn load_frag(l: LoadView, load_oob: bool) -> String {
 }
 
 /// Totals + stowage plan, out of band -- what nearly every change touches.
+/// Also redraws Route Ops's cards, harmless where that page's
+/// `#route-ops-cards` isn't on screen: htmx drops an out-of-band swap with
+/// no matching id.
 fn oob_common(l: &Ledger) -> String {
-    format!("{}{}", totals_frag(l, true), plans_frag(l, true))
+    format!("{}{}{}", totals_frag(l, true), plans_frag(l, true), crate::route_ops::body_oob(&l.voyages))
 }
 
 /// The Open Cargo table as the primary fragment, with totals and plan oob.
@@ -1017,6 +1020,22 @@ pub async fn voyage_advance(Db(state): Db, _user: CurrentUser, Path(id): Path<i6
     }
 }
 
+/// `POST /voyages/:id/retreat` -- Route Ops `[◂ BACK]`: the voyage returns
+/// to the stop before `at_stop` (no-op at the start).
+pub async fn voyage_retreat(Db(state): Db, _user: CurrentUser, Path(id): Path<i64>) -> Response {
+    if let Err(r) = find_voyage(&state, id).await {
+        return r;
+    }
+    if let Err(e) = repo::retreat_voyage(&state.pool, id).await {
+        tracing::error!(error = %e, "failed to retreat voyage");
+        return (StatusCode::INTERNAL_SERVER_ERROR, "could not move the voyage back").into_response();
+    }
+    match ledger(&state).await {
+        Ok(l) => open_cargo_response(&l),
+        Err(r) => r,
+    }
+}
+
 /// `GET /voyages/:id/loads/new` -- single-load form under the header.
 pub async fn add_load_form(Db(state): Db, _user: CurrentUser, Path(id): Path<i64>) -> Response {
     match find_voyage(&state, id).await {
@@ -1479,6 +1498,33 @@ pub async fn close_form(Db(state): Db, _user: CurrentUser, Path(id): Path<i64>) 
     load_response(&state, id, LoadExtra::Close(blank_close(&load, users, &crew)), StatusCode::OK).await
 }
 
+/// `GET /loads/:id/close/overlay` -- the same close/sale form as `close_form`,
+/// but wrapped for `#overlay` rather than the Open Cargo row: pages without
+/// that row (Route Ops) open it here instead.
+pub async fn close_overlay_form(Db(state): Db, _user: CurrentUser, Path(id): Path<i64>) -> Response {
+    let load = match find_load(&state, id).await {
+        Ok(l) => l,
+        Err(r) => return r,
+    };
+    if load.is_sold() {
+        return (StatusCode::CONFLICT, "That load is already sold.").into_response();
+    }
+    let users = repo::list_users(&state.pool).await.unwrap_or_default();
+    let crew = repo::voyage_crew(&state.pool, load.voyage_id).await.unwrap_or_default();
+    close_overlay_response(&state, id, blank_close(&load, users, &crew), StatusCode::OK).await
+}
+
+/// The close form in `#overlay`'s shape, keyed by `view=overlay` on the
+/// submitted form so `close_load` knows where a validation failure belongs.
+async fn close_overlay_response(state: &AppState, id: i64, f: CloseFormView, status: StatusCode) -> Response {
+    let l = match ledger(state).await {
+        Ok(l) => l,
+        Err(r) => return r,
+    };
+    let Some(lv) = load_view(&l, id) else { return not_found("load") };
+    html(status, render_str(&crate::templates::CloseOverlayFrag { l: lv, f }))
+}
+
 /// The sale form as submitted; `crew` is the voyage's, shown back as is.
 fn close_form_from(form: &FormData, users: Vec<User>, voyage_id: i64, crew: &[CrewMember]) -> CloseFormView {
     CloseFormView {
@@ -1582,12 +1628,20 @@ pub async fn close_load(Db(state): Db, user: CurrentUser, Path(id): Path<i64>, b
     let users = repo::list_users(&state.pool).await.unwrap_or_default();
     let crew = repo::voyage_crew(&state.pool, load.voyage_id).await.unwrap_or_default();
     let form = FormData::parse(&body);
+    // Route Ops opens this form in `#overlay` (`close_overlay_form`) rather
+    // than the Open Cargo row; a hidden field says so, so a validation
+    // failure re-renders in the shape the caller can actually swap.
+    let overlay = form.get("view") == "overlay";
     let mut f = close_form_from(&form, users.clone(), load.voyage_id, &crew);
     let seller = match pick_member(&f.sold_by, load.submitted_by, &users, "Sold by") {
         Ok(id) => id,
         Err(e) => {
             f.error = Some(e);
-            return load_response(&state, id, LoadExtra::Close(f), StatusCode::UNPROCESSABLE_ENTITY).await;
+            return if overlay {
+                close_overlay_response(&state, id, f, StatusCode::UNPROCESSABLE_ENTITY).await
+            } else {
+                load_response(&state, id, LoadExtra::Close(f), StatusCode::UNPROCESSABLE_ENTITY).await
+            };
         }
     };
 
@@ -1603,7 +1657,11 @@ pub async fn close_load(Db(state): Db, user: CurrentUser, Path(id): Path<i64>, b
         Ok(x) => x,
         Err(e) => {
             f.error = Some(e);
-            return load_response(&state, id, LoadExtra::Close(f), StatusCode::UNPROCESSABLE_ENTITY).await;
+            return if overlay {
+                close_overlay_response(&state, id, f, StatusCode::UNPROCESSABLE_ENTITY).await
+            } else {
+                load_response(&state, id, LoadExtra::Close(f), StatusCode::UNPROCESSABLE_ENTITY).await
+            };
         }
     };
     // unsold glitched crates written off count as lost before settling, so a
@@ -1614,7 +1672,11 @@ pub async fn close_load(Db(state): Db, user: CurrentUser, Path(id): Path<i64>, b
         Ok(s) => Sale { written_off, ..s },
         Err(e) => {
             f.error = Some(e);
-            return load_response(&state, id, LoadExtra::Close(f), StatusCode::UNPROCESSABLE_ENTITY).await;
+            return if overlay {
+                close_overlay_response(&state, id, f, StatusCode::UNPROCESSABLE_ENTITY).await
+            } else {
+                load_response(&state, id, LoadExtra::Close(f), StatusCode::UNPROCESSABLE_ENTITY).await
+            };
         }
     };
     let sold_id = match repo::close_load(&state.pool, id, seller, &sale, &sold_at, &sell_terminal).await {
@@ -1622,7 +1684,11 @@ pub async fn close_load(Db(state): Db, user: CurrentUser, Path(id): Path<i64>, b
         Err(e) => {
             tracing::error!(error = %e, "failed to close load");
             f.error = Some("Could not record that sale.".into());
-            return load_response(&state, id, LoadExtra::Close(f), StatusCode::UNPROCESSABLE_ENTITY).await;
+            return if overlay {
+                close_overlay_response(&state, id, f, StatusCode::UNPROCESSABLE_ENTITY).await
+            } else {
+                load_response(&state, id, LoadExtra::Close(f), StatusCode::UNPROCESSABLE_ENTITY).await
+            };
         }
     };
     let l = match ledger(&state).await {

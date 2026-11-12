@@ -6,6 +6,7 @@ mod discord;
 mod fleet;
 mod live;
 mod lookups;
+mod route_ops;
 mod sandbox;
 mod stowage;
 mod templates;
@@ -115,6 +116,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/crew/{id}", get(stowage::crew))
         .route("/crew/{id}/ledger", get(stowage::crew_ledger))
         .route("/fleet", get(fleet::page))
+        .route("/route-ops", get(route_ops::page))
         .route("/hulls", post(fleet::create))
         .route("/hulls/new", get(fleet::new_form))
         .route("/hulls/{id}", axum::routing::put(fleet::update).delete(fleet::delete))
@@ -135,6 +137,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/voyages/{id}/merge", get(stowage::voyage_merge_chooser))
         .route("/voyages/{id}/move", post(stowage::voyage_move))
         .route("/voyages/{id}/advance", post(stowage::voyage_advance))
+        .route("/voyages/{id}/retreat", post(stowage::voyage_retreat))
         .route("/voyages/{id}/delete", get(stowage::voyage_delete_confirm))
         .route("/voyages/{id}/loads", post(stowage::add_load))
         .route("/voyages/{id}/loads/new", get(stowage::add_load_form))
@@ -150,6 +153,7 @@ async fn main() -> anyhow::Result<()> {
             "/loads/{id}/close",
             get(stowage::close_form).post(stowage::close_load),
         )
+        .route("/loads/{id}/close/overlay", get(stowage::close_overlay_form))
         .route("/loads/{id}/delete", get(stowage::load_delete_confirm))
         .route("/loads/{id}/sale", get(stowage::sale_edit_form).put(stowage::sale_update))
         .route(

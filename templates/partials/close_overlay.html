@@ -1,0 +1,41 @@
+{# The close/sale form for an open load, wrapped for `#overlay` rather than
+   an Open Cargo row -- Route Ops opens it here (`GET
+   /loads/:id/close/overlay`) since its card has no row to swap inline. Same
+   fields as `load.html`'s `LoadExtra::Close` block; `view=overlay` on the
+   form tells `close_load` a validation failure belongs back in `#overlay`,
+   in this shape, not the row's. #}
+<div class="splash-in" data-overlay="close" role="dialog" aria-label="Close load">
+  <form class="run close-form" hx-post="/loads/{{ l.id }}/close" hx-target="#overlay" hx-swap="innerHTML" data-buy-scu="{{ l.buy_price_scu_fmt }}">
+    <input type="hidden" name="view" value="overlay" />
+    {% if l.is_haul %}
+    <p class="ras tag">Deliver contract · <b>{{ l.commodity_upper }}</b> · {{ l.scu }} SCU picked up at {{ l.buy_terminal_short }}{% if l.reward_fmt != "" %} · reward {{ l.reward_fmt }}{% endif %}</p>
+    {% else %}
+    <p class="ras tag">Close load · <b>{{ l.commodity_upper }}</b> · {{ l.scu }} SCU bought at {{ l.buy_terminal_short }} · {{ l.buy_price_scu_fmt }} / SCU</p>
+    {% endif %}
+    {% if let Some(error) = f.error %}<p class="ras neg form-error">{{ error }}</p>{% endif %}
+    <div class="ras fields">
+      <label>{% if l.is_haul %}Delivered by{% else %}Sold by{% endif %}<select name="sold_by" title="Who made the sale: credit and the remainder are theirs; you may just be keeping the books">{% for u in f.users %}<option value="{{ u.id }}"{% if f.sold_by == u.id.to_string() %} selected{% endif %}>{{ u.display_name|upper }}</option>{% endfor %}</select></label>
+      <label>{% if l.is_haul %}Delivered on{% else %}Sold on{% endif %}<input name="sold_at" type="date" value="{{ f.sold_at }}" data-today required /></label>
+      <label>{% if l.is_haul %}Delivered to{% else %}Sell terminal{% endif %}<input name="sell_terminal" type="text" list="pick-terminals" data-pick autocomplete="off" value="{{ f.sell_terminal }}" required /></label>
+      <label>{% if l.is_haul %}SCU delivered{% else %}SCU sold{% endif %} · from crates<input name="scu_sold" type="number" readonly data-scu-sold /></label>
+      {% include "partials/sale_price_fields.html" %}
+    </div>
+    <div class="ras sub-h"><span>Crates {% if l.is_haul %}delivered{% else %}sold{% endif %} · <button class="cmd sel-all" type="button">All sound crates</button> <button class="cmd sel-none" type="button">None</button></span><span>Tap to toggle sold / kept. Kept crates stay open on the voyage. Glitched crates must be picked by hand; lost ones can't be sold.</span></div>
+    <div class="ras crate-grid sell-crates">
+      {% for c in l.crates %}
+      <label class="crate {% if c.is_lost %}lost{% else if c.is_glitched %}glitched{% else %}sound{% endif %}{% if !f.selected.contains(c.id) && !c.is_lost %} kept{% endif %}" data-sound="{% if c.condition == "sound" %}1{% else %}0{% endif %}" data-size="{{ c.size }}">
+        <input type="checkbox" name="crate" value="{{ c.id }}" {% if f.selected.contains(c.id) %}checked{% endif %} {% if !c.sellable %}disabled{% endif %} />
+        <b>{{ c.size }}</b><small>#{{ c.n }} · {% if c.is_lost %}lost{% else %}{% if c.is_glitched %}glitched · {% endif %}<span class="sold-kept">{% if f.selected.contains(c.id) %}sold{% else %}kept{% endif %}</span>{% endif %}</small>
+      </label>
+      {% endfor %}
+    </div>
+    {% if l.glitched_count > 0 %}
+    <label class="ras inline-label write-off"><input type="checkbox" name="write_off_glitched" value="1"{% if f.write_off_glitched %} checked{% endif %} /> Write off glitched crates I'm not selling -- they're marked lost instead of staying open on the voyage</label>
+    {% endif %}
+    {% include "partials/sale_split.html" %}
+    <div class="ras formfoot">
+      <span class="actions"><button class="cmd boxed record" type="submit">{% if l.is_haul %}Record delivery{% else %}Record sale{% endif %}</button><button class="cmd boxed" type="button" data-dismiss>Cancel</button></span>
+      <span class="note preview">profit = — · seller keeps —</span>
+    </div>
+  </form>
+</div>

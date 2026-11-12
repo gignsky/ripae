@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel rs" id="route-ops-intro">
+  <header><h2>Route Ops</h2><span class="hint">One phase-aware card per open voyage: a route spine that never moves, back/forward beneath it, and a body that shows Orders at port, the Tracker underway. Open Cargo and the Stowage Plan are unaffected -- this is another way to work the same voyages.</span></header>
+</section>
+{% include "partials/route_ops_body.html" %}
+<script src="/static/route-ops.js?v={{ crate::changelog::VERSION }}" defer></script>
+{% endblock %}
