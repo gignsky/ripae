@@ -403,6 +403,22 @@ pub async fn advance_voyage(pool: &SqlitePool, voyage_id: i64) -> Result<u32> {
     Ok(next)
 }
 
+/// `[◂ BACK]` (Route Ops): the voyage returns to the stop before `at_stop`
+/// (no-op at the start). Returns the stop it's now at.
+pub async fn retreat_voyage(pool: &SqlitePool, voyage_id: i64) -> Result<u32> {
+    let mut tx = pool.begin().await?;
+    let at: i64 = sqlx::query_scalar("SELECT at_stop FROM voyages WHERE id = ?")
+        .bind(voyage_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or_else(|| anyhow!("no such voyage"))?;
+    let prev = (at - 1).max(0) as u32;
+    set_at_stop_in(&mut tx, voyage_id, prev).await?;
+    crate::fleet::repo::follow_voyage_in(&mut tx, voyage_id).await?;
+    tx.commit().await?;
+    Ok(prev)
+}
+
 /// Gives every voyage without a route one derived from its loads (see
 /// `model::derive_route`), placing each load on it and putting the voyage
 /// at the furthest stop anything has already been sold at. Idempotent:
